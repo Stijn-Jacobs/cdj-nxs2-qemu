@@ -38,7 +38,7 @@ QEMU_BUILD=""; QEMU_EB_BUILD=""
 export RELAY_PORT="$CDJ_RELAY_PORT" DJLINK="$CDJ_DJLINK" GROUP="$CDJ_GROUP"
 [ "$CDJ_AUDIO" = 1 ] || export NOSOUND=1
 # One frame of 24 hours: the rig lives until Ctrl-C and writes nothing per frame.
-export FRAMES="${FRAMES:-1}" MOTION_MS="${MOTION_MS:-86400000}"
+export FRAMES="${FRAMES:-1}" MOTION_MS="${MOTION_MS:-86400000}" AUTOLOAD="${AUTOLOAD:-0}"
 if [ "$CDJ_DECKS" = 2 ]; then
     LAUNCH=("$E/scripts/run/live_linked.sh" "$CDJ_NAME" 2)
 else
@@ -94,5 +94,5 @@ if [ "${#BRIDGE[@]}" -gt 0 ]; then
     echo "controller bridge running (log: logs/bridge.log)"
 fi
 trap '[ -n "$BRIDGE_PID" ] && kill "$BRIDGE_PID" 2>/dev/null' EXIT
-echo "the first boot takes a minute; the track loads and starts playing by itself."
+echo "the first boot takes a minute; then press USB (or LINK) to browse, load a track and play."
 bash "${LAUNCH[@]}"

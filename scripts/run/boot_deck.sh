@@ -194,7 +194,7 @@ export CDJ_GUI_ARTBLOB="$_blobdir/artblob.bin"
 # MAIN.
 export CDJ_PANEL_KEYSOCK="/tmp/cdj-panel-keys-$TAG.sock"
 export CDJ_PANEL_RX=1 CDJ_PANEL_MAX_IRQ=4000000
-export CDJ_PANEL_PRESS="${CDJ_PANEL_PRESS:-0x13:0x04:20000:3000}"
+export CDJ_PANEL_PRESS="${CDJ_PANEL_PRESS-0x13:0x04:20000:3000}"
 rm -f "$CDJ_PANEL_KEYSOCK" 2>/dev/null
 
 # ICOUNT: drive MAIN's virtual clock from executed instructions instead of host

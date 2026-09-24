@@ -45,8 +45,8 @@ unset CDJ_AUDIO_LIVE CDJ_AUDIO_OUT
 
 echo "[$TAG] $NDECKS real-DSP deck(s): tags ${TAG}1 .. ${TAG}${NDECKS} (controller mapping: cdjA -> ${TAG}1, cdjB -> ${TAG}2)"
 echo "[$TAG] audio: ${CDJ_AUDIODEV:-off}  ring/prefill/cap ${RING:-3000}/${PREFILL:-150}/${MAXLAT:-450} ms"
-echo "[$TAG] the decks START THEMSELVES after the load; PLAY pauses, PLAY again resumes."
-echo "[$TAG] the screen may stay on the BROWSE list after the auto-load: deck pad 1 (BROWSE) toggles to the waveform view."
+[ "${AUTOLOAD:-1}" = 1 ] && echo "[$TAG] each deck loads the first track and starts playing by itself (AUTOLOAD=0 leaves that to you)."
+[ "${AUTOLOAD:-1}" = 1 ] && echo "[$TAG] the screen may stay on the BROWSE list after the auto-load: BROWSE toggles to the waveform view."
 
 # A raw FAT16 image instead of vvfat: vvfat commits the whole tree on every
 # guest write with the BQL held, which stalls the machine when the firmware
@@ -57,40 +57,39 @@ export MEDIA_MODE="${MEDIA_MODE:-img}"
 # most of a core. The hook checks the opcode first. Empty = no hook.
 export CDJ_GUI_IDLE_PC="${CDJ_GUI_IDLE_PC-0x0E51058A}"
 
-# The cached JIT module from WSL is a Linux .so, so on Windows the auto-JIT
-# builds native modules into its own cache. The first run is slower.
+# QEMU is a native program on Windows: paths handed to it go through cygpath -m.
+native_path() {
+    if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi
+}
+_legacy_jit=/tmp/c14gen/g18u/m.so
 case "$(uname -s)" in
     MINGW* | MSYS* | CYGWIN*)
         export QEMU_BUILD="${QEMU_BUILD:-/c/qemu-build-mingw}"
         export QEMU_EB_BUILD="${QEMU_EB_BUILD:-/c/qemu-build-mingw-eb}"
-        export C66X_JIT_AUTO="${C66X_JIT_AUTO:-$(cygpath -m "$HOME")/c14gen}"
-        # Use the curated JIT module (~/c14gen/$MODULE/m.so) if it is built;
-        # g20u800 adds MASTER TEMPO's DSP code to g18u (MODULE=g18u for the old one);
-        # without it most of the DSP is interpreted, at about 0.6x.
-        _wjit="$(cygpath -m "$HOME")/c14gen/${MODULE:-g20u800}/m.so"
-        [ -f "$(cygpath -u "$_wjit")" ] || _wjit="$(cygpath -m "$HOME")/c14gen/g18u/m.so"
-        if [ -z "${C66X_JIT-}" ] && [ -f "$(cygpath -u "$_wjit")" ]; then
-            export C66X_JIT="$_wjit"
-            # Disable the auto-JIT when the curated module is used, as on
-            # Linux. AUTOJIT=1 keeps it on to grow the cache.
-            [ "${AUTOJIT:-0}" = "1" ] || unset C66X_JIT_AUTO
-        else
-            export C66X_JIT="${C66X_JIT:-}"
-            # A module named by hand replaces the curated one: same rule, no gcc mid-run.
-            [ -n "${C66X_JIT:-}" ] && [ "${AUTOJIT:-0}" != "1" ] && unset C66X_JIT_AUTO
-            [ -n "${C66X_JIT:-}" ] || echo "[$TAG] no curated JIT module: the auto-JIT carries the run, slower than real time at first"
-        fi
-        ;;
-    *)
-        # No curated module on this host (a fresh clone never has one): let
-        # the auto-JIT build its own into ~/c14gen -- slow on the first runs.
-        if [ -z "${C66X_JIT-}" ] && [ ! -f /tmp/c14gen/g18u/m.so ]; then
-            export C66X_JIT="" C66X_JIT_AUTO="${C66X_JIT_AUTO:-$HOME/c14gen}"
-        else
-            export C66X_JIT="${C66X_JIT:-/tmp/c14gen/g18u/m.so}"
-        fi
-        ;;
+        _legacy_jit="" ;;
 esac
+# The DSP JIT module: the first that exists of C66X_JIT (named by hand),
+# ~/c14gen/$MODULE/m.so (MODULE=none: no module), ~/c14gen/curated/m.so (built
+# by ./setup.sh --curated-jit), then the maintainers' g20u800 (g18u plus MASTER
+# TEMPO's code) and g18u. Without one the run-time auto-JIT compiles the hot DSP
+# code into ~/c14gen as the deck plays; with one it is off, so no gcc runs
+# mid-session. AUTOJIT=1 keeps it on beside a module, AUTOJIT=0 turns it off.
+if [ -z "${C66X_JIT:-}" ] && [ "${MODULE:-}" != none ]; then
+    for _m in ${MODULE:+"$HOME/c14gen/$MODULE/m.so"} "$HOME/c14gen/curated/m.so" \
+              "$HOME/c14gen/g20u800/m.so" "$HOME/c14gen/g18u/m.so" $_legacy_jit; do
+        [ -f "$_m" ] && { C66X_JIT="$(native_path "$_m")"; break; }
+    done
+fi
+export C66X_JIT="${C66X_JIT:-}"
+export C66X_JIT_AUTO="${C66X_JIT_AUTO:-$(native_path "$HOME/c14gen")}"
+case "${AUTOJIT:-}" in
+    1) ;;
+    0) unset C66X_JIT_AUTO ;;
+    *) [ -n "$C66X_JIT" ] && unset C66X_JIT_AUTO ;;
+esac
+if [ -z "$C66X_JIT" ] && [ -n "${C66X_JIT_AUTO:-}" ]; then
+    echo "[$TAG] no curated JIT module: the auto-JIT compiles the DSP's hot code as it plays"
+fi
 export CDJ_NATIVE_LIBC="${CDJ_NATIVE_LIBC:-1}"
 
 # ---------------------------------------------------------------------------

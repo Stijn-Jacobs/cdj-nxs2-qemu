@@ -6,7 +6,7 @@
 #   ./setup.sh                 walk through everything, asking as it goes
 #   ./setup.sh --dry-run       show every step and command, change nothing
 #
-# Five steps, each one safe to re-run and each one skipped when its result is
+# Six steps, each one safe to re-run and each one skipped when its result is
 # already there:
 #
 #   1 prerequisites   compilers, libraries and Python packages, with the exact
@@ -17,7 +17,10 @@
 #                     emulator boots, each checked against a known SHA-256
 #   4 USB stick       a disk image made from a folder of your own music
 #                     (a rekordbox USB export)
-#   5 your setup      one deck or two, Pro DJ Link, audio, a MIDI controller,
+#   5 DSP code        one headless deck plays for a few minutes so the DSP JIT
+#                     compiles its hot code into ~/c14gen; with --curated-jit,
+#                     a profile-guided module built from a recording instead
+#   6 your setup      one deck or two, Pro DJ Link, audio, a MIDI controller,
 #                     saved to cdj.conf -- which ./start.sh then uses
 #
 # options:
@@ -25,7 +28,12 @@
 #   -y, --yes              never ask: take the defaults and the options below
 #   --skip-build           leave step 2 out (a build tree you made yourself)
 #   --rebuild              run step 2 even when the emulators are already built
-#   --reconfigure          ask the step 5 questions again
+#   --no-warm              leave step 5 out
+#   --warm                 run step 5's warm-up even when the cache is warm
+#   --curated-jit          step 5 builds the profile-guided DSP module (~1 h,
+#                          ~16 GB free disk while it runs)
+#   --keep-recording       keep that build's DSP recording (~10 GB) afterwards
+#   --reconfigure          ask the step 6 questions again
 #   --firmware <file>      the C2KNXS2.UPD to use (re-installs the images)
 #   --music <folder>       the rekordbox USB export to image (re-makes the stick)
 #   --decks 1|2            --name <deck name>    --djlink on|off   --audio on|off
@@ -48,6 +56,7 @@ FIRMWARE_IMAGES="main_unpacked.bin gui_unpacked.bin flash.bin resblob.bin artblo
 
 # ---------------------------------------------------------------- options ----
 DRY=0; YES=0; SKIP_BUILD=0; REBUILD=0; RECONFIGURE=0
+WARM=auto; CURATED=0; KEEP_RECORDING=0
 OPT_FIRMWARE=""; OPT_MUSIC=""; OPT_DECKS=""; OPT_NAME=""; OPT_DJLINK=""
 OPT_AUDIO=""; OPT_CONTROLLER=""; OPT_RELAY=""; OPT_BUILD_DIR=""
 
@@ -60,6 +69,10 @@ while [ "$#" -gt 0 ]; do
         --skip-build) SKIP_BUILD=1 ;;
         --rebuild) REBUILD=1 ;;
         --reconfigure) RECONFIGURE=1 ;;
+        --no-warm) WARM=off ;;
+        --warm) WARM=force ;;
+        --curated-jit) CURATED=1 ;;
+        --keep-recording) KEEP_RECORDING=1 ;;
         --firmware) OPT_FIRMWARE="${2:?--firmware needs a file}"; shift ;;
         --music) OPT_MUSIC="${2:?--music needs a folder}"; shift ;;
         --decks) OPT_DECKS="${2:?--decks needs 1 or 2}"; shift ;;
@@ -91,7 +104,7 @@ case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
     *) OK="ok"; BAD="XX"; WARN="!!"; SPIN='|/-\' ;;
 esac
 
-TOTAL_STEPS=5
+TOTAL_STEPS=6
 step() { printf '\n%s[%s/%s] %s%s\n' "$B$C" "$1" "$TOTAL_STEPS" "$2" "$N"; }
 info() { printf '  %s\n' "$*"; }
 good() { printf '  %s%s%s %s\n' "$G" "$OK" "$N" "$*"; }
@@ -479,11 +492,6 @@ else
         "the DSP library needs only gcc and make" \
         "the DSP core library for the run-time JIT" || die "the build stopped at phase 2.5"
 fi
-info "${B}About speed:${N} the C66x DSP runs through a JIT that compiles its hot code"
-info "while you play, into ~/c14gen. The first minutes of your first sessions run"
-info "slower than real time (audio gaps) while that cache fills; after that the"
-info "deck keeps up. A faster, profile-guided module can be built from a recording"
-info "of your own firmware's DSP; none is shipped here."
 
 # ============================================================= 3. firmware ====
 step 3 "Firmware (your own update file)"
@@ -569,8 +577,90 @@ if [ ! -f "$USB_IMG" ] || [ -n "$OPT_MUSIC" ]; then
     fi
 fi
 
-# ============================================================ 5. your setup ====
-step 5 "Your setup"
+# ============================================================== 5. DSP code ====
+step 5 "DSP code (the JIT's cache)"
+JIT_CACHE="$HOME/c14gen"
+CURATED_SO="$JIT_CACHE/curated/m.so"
+ts="${ts:-$(date +%Y%m%d-%H%M%S)}"
+cached_modules() { find "$JIT_CACHE" -maxdepth 2 -path '*/batch*/m.so' 2>/dev/null | wc -l | tr -d ' '; }
+deck_ready() { [ -e "$MAIN_BIN" ] && [ -e "$GUI_BIN" ] && [ -e "$DSP_LIB" ] && have_firmware && [ -f "$USB_IMG" ]; }
+# A phase's command runs in the background, where Ctrl-C does not reach it:
+# stop the headless deck (and a module build) by hand.
+stop_background() {
+    printf '\n'
+    bash "$HERE/run/stop_rig.sh" > /dev/null 2>&1
+    for p in $(pgrep -f 'build/build_dsp_module.sh' 2>/dev/null); do kill "$p" 2>/dev/null; done
+    die "stopped; the headless deck was shut down"
+}
+info "The DSP program runs through a JIT that compiles its hot code to native"
+info "modules, cached in ~/c14gen. Until they are there a deck runs slower than"
+info "real time (audio gaps), so setup builds them now."
+DSP_DONE=0
+if [ "$CURATED" = 1 ]; then
+    MODULE_CMD=(bash "$HERE/build/build_dsp_module.sh")
+    [ "$KEEP_RECORDING" = 1 ] && MODULE_CMD+=(--keep-recording)
+    if [ "$DRY" = 1 ]; then
+        would "${MODULE_CMD[*]} > logs/dsp-module-$ts.log, which runs:"
+        "${MODULE_CMD[@]}" --dry-run 2>&1 | sed 's/^/      /'
+        DSP_DONE=1
+    elif ! deck_ready; then
+        warn "the curated module needs the emulators, the firmware and the USB stick first"
+    elif ! why="$("${MODULE_CMD[@]}" --preflight 2>&1)"; then
+        warn "no curated module: ${why//$'\n'/; }"
+    else
+        trap stop_background INT TERM
+        if run_phase "curated DSP module: record, generate, profile-guided build (about an hour)" \
+                "$LOGDIR/dsp-module-$ts.log" \
+                "the deck's own log is /tmp/bridge-main-rec1.log; a module that does not replay EXACT is not installed" \
+                -- "${MODULE_CMD[@]}"; then
+            good "installed ~/c14gen/curated/m.so: ./start.sh loads it from now on"
+            DSP_DONE=1
+        else
+            warn "no curated module; falling back to the quick warm-up"
+        fi
+        trap - INT TERM
+    fi
+fi
+if [ "$DSP_DONE" = 0 ]; then
+    WARM_CMD=(bash "$HERE/run/warm_jit.sh" warm)
+    WARM_LOG="$LOGDIR/warm-jit-$ts.log"
+    n="$(cached_modules)"
+    if [ "$WARM" = off ]; then
+        dim "warm-up skipped (--no-warm): the first minutes of your first sessions will be slow"
+    elif [ -f "$CURATED_SO" ] && [ "$WARM" != force ]; then
+        good "curated module in ~/c14gen/curated: nothing to warm"
+    elif [ "$n" -gt 0 ] && [ "$WARM" != force ]; then
+        good "already warm: $n compiled modules in ~/c14gen (--warm adds more)"
+    elif [ "$DRY" = 0 ] && ! deck_ready; then
+        warn "warm-up skipped: it needs the emulators, the firmware and the USB stick;"
+        warn "run ./setup.sh --warm once they are there"
+    elif [ "$WARM" = auto ] && ! ask_yn "warm it now? (one headless deck plays for about 15 minutes)" y; then
+        dim "skipped; ./setup.sh --warm does it later"
+    else
+        trap stop_background INT TERM
+        if run_phase "warming the DSP JIT: a headless deck plays with a tempo sweep (~15 min)" \
+                "$WARM_LOG" \
+                "the deck's own log is /tmp/bridge-main-warm1.log; ./setup.sh --warm tries again" \
+                -- "${WARM_CMD[@]}"; then
+            if [ "$DRY" = 1 ]; then
+                "${WARM_CMD[@]}" --dry-run | sed 's/^/      /'
+            else
+                built="$(sed -n 's/^warm: \([0-9]*\) new.*/\1/p' "$WARM_LOG" | tail -1)"
+                auto="$(grep -a 'c66x jit auto:' "$WARM_LOG" | tail -1)"
+                [ -n "$auto" ] && dim "${auto#*c66x jit }"
+                if [ "${built:-0}" -gt 0 ]; then
+                    good "$built new modules compiled; $(cached_modules) in ~/c14gen"
+                else
+                    warn "the JIT compiled nothing new; the end of ${WARM_LOG#"$E"/} says why"
+                fi
+            fi
+        fi
+        trap - INT TERM
+    fi
+fi
+
+# ============================================================ 6. your setup ====
+step 6 "Your setup"
 # Windows reserves whole port ranges for Hyper-V and WSL, and a bind inside one
 # fails (the relay's TCP port, Pro DJ Link's UDP one). Read them once.
 reserved_ranges() {  # <tcp|udp> -> "start end" lines
@@ -726,6 +816,13 @@ info "decks        ${CDJ_DECKS:-1} (${CDJ_NAME:-show}1$([ "${CDJ_DECKS:-1}" = 2 
 info "Pro DJ Link  $(yesno "${CDJ_DJLINK:-0}")$([ "${CDJ_DJLINK:-0}" = 1 ] && echo " (${CDJ_GROUP})")"
 info "sound        $(yesno "${CDJ_AUDIO:-1}")"
 info "controller   ${CDJ_CONTROLLER:-none}$([ "${CDJ_CONTROLLER:-none}" != none ] && echo " (relay on 127.0.0.1:${CDJ_RELAY_PORT})")"
+if [ -f "$CURATED_SO" ]; then
+    info "DSP JIT      curated module (~/c14gen/curated)"
+elif [ "$(cached_modules)" -gt 0 ]; then
+    info "DSP JIT      $(cached_modules) cached modules (~/c14gen)"
+else
+    info "DSP JIT      cold: the first minutes of your first sessions will be slow"
+fi
 info "start it:    ${B}./start.sh${N}      stop: Ctrl-C (or ./start.sh stop from another shell)"
 if [ "$DRY" = 0 ] && [ "$INTERACTIVE" = 1 ] && have_firmware && [ -f "$USB_IMG" ] &&
    [ -e "$MAIN_BIN" ] && ask_yn "start the deck now?" y; then

@@ -13,7 +13,7 @@
 
 </div>
 
-It boots, mounts a virtual USB stick, loads a track and plays it. The waveform
+It boots, mounts a virtual USB stick, and loads and plays tracks from it. The waveform
 scrolls, the time counts down, and the sound you hear is computed by the
 player's own DSP program on an emulated DSP. Start two and they find each other
 on an emulated Pro DJ Link network, where MASTER and SYNC work between them.
@@ -61,7 +61,7 @@ cd cdj-nxs2
 ./setup.sh
 ```
 
-`setup.sh` walks you through five steps. Every one is safe to re-run and is
+`setup.sh` walks you through six steps. Every one is safe to re-run and is
 skipped when it is already done:
 
 1. **Prerequisites** — checks compilers, libraries and Python packages, and
@@ -74,7 +74,11 @@ skipped when it is already done:
    emulator boots, checking each against a known SHA-256.
 4. **USB stick** — asks for a folder of your own music exported by rekordbox
    (the folder that holds `PIONEER/`) and builds a disk image of it.
-5. **Your setup** — one deck or two, Pro DJ Link, sound, a MIDI controller;
+5. **DSP code** — boots one deck without a window and lets it play a track for
+   a few minutes while MASTER TEMPO and the tempo fader are swept, so the DSP's
+   JIT compiles the program's hot code into its cache (`~/c14gen`) and your
+   first real session already keeps up (about 15 minutes).
+6. **Your setup** — one deck or two, Pro DJ Link, sound, a MIDI controller;
    saved to `cdj.conf`.
 
 Then:
@@ -83,8 +87,9 @@ Then:
 ./start.sh          # Ctrl-C stops everything
 ```
 
-The deck window opens, and a track from the stick loads and starts playing.
-Click the screen to touch it.
+The deck window opens and the player boots to its screen. Press **USB** (or
+**LINK**, for another player's stick) to browse, then load a track and press
+**PLAY**. Click the screen to touch it.
 
 **You will need** a recent multi-core CPU (see [Limits](#limits)),
 about 3 GB of disk for the build trees and the DSP code cache, Python 3.11 or
@@ -100,6 +105,10 @@ version), and your own music.
 ./setup.sh --yes                never ask; take the defaults and the options below
 ./setup.sh --skip-build         leave the build out (a build tree you made yourself)
 ./setup.sh --rebuild            build even when the emulators are already built
+./setup.sh --no-warm            leave the DSP warm-up out
+./setup.sh --warm               warm the DSP code cache again
+./setup.sh --curated-jit        build a profile-guided DSP module instead (about an hour)
+  --keep-recording              keep that build's DSP recording (~10 GB)
   --firmware <file>             the C2KNXS2.UPD to use (re-installs the images)
   --music <folder>              the rekordbox USB export to image
   --decks 1|2   --name <deck name>   --djlink on|off   --audio on|off
@@ -180,6 +189,15 @@ The instruction decode tables come from GNU binutils.
 
 ## 🎚️ MIDI controllers
 
+**Using one:** plug the controller in before `./setup.sh`. Setup recognises a
+controller it has a profile for (or offers to learn a new one) and saves your
+choice, and from then on `./start.sh` starts the bridge together with the decks.
+With two decks the controller's left side plays deck 1 and its right side deck 2.
+The bridge's own output is in `logs/bridge.log`. On Windows it runs on a normal
+Windows Python (python.org or the Microsoft Store) with `mido` and
+`python-rtmidi` installed, because MSYS2's Python cannot open MIDI devices; setup
+finds it and prints the one `pip` command it needs if the packages are missing.
+
 Any controller works as a **profile** (what the hardware sends,
 `midi/controllers/<name>.json`) plus a **mapping** (which CDJ key each control
 presses, `midi/mappings/<name>.json`). The Roland DJ-202 ships with both. For
@@ -221,20 +239,22 @@ machine: the update file, and anything built from it, is Pioneer's.
 - **Speed depends on your CPU.** One deck runs in real time on a fast desktop.
   Two decks need roughly twice that, and on a busy or modest machine they fall
   behind real time (the audio then has gaps).
-- **The first minutes are slow.** Until the DSP JIT has compiled the hot code of
-  the DSP program (cached in `~/c14gen`), the first minutes of your first
-  sessions run slower than real time. After that the deck keeps up. A
-  profile-guided module, built from a recording of the DSP running your own
-  firmware, is faster still; none is shipped, because it would be derived from
-  Pioneer's code.
-- **MASTER TEMPO is heavy.** Key-locked playback makes the DSP program do far
-  more work per sample, and it is currently the most demanding thing you can
-  ask of the emulator.
+- **The DSP code is compiled on your machine.** A deck keeps up only once the
+  JIT has compiled the DSP program's hot code, and none is shipped, because it
+  would be derived from Pioneer's code. `setup.sh` warms that cache with a few
+  minutes of play; code the warm-up did not reach is compiled the first time
+  you use it, with a short slow patch then. `./setup.sh --curated-jit` goes
+  further: it records the DSP running your own firmware and builds one
+  profile-guided module from that recording, the way the maintainers build
+  theirs. It takes about an hour and ~16 GB of free disk while it runs, and the
+  module is installed only if it replays the recording exactly.
+- **MASTER TEMPO is heavy.** It makes the DSP program do far more work per
+  sample, and it is currently the most demanding thing you can ask of the
+  emulator.
 - **Only firmware v1.87** is supported.
-- **Not everything is modelled.** The USB stick is the only medium; the needle
-  search strip has no input yet; service mode is not reachable; some panel keys
-  are decoded by the firmware but have never been pressed here, and the
-  controller tools say so when you bind one.
+- **Work in progress.** The USB stick is the only medium so far, and service
+  mode is not done yet. Some panel keys are decoded by the firmware but have
+  not been tried here; the controller tools say so when you bind one.
 
 <details>
 <summary><b>📁 Repository layout</b></summary>

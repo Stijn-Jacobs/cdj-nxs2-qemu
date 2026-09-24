@@ -20,7 +20,17 @@ export CDJ_DSP_REPLY="${CDJ_DSP_REPLY:-1}"
 export CDJ_DSP_REPLY_ID="${CDJ_DSP_REPLY_ID:-0}"
 export CDJ_DSP_REPLY_WORDS="${CDJ_DSP_REPLY_WORDS:-4}"
 export CDJ_DSP_TAG="${CDJ_DSP_TAG:-1}"
-export DRIVER="$HERE/load_track.py"
+# AUTOLOAD=1 (the measurement default): load_track.py loads the first track and
+# presses PLAY, and a deck lives as long as its film. AUTOLOAD=0 boots the decks
+# and leaves them to the user for FILMN x MOTION_MS.
+if [ "${AUTOLOAD:-1}" = 1 ]; then
+    export DRIVER="$HERE/load_track.py"
+    DECK_DUR=2
+else
+    unset DRIVER
+    export CDJ_PANEL_PRESS=""
+    DECK_DUR=$(( ${FILMN:-1} * ${MOTION_MS:-1800} / 1000 ))
+fi
 export GUI_DISPLAY="${GUI_DISPLAY:-gtk}"
 export FILMN="${FILMN:-5}" MOTION_MS="${MOTION_MS:-1800}"
 
@@ -67,7 +77,7 @@ for i in $(seq 1 "$N"); do
         cp -a "$SRC_MEDIA" "$RUN_MEDIA"
     fi
     ( MEDIADIR="$RUN_MEDIA" SHOTDIR="/tmp/$TAG" \
-      bash "$HERE/boot_deck.sh" "$TAG" 2 \
+      bash "$HERE/boot_deck.sh" "$TAG" "$DECK_DUR" \
         > "/tmp/run-$TAG.txt" 2>&1 ) &
     # LAUNCH_STAGGER (s): spread the launches so the QEMUs do not all race to
     # bind their sockets at once.

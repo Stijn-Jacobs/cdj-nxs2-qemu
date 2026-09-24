@@ -43,6 +43,7 @@ echo "gcc:      $(gcc -dumpversion)  ($(command -v gcc))"
 echo "glib:     $(pkg-config --modversion glib-2.0)"
 echo "gtk3:     $(pkg-config --modversion gtk+-3.0 2>/dev/null || echo 'ABSENT -- no window')"
 echo "build:    $QEMU_BUILD  (eb: $QEMU_EB_BUILD)"
+mkdir -p "$(dirname "$QEMU_BUILD")" "$(dirname "$QEMU_EB_BUILD")"
 df -h "$(dirname "$QEMU_BUILD")" | tail -1
 
 # A cross-drive build otherwise dies deep in the build with a ValueError from
