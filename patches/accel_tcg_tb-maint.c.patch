@@ -1,0 +1,234 @@
+diff --git a/accel/tcg/tb-maint.c b/accel/tcg/tb-maint.c
+index cc0f5af..f962ec9 100644
+--- a/accel/tcg/tb-maint.c
++++ b/accel/tcg/tb-maint.c
+@@ -20,6 +20,7 @@
+ #include "qemu/osdep.h"
+ #include "qemu/interval-tree.h"
+ #include "qemu/qtree.h"
++#include "qemu/error-report.h"
+ #include "exec/cputlb.h"
+ #include "exec/log.h"
+ #include "exec/exec-all.h"
+@@ -1161,6 +1162,201 @@ tb_invalidate_phys_page_range__locked(struct page_collection *pages,
+ #endif
+ }
+ 
++/*
++ * CDJ_SMC=<bits>: stores into pages that hold code.
++ *
++ * A page keeps TLB_NOTDIRTY for as long as any translated block lives in it, so
++ * every guest store to such a page, even one to a variable nowhere near the
++ * code, goes notdirty_write() -> tb_invalidate_phys_range_fast(), which
++ * g_malloc()s a page_collection, builds a QTree over the pages of every TB in
++ * the page, walks them, and in the common case invalidates nothing. For MAIN
++ * that path costs a few percent of the vCPU.
++ *
++ *   bit 0 (1) PROFILE: count, per ram page, CPU stores and DMA writes that
++ *             reached the invalidation path and how many actually overlapped a
++ *             TB; sample the writing TB's guest pc. Prints the top pages to
++ *             stderr as "[CDJ] smcprof ...".
++ *   bit 1 (2) FASTREJECT: for a CPU store, look at the one page under its own
++ *             lock first; if no TB overlaps the written bytes and the page
++ *             still has TBs, return without the collection. That is exactly
++ *             the case in which the full path does nothing (it neither
++ *             invalidates nor unprotects), so guest-visible behaviour is
++ *             unchanged. Any overlap, or an empty page, takes the full path.
++ *
++ * Unset or 0 keeps QEMU's behaviour.
++ */
++#define CDJ_SMC_PROFILE    1u
++#define CDJ_SMC_FASTREJECT 2u
++#define CDJ_SMC_SLOTS      4096          /* power of two */
++
++typedef struct CdjSmcPage {
++    tb_page_addr_t page;                 /* ram page index + 1; 0 = free */
++    uint64_t stores, stores_hit, dma, dma_hit;
++    vaddr writer_pc;                     /* sampled guest pc of a writing TB */
++} CdjSmcPage;
++
++static int cdj_smc = -1;
++static CdjSmcPage cdj_smc_tab[CDJ_SMC_SLOTS];
++static uint64_t cdj_smc_notes, cdj_smc_dropped;
++
++static unsigned cdj_smc_mode(void)
++{
++    if (unlikely(cdj_smc < 0)) {
++        const char *e = getenv("CDJ_SMC");
++
++        cdj_smc = e ? (int)strtoul(e, NULL, 0) & 3 : 0;
++        if (cdj_smc) {
++            info_report("tb-maint: CDJ_SMC=%d on", cdj_smc);
++        }
++    }
++    return cdj_smc;
++}
++
++/* Does [start, last] (one page) overlap any TB of @p? Call with @p locked. */
++static bool cdj_smc_overlaps(PageDesc *p, tb_page_addr_t start,
++                             tb_page_addr_t last)
++{
++    TranslationBlock *tb;
++    PageForEachNext n;
++
++    /* Same arithmetic as tb_invalidate_phys_page_range__locked(). */
++    PAGE_FOR_EACH_TB(start, last, p, tb, n) {
++        tb_page_addr_t tb_start, tb_last;
++
++        tb_start = tb_page_addr0(tb);
++        tb_last = tb_start + tb->size - 1;
++        if (n == 0) {
++            tb_last = MIN(tb_last, tb_start | ~TARGET_PAGE_MASK);
++        } else {
++            tb_start = tb_page_addr1(tb);
++            tb_last = tb_start + (tb_last & ~TARGET_PAGE_MASK);
++        }
++        if (!(tb_last < start || tb_start > last)) {
++            return true;
++        }
++    }
++    return false;
++}
++
++static void cdj_smc_print(void)
++{
++    CdjSmcPage *top[8] = { NULL };
++    unsigned i, j;
++
++    for (i = 0; i < CDJ_SMC_SLOTS; i++) {
++        CdjSmcPage *e = &cdj_smc_tab[i];
++
++        if (!e->page) {
++            continue;
++        }
++        for (j = 0; j < ARRAY_SIZE(top); j++) {
++            if (!top[j] || e->stores + e->dma > top[j]->stores + top[j]->dma) {
++                memmove(&top[j + 1], &top[j],
++                        (ARRAY_SIZE(top) - j - 1) * sizeof(top[0]));
++                top[j] = e;
++                break;
++            }
++        }
++    }
++    fprintf(stderr, "[CDJ] smcprof notes=%" PRIu64 " untracked=%" PRIu64
++            " (ram_addr pages; cdj.dram at ram_addr 0 means guest phys "
++            "0x08000000 + ram_addr)\n", cdj_smc_notes, cdj_smc_dropped);
++    for (j = 0; j < ARRAY_SIZE(top) && top[j]; j++) {
++        fprintf(stderr, "[CDJ] smcprof page ram_addr=0x%08" PRIx64
++                " stores=%" PRIu64 " (overlapping a TB %" PRIu64 ") aswrite=%"
++                PRIu64 " (overlapping %" PRIu64 ") writer_tb_pc=0x%08" PRIx64
++                "\n", (uint64_t)(top[j]->page - 1) << TARGET_PAGE_BITS,
++                top[j]->stores, top[j]->stores_hit, top[j]->dma,
++                top[j]->dma_hit, (uint64_t)top[j]->writer_pc);
++    }
++}
++
++static void cdj_smc_note(tb_page_addr_t addr, bool dma, bool hit,
++                         uintptr_t retaddr)
++{
++    tb_page_addr_t key = (addr >> TARGET_PAGE_BITS) + 1;
++    unsigned i, h = (unsigned)(key * 0x9E3779B1u) & (CDJ_SMC_SLOTS - 1);
++    CdjSmcPage *e = NULL;
++
++    for (i = 0; i < 16; i++) {
++        CdjSmcPage *c = &cdj_smc_tab[(h + i) & (CDJ_SMC_SLOTS - 1)];
++
++        if (c->page == key || !c->page) {
++            c->page = key;
++            e = c;
++            break;
++        }
++    }
++    if (!e) {
++        cdj_smc_dropped++;
++    } else if (dma) {
++        e->dma++;
++        e->dma_hit += hit;
++    } else {
++        e->stores++;
++        e->stores_hit += hit;
++        /* A tree search per sample; 1 in 256 keeps it off the profile. */
++        if (retaddr && (e->stores & 255) == 1) {
++            TranslationBlock *tb = tcg_tb_lookup(retaddr);
++
++            if (tb) {
++                e->writer_pc = tb->pc;
++            }
++        }
++    }
++    if ((++cdj_smc_notes & ((1u << 22) - 1)) == 0) {
++        cdj_smc_print();
++    }
++}
++
++/*
++ * The CPU-store pre-check. Returns true when the caller may skip the full
++ * invalidation because it would have done nothing.
++ */
++static bool cdj_smc_store(ram_addr_t ram_addr, unsigned size,
++                          uintptr_t retaddr)
++{
++    unsigned mode = cdj_smc_mode();
++    PageDesc *p = page_find(ram_addr >> TARGET_PAGE_BITS);
++    bool hit, empty;
++
++    if (!p) {
++        /* No PageDesc: the full path finds nothing to do either. */
++        return mode & CDJ_SMC_FASTREJECT;
++    }
++    page_lock(p);
++    hit = cdj_smc_overlaps(p, ram_addr, ram_addr + size - 1);
++    empty = !p->first_tb;
++    page_unlock(p);
++    if (mode & CDJ_SMC_PROFILE) {
++        cdj_smc_note(ram_addr, false, hit, retaddr);
++    }
++    return (mode & CDJ_SMC_FASTREJECT) && !hit && !empty;
++}
++
++/* Address-space writes (DMA, device models, gdbstub): profiled only, never
++ * short-circuited. */
++static void cdj_smc_dma(tb_page_addr_t start, tb_page_addr_t last)
++{
++    tb_page_addr_t index;
++
++    for (index = start >> TARGET_PAGE_BITS;
++         index <= last >> TARGET_PAGE_BITS; index++) {
++        PageDesc *p = page_find(index);
++        tb_page_addr_t ps = MAX(start, index << TARGET_PAGE_BITS);
++        tb_page_addr_t pl = MIN(last, (index << TARGET_PAGE_BITS)
++                                      | ~TARGET_PAGE_MASK);
++        bool hit = false;
++
++        if (p) {
++            page_lock(p);
++            hit = cdj_smc_overlaps(p, ps, pl);
++            page_unlock(p);
++        }
++        cdj_smc_note(index << TARGET_PAGE_BITS, true, hit, 0);
++    }
++}
++
+ /*
+  * Invalidate all TBs which intersect with the target physical address range
+  * [start;last]. NOTE: start and end may refer to *different* physical pages.
+@@ -1173,6 +1369,9 @@ void tb_invalidate_phys_range(tb_page_addr_t start, tb_page_addr_t last)
+     struct page_collection *pages;
+     tb_page_addr_t index, index_last;
+ 
++    if (unlikely(cdj_smc_mode() & CDJ_SMC_PROFILE)) {
++        cdj_smc_dma(start, last);
++    }
+     pages = page_collection_lock(start, last);
+ 
+     index_last = last >> TARGET_PAGE_BITS;
+@@ -1222,6 +1421,9 @@ void tb_invalidate_phys_range_fast(ram_addr_t ram_addr,
+ {
+     struct page_collection *pages;
+ 
++    if (unlikely(cdj_smc_mode()) && cdj_smc_store(ram_addr, size, retaddr)) {
++        return;
++    }
+     pages = page_collection_lock(ram_addr, ram_addr + size - 1);
+     tb_invalidate_phys_page_fast__locked(pages, ram_addr, size, retaddr);
+     page_collection_unlock(pages);

@@ -1,0 +1,99 @@
+diff --git a/hw/timer/sh_timer.c b/hw/timer/sh_timer.c
+index 7788939..0ae4a73 100644
+--- a/hw/timer/sh_timer.c
++++ b/hw/timer/sh_timer.c
+@@ -16,6 +16,7 @@
+ #include "hw/timer/tmu012.h"
+ #include "hw/ptimer.h"
+ #include "trace.h"
++#include "sysemu/reset.h"
+ 
+ #define TIMER_TCR_TPSC          (7 << 0)
+ #define TIMER_TCR_CKEG          (3 << 3)
+@@ -216,11 +217,35 @@ static void sh_timer_start_stop(void *opaque, int enable)
+     }
+     ptimer_transaction_commit(s->timer);
+     s->enabled = !!enable;
++
++    /*
++     * Deassert on stop. Without this a channel that underflowed once keeps its
++     * interrupt line asserted after the guest stops it via TSTR, and a
++     * level-driven INTC then re-delivers that interrupt forever. A guest that
++     * starts a channel and immediately stops it again otherwise gets a
++     * permanent interrupt storm.
++     */
++    if (!s->enabled) {
++        s->int_level = 0;
++        s->old_level = 0;
++        qemu_set_irq(s->irq, 0);
++    }
+ }
+ 
+ static void sh_timer_tick(void *opaque)
+ {
+     SHTimerState *s = opaque;
++
++    /* Underflow count, not IRQ edges: the INTC line is level-driven, so
++     * qemu_set_irq fires once and stays high, which makes edge counts useless
++     * for answering "is this timer actually running". */
++    if (getenv("CDJ_TICK_DEBUG")) {
++        static uint64_t ticks;
++        if (++ticks % 500 == 0) {
++            qemu_log("sh_timer_tick: %" PRIu64 " underflows\n", ticks);
++        }
++    }
++
+     s->int_level = s->enabled;
+     sh_timer_update(s);
+ }
+@@ -344,6 +369,43 @@ static const MemoryRegionOps tmu012_ops = {
+     .endianness = DEVICE_NATIVE_ENDIAN,
+ };
+ 
++/*
++ * sh_timer had no reset path at all: the state is a bare g_malloc0 with no
++ * DeviceState, so a machine reset left every channel running with its interrupt
++ * line still asserted. On a guest that reboots (SH-4 turns a BL-masked
++ * exception into a manual reset) that is self-sustaining: the reset re-zeroes
++ * the guest's bss, including its interrupt dispatch table, while the still-high
++ * timer line immediately delivers into the now-NULL handler slot and resets
++ * again. Stop the channels and drop the lines on reset.
++ */
++static void sh_timer_chan_reset(SHTimerState *s)
++{
++    ptimer_transaction_begin(s->timer);
++    ptimer_stop(s->timer);
++    ptimer_transaction_commit(s->timer);
++    s->enabled = 0;
++    s->int_level = 0;
++    s->old_level = 0;
++    s->tcor = 0xffffffff;
++    s->tcnt = 0xffffffff;
++    s->tcr = 0;
++    qemu_set_irq(s->irq, 0);
++}
++
++static void tmu012_reset(void *opaque)
++{
++    tmu012_state *s = opaque;
++    int i;
++
++    for (i = 0; i < 3; i++) {
++        if (s->timer[i]) {
++            sh_timer_chan_reset(s->timer[i]);
++        }
++    }
++    s->tstr = 0;
++    s->tocr = 0;
++}
++
+ void tmu012_init(MemoryRegion *sysmem, hwaddr base, int feat, uint32_t freq,
+                  qemu_irq ch0_irq, qemu_irq ch1_irq,
+                  qemu_irq ch2_irq0, qemu_irq ch2_irq1)
+@@ -369,5 +431,6 @@ void tmu012_init(MemoryRegion *sysmem, hwaddr base, int feat, uint32_t freq,
+     memory_region_init_alias(&s->iomem_a7, NULL, "timer-a7",
+                              &s->iomem, 0, memory_region_size(&s->iomem));
+     memory_region_add_subregion(sysmem, A7ADDR(base), &s->iomem_a7);
++    qemu_register_reset(tmu012_reset, s);
+     /* ??? Save/restore.  */
+ }

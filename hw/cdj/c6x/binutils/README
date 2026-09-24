@@ -1,0 +1,4 @@
+Verbatim tables from GNU binutils 2.42 (include/opcode/tic6x*.h), GPL-3.0-or-later.
+tic6x.h has its bfd.h/symcat.h includes replaced by <stdbool.h> and symcat-lite.h;
+nothing else is changed. The core decodes from these tables directly, so a new
+binutils release is picked up by copying the four files again.

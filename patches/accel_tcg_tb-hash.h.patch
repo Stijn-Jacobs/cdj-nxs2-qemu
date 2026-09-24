@@ -1,0 +1,16 @@
+diff --git a/accel/tcg/tb-hash.h b/accel/tcg/tb-hash.h
+index a0c61f2..7dfb51a 100644
+--- a/accel/tcg/tb-hash.h
++++ b/accel/tcg/tb-hash.h
+@@ -45,6 +45,11 @@ static inline unsigned int tb_jmp_cache_hash_page(vaddr pc)
+ static inline unsigned int tb_jmp_cache_hash_func(vaddr pc)
+ {
+     vaddr tmp;
++
++    if (unlikely(cdj_jc_flat_hash)) {
++        /* The user-mode hash, see tb-jmp-cache.h */
++        return (pc ^ (pc >> TB_JMP_CACHE_BITS)) & (TB_JMP_CACHE_SIZE - 1);
++    }
+     tmp = pc ^ (pc >> (TARGET_PAGE_BITS - TB_JMP_PAGE_BITS));
+     return (((tmp >> (TARGET_PAGE_BITS - TB_JMP_PAGE_BITS)) & TB_JMP_PAGE_MASK)
+            | (tmp & TB_JMP_ADDR_MASK));

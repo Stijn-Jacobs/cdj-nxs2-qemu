@@ -1,0 +1,275 @@
+diff --git a/accel/tcg/cpu-exec.c b/accel/tcg/cpu-exec.c
+index 8163295..2e2aea3 100644
+--- a/accel/tcg/cpu-exec.c
++++ b/accel/tcg/cpu-exec.c
+@@ -18,6 +18,7 @@
+  */
+ 
+ #include "qemu/osdep.h"
++#include "exec/cdj-pcring.h"
+ #include "qemu/qemu-print.h"
+ #include "qapi/error.h"
+ #include "qapi/type-helpers.h"
+@@ -86,8 +87,20 @@ static void align_clocks(SyncClocks *sc, CPUState *cpu)
+             sc->diff_clk = 0;
+         }
+ #else
++        /*
++         * Keep the debt this sleep did not pay. Sleep() takes whole
++         * milliseconds, and zeroing diff_clk regardless of how long it
++         * actually slept threw away up to a millisecond per alignment, so the
++         * guest ran about 10 % fast and overran the audio ring. The nanosleep
++         * branch above has always kept its remainder; this is the same
++         * accounting for Windows.
++         */
++        int64_t before = get_clock_realtime();
+         Sleep(sc->diff_clk / SCALE_MS);
+-        sc->diff_clk = 0;
++        sc->diff_clk -= get_clock_realtime() - before;
++        if (sc->diff_clk < 0) {
++            sc->diff_clk = 0;
++        }
+ #endif
+     }
+ }
+@@ -114,13 +127,49 @@ static void print_delay(const SyncClocks *sc)
+     }
+ }
+ 
++/*
++ * CDJ_ICOUNT_MAXLAG_MS=<n>: never owe real time more than n ms.
++ *
++ * align=on only sleeps when the guest is ahead; when it is behind it runs flat
++ * out until the whole debt is repaid. After a slow stretch that repayment can
++ * last minutes at well above real time, which overruns the audio and gives a
++ * synced deck a clock it cannot lock to. With a cap, lateness beyond n ms is
++ * forgiven instead of raced back: a slow passage costs a small permanent slip
++ * and never a later overspeed burst. The debt is kept as an offset on the
++ * real-time reference; 0 or unset keeps QEMU's behaviour.
++ */
++static int64_t cdj_icount_forgiven;
++
++static int64_t cdj_icount_maxlag_ns(void)
++{
++    static int64_t cap = -1;
++
++    if (cap < 0) {
++        const char *e = getenv("CDJ_ICOUNT_MAXLAG_MS");
++
++        cap = e ? (int64_t)strtoll(e, NULL, 0) * SCALE_MS : 0;
++        if (cap < 0) {
++            cap = 0;
++        }
++    }
++    return cap;
++}
++
+ static void init_delay_params(SyncClocks *sc, CPUState *cpu)
+ {
++    int64_t cap;
++
+     if (!icount_align_option) {
+         return;
+     }
+     sc->realtime_clock = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL_RT);
+-    sc->diff_clk = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) - sc->realtime_clock;
++    sc->diff_clk = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) - sc->realtime_clock
++                   + cdj_icount_forgiven;
++    cap = cdj_icount_maxlag_ns();
++    if (cap && sc->diff_clk < -cap) {
++        cdj_icount_forgiven += -cap - sc->diff_clk;
++        sc->diff_clk = -cap;
++    }
+     sc->last_cpu_icount
+         = cpu->icount_extra + cpu->neg.icount_decr.u16.low;
+     if (sc->diff_clk < max_delay) {
+@@ -245,6 +294,111 @@ static TranslationBlock *tb_htable_lookup(CPUState *cpu, vaddr pc,
+     return qht_lookup_custom(&tb_ctx.htable, &desc, h, tb_lookup_cmp);
+ }
+ 
++/*
++ * CDJ_JCPROF=1: why does the jump cache miss?
++ *
++ * MAIN's vCPU spends a large share of its time in helper_lookup_tb_ptr and the
++ * qht. The helper itself is unavoidable on SH-4 (every call is jsr @Rn and
++ * every return is rts), but the qht part is paid only when the per-CPU jump
++ * cache misses, and a profile cannot say why it misses. This counts, per lookup site (translated code vs the cpu loop) and
++ * per TB-exit kind (CDJ_EXIT_*, stored by translate.c), how many lookups hit
++ * and how the misses split: empty slot (cold or flushed), slot holding another
++ * pc (conflict: the cache is too small / badly hashed), or the same pc under
++ * other flags (PR/SZ/FR, SR.RB/MD, PENDING_MOVCA variants thrashing one slot).
++ * It also prints the TLB flush counts, since every TLB flush clears the whole
++ * jump cache. Read-only: it never changes what tb_lookup() returns.
++ */
++#if defined(TARGET_SH4) && !defined(CONFIG_USER_ONLY)
++#define CDJ_JCPROF_SITES 2      /* 0 = cpu loop, 1 = helper_lookup_tb_ptr */
++enum { CDJ_JC_HIT, CDJ_JC_EMPTY, CDJ_JC_CONFLICT, CDJ_JC_FLAGS, CDJ_JC_NOUT };
++
++static int cdj_jcprof = -1;
++static uint64_t cdj_jc_count[CDJ_JCPROF_SITES][CDJ_EXIT_NKINDS][CDJ_JC_NOUT];
++static uint64_t cdj_jc_total;
++
++static bool cdj_jcprof_on(void)
++{
++    if (unlikely(cdj_jcprof < 0)) {
++        const char *e = getenv("CDJ_JCPROF");
++
++        cdj_jcprof = e && *e && strcmp(e, "0") != 0;
++    }
++    return cdj_jcprof;
++}
++
++static void cdj_jcprof_print(CPUState *cpu)
++{
++    static const char *const kname[CDJ_EXIT_NKINDS] = {
++        "unknown", "rts", "call", "jmp", "xpage", "now", "fpscr", "stop",
++        "predmiss",
++    };
++    CPUSH4State *env = cpu_env(cpu);
++    int s, k;
++
++    fprintf(stderr, "[CDJ] jcprof total=%" PRIu64 " jcbits=%d tlbflush "
++            "full=%zu part=%zu elided=%zu tbflush=%u fpscr lds=%" PRIu64
++            " flagchg=%" PRIu64 "\n", cdj_jc_total, TB_JMP_CACHE_BITS,
++            cpu->neg.tlb.c.full_flush_count, cpu->neg.tlb.c.part_flush_count,
++            cpu->neg.tlb.c.elide_flush_count,
++            qatomic_read(&tb_ctx.tb_flush_count), env->cdj_fpscr_lds,
++            env->cdj_fpscr_lds_flagchg);
++    for (s = 0; s < CDJ_JCPROF_SITES; s++) {
++        for (k = 0; k < CDJ_EXIT_NKINDS; k++) {
++            uint64_t *c = cdj_jc_count[s][k];
++
++            if (c[CDJ_JC_HIT] | c[CDJ_JC_EMPTY] | c[CDJ_JC_CONFLICT]
++                | c[CDJ_JC_FLAGS]) {
++                fprintf(stderr, "[CDJ] jcprof %s %-8s hit=%" PRIu64
++                        " empty=%" PRIu64 " conflict=%" PRIu64
++                        " flags=%" PRIu64 "\n", s ? "helper" : "loop  ",
++                        kname[k], c[CDJ_JC_HIT], c[CDJ_JC_EMPTY],
++                        c[CDJ_JC_CONFLICT], c[CDJ_JC_FLAGS]);
++            }
++        }
++    }
++}
++
++/* Classify the jump-cache probe tb_lookup() is about to make. */
++static void cdj_jcprof_note(CPUState *cpu, int site, vaddr pc,
++                            uint64_t cs_base, uint32_t flags, uint32_t cflags)
++{
++    CPUSH4State *env = cpu_env(cpu);
++    CPUJumpCache *jc = cpu->tb_jmp_cache;
++    uint32_t hash = tb_jmp_cache_hash_func(pc);
++    TranslationBlock *tb = qatomic_read(&jc->array[hash].tb);
++    unsigned kind = env->cdj_exit_kind;
++    int out;
++
++    env->cdj_exit_kind = CDJ_EXIT_UNKNOWN;
++    if (kind >= CDJ_EXIT_NKINDS) {
++        kind = CDJ_EXIT_UNKNOWN;
++    }
++    if (!tb) {
++        out = CDJ_JC_EMPTY;
++    } else if (jc->array[hash].pc != pc) {
++        out = CDJ_JC_CONFLICT;
++    } else if (tb->cs_base != cs_base || tb->flags != flags
++               || tb_cflags(tb) != cflags) {
++        out = CDJ_JC_FLAGS;
++    } else {
++        out = CDJ_JC_HIT;
++    }
++    cdj_jc_count[site][kind][out]++;
++    if ((++cdj_jc_total & ((1u << 26) - 1)) == 0) {
++        cdj_jcprof_print(cpu);
++    }
++}
++
++#define CDJ_JCPROF_NOTE(cpu, site, pc, cs_base, flags, cflags)          \
++    do {                                                                \
++        if (unlikely(cdj_jcprof_on())) {                                \
++            cdj_jcprof_note(cpu, site, pc, cs_base, flags, cflags);     \
++        }                                                               \
++    } while (0)
++#else
++#define CDJ_JCPROF_NOTE(cpu, site, pc, cs_base, flags, cflags) do { } while (0)
++#endif
++
+ /* Might cause an exception, so have a longjmp destination ready */
+ static inline TranslationBlock *tb_lookup(CPUState *cpu, vaddr pc,
+                                           uint64_t cs_base, uint32_t flags,
+@@ -286,6 +440,10 @@ hit:
+     return tb;
+ }
+ 
++/* See the ring-buffer comment in cpu_tb_exec(). */
++CdjPcRingEntry cdj_pc_ring[CDJ_PC_RING_LEN];
++unsigned cdj_pc_ring_idx;
++
+ static void log_cpu_exec(vaddr pc, CPUState *cpu,
+                          const TranslationBlock *tb)
+ {
+@@ -421,6 +579,7 @@ const void *HELPER(lookup_tb_ptr)(CPUArchState *env)
+         cpu_loop_exit(cpu);
+     }
+ 
++    CDJ_JCPROF_NOTE(cpu, 1, pc, cs_base, flags, cflags);
+     tb = tb_lookup(cpu, pc, cs_base, flags, cflags);
+     if (tb == NULL) {
+         return tcg_code_gen_epilogue;
+@@ -454,6 +613,24 @@ cpu_tb_exec(CPUState *cpu, TranslationBlock *itb, int *tb_exit)
+         log_cpu_exec(log_pc(cpu, itb), cpu, itb);
+     }
+ 
++    /*
++     * Ring of recently-entered translation blocks. -d exec cannot be used to
++     * find what precedes the CDJ-2000NXS2 reset: the reset path in
++     * superh_cpu_do_interrupt() returns before any exception logging, and a
++     * full exec log for the seconds of boot before it is far too large to keep
++     * on this host. Recording the block PC unconditionally is two stores.
++     */
++    {
++        CdjPcRingEntry *e =
++            &cdj_pc_ring[cdj_pc_ring_idx++ & (CDJ_PC_RING_LEN - 1)];
++        e->pc = itb->pc;
++#ifdef TARGET_SH4
++        e->sr = cpu_env(cpu)->sr;
++#else
++        e->sr = 0;
++#endif
++    }
++
+     qemu_thread_jit_execute();
+     ret = tcg_qemu_tb_exec(cpu_env(cpu), tb_ptr);
+     cpu->neg.can_do_io = true;
+@@ -984,6 +1161,7 @@ cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
+                 break;
+             }
+ 
++            CDJ_JCPROF_NOTE(cpu, 0, pc, cs_base, flags, cflags);
+             tb = tb_lookup(cpu, pc, cs_base, flags, cflags);
+             if (tb == NULL) {
+                 CPUJumpCache *jc;
+@@ -1068,6 +1246,9 @@ int cpu_exec(CPUState *cpu)
+     return ret;
+ }
+ 
++/* CDJ_JC_HASH=1, see tb-jmp-cache.h. Never changes after realize. */
++bool cdj_jc_flat_hash;
++
+ bool tcg_exec_realizefn(CPUState *cpu, Error **errp)
+ {
+     static bool tcg_target_initialized;
+@@ -1082,6 +1263,15 @@ bool tcg_exec_realizefn(CPUState *cpu, Error **errp)
+         tcg_target_initialized = true;
+     }
+ 
++    {
++        const char *e = getenv("CDJ_JC_HASH");
++
++        if (e && *e && strcmp(e, "0") != 0 && !cdj_jc_flat_hash) {
++            cdj_jc_flat_hash = true;
++            fprintf(stderr, "[CDJ] CDJ_JC_HASH on: flat jump-cache hash, "
++                    "%d bits\n", TB_JMP_CACHE_BITS);
++        }
++    }
+     cpu->tb_jmp_cache = g_new0(CPUJumpCache, 1);
+     tlb_init(cpu);
+ #ifndef CONFIG_USER_ONLY

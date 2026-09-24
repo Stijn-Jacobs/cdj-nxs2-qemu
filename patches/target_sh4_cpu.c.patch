@@ -1,0 +1,25 @@
+diff --git a/target/sh4/cpu.c b/target/sh4/cpu.c
+index 8f07261..7fd6476 100644
+--- a/target/sh4/cpu.c
++++ b/target/sh4/cpu.c
+@@ -72,14 +72,18 @@ static bool superh_io_recompile_replay_branch(CPUState *cs,
+                                               const TranslationBlock *tb)
+ {
+     CPUSH4State *env = cpu_env(cs);
++    bool replay = false;
+ 
+     if ((env->flags & (TB_FLAG_DELAY_SLOT | TB_FLAG_DELAY_SLOT_COND))
+         && !tcg_cflags_has(cs, CF_PCREL) && env->pc != tb->pc) {
+         env->pc -= 2;
+         env->flags &= ~(TB_FLAG_DELAY_SLOT | TB_FLAG_DELAY_SLOT_COND);
+-        return true;
++        replay = true;
+     }
+-    return false;
++    /* The only target hook on the rewind path, so the rewind probe and the
++     * CDJ_IOSPLIT learner hang off it. */
++    cdj_io_recompiled(env);
++    return replay;
+ }
+ #endif
+ 

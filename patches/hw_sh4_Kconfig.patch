@@ -1,0 +1,22 @@
+diff --git a/hw/sh4/Kconfig b/hw/sh4/Kconfig
+index 99a76a9..c9643a1 100644
+--- a/hw/sh4/Kconfig
++++ b/hw/sh4/Kconfig
+@@ -25,3 +25,17 @@ config SH7750
+     select SH_INTC
+     select SH_SCI
+     select SH_TIMER
++
++config CDJ2000NXS2
++    bool
++    default y
++    depends on SH4
++    select SH_SCI
++    select UNIMP
++    select PFLASH_CFI02
++
++config SH7269GUI
++    bool
++    default y
++    depends on SH4
++    select UNIMP

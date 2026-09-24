@@ -1,0 +1,10 @@
+# Your data: firmware images, the USB image, the QEMU source and build trees.
+extract/
+notes/
+qemu-src/
+# ./setup.sh output: your saved setup, build logs, a private Python venv.
+cdj.conf
+logs/
+.venv/
+__pycache__/
+*.pyc

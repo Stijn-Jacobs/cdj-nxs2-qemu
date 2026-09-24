@@ -1,0 +1,147 @@
+diff --git a/hw/intc/sh_intc.c b/hw/intc/sh_intc.c
+index c9b0b0c..e6db648 100644
+--- a/hw/intc/sh_intc.c
++++ b/hw/intc/sh_intc.c
+@@ -77,26 +77,133 @@ static void sh_intc_set_irq(void *opaque, int n, int level)
+     }
+ }
+ 
++/*
++ * Is `id` reachable from the group source `head` by following the member chain
++ * sh_intc_register_sources() builds? Bounded by the source count because a
++ * malformed table could otherwise close the chain into a cycle.
++ */
++static bool sh_intc_group_contains(struct intc_desc *desc, intc_enum head,
++                                   intc_enum id)
++{
++    intc_enum cur = desc->sources[head].next_enum_id;
++    int steps;
++
++    for (steps = 0; cur && steps < desc->nr_sources; steps++) {
++        if (cur == id) {
++            return true;
++        }
++        cur = desc->sources[cur].next_enum_id;
++    }
++    return false;
++}
++
++/*
++ * Current priority of a source, read out of whichever IPR field carries it, or
++ * -1 if no priority register covers this source. Field order matches
++ * sh_intc_locate(): enum_ids[0] is the most significant field of the register.
++ *
++ * A source may hold its IPR field indirectly. Where several vectors share one
++ * priority field the board declares a group, the group's enum id is what
++ * appears in the prio_reg, and the individual sources appear nowhere in it --
++ * so a direct search reports "no priority" for a source that plainly has one
++ * (the four DMAC DEIs sharing IPRE[15:12], for instance), and the CPU cannot
++ * raise SR.IMASK to it on acceptance. Fall back to the owning group before
++ * giving up.
++ */
++static int sh_intc_source_priority(struct intc_desc *desc, intc_enum id)
++{
++    unsigned int i, k;
++
++    if (!desc->prio_regs) {
++        return -1;
++    }
++
++    for (i = 0; i < desc->nr_prio_regs; i++) {
++        struct intc_prio_reg *pr = &desc->prio_regs[i];
++        unsigned int width = pr->field_width;
++        unsigned int first = pr->reg_width / width - 1;
++
++        for (k = 0; k <= first; k++) {
++            intc_enum owner = pr->enum_ids[k];
++
++            if (owner == id ||
++                (owner && sh_intc_group_contains(desc, owner, id))) {
++                return (pr->value >> ((first - k) * width)) &
++                       ((1u << width) - 1);
++            }
++        }
++    }
++    return -1;
++}
++
+ int sh_intc_get_pending_vector(struct intc_desc *desc, int imask)
+ {
+     unsigned int i;
++    int best_vect = -1;
++    int best_prio = imask;
+ 
+     /* slow: use a linked lists of pending sources instead */
+-    /* wrong: take interrupt priority into account (one list per priority) */
+-
+-    if (imask == 0x0f) {
+-        return -1; /* FIXME, update code to include priority per source */
+-    }
+ 
++    /*
++     * SH-4 accepts an interrupt only when its priority is strictly greater
++     * than SR.IMASK; priority 0 means disabled, so it never fires. This used
++     * to ignore priority entirely and return the first pending source unless
++     * IMASK was 0xf, which breaks any guest that raises IMASK to block a
++     * lower-priority source while servicing it: an RTOS prologue that raises
++     * IMASK and then clears SR.BL is re-entered by the very interrupt it is
++     * servicing and recurses until the stack corrupts.
++     */
+     for (i = 0; i < desc->nr_sources; i++) {
+         struct intc_source *source = &desc->sources[i];
++        int prio;
+ 
+-        if (source->pending) {
+-            trace_sh_intc_pending(desc->pending, source->vect);
+-            return source->vect;
++        if (!source->pending) {
++            continue;
++        }
++
++        prio = sh_intc_source_priority(desc, i);
++        if (prio < 0) {
++            /*
++             * Not covered by any IPR. Keep the old always-deliver behaviour
++             * rather than silently masking a source a board never gave a
++             * priority register for.
++             */
++            prio = 0x0f;
++        }
++
++        if (prio <= best_prio) {
++            continue;
+         }
++
++        best_prio = prio;
++        best_vect = source->vect;
+     }
+-    g_assert_not_reached();
++
++    if (best_vect != -1) {
++        trace_sh_intc_pending(desc->pending, best_vect);
++    }
++    return best_vect;
++}
++
++/*
++ * Priority of whichever source owns this vector, or -1 if unknown. The CPU
++ * needs it because SH-4 loads the accepted interrupt's priority into SR.IMASK
++ * on delivery.
++ */
++int sh_intc_vector_priority(struct intc_desc *desc, int vect)
++{
++    unsigned int i;
++
++    if (!desc) {
++        return -1;
++    }
++
++    for (i = 0; i < desc->nr_sources; i++) {
++        if (desc->sources[i].vect == vect) {
++            return sh_intc_source_priority(desc, i);
++        }
++    }
++    return -1;
+ }
+ 
+ typedef enum {

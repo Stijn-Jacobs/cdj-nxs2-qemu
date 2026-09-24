@@ -1,0 +1,32 @@
+diff --git a/net/socket.c b/net/socket.c
+index 8e3702e..d9b5c5d 100644
+--- a/net/socket.c
++++ b/net/socket.c
+@@ -250,7 +250,27 @@ static int net_socket_mcast_create(struct sockaddr_in *mcastaddr,
+         goto fail;
+     }
+ 
++    /*
++     * Bind INADDR_ANY on Windows.
++     *
++     * Binding the group address is legal on Linux and is how a receiver
++     * filters to that group. Windows rejects it, since a bind() address must
++     * be one the host owns, so the netdev fails at construction with
++     * "can't bind ip=... to socket" and the machine never starts. Binding
++     * INADDR_ANY on the same port and then joining the group (below,
++     * unchanged) is the portable form; SO_REUSEADDR is already set above, so
++     * several instances still share the port.
++     */
++#ifdef _WIN32
++    {
++        struct sockaddr_in anyaddr = *mcastaddr;
++
++        anyaddr.sin_addr.s_addr = htonl(INADDR_ANY);
++        ret = bind(fd, (struct sockaddr *)&anyaddr, sizeof(anyaddr));
++    }
++#else
+     ret = bind(fd, (struct sockaddr *)mcastaddr, sizeof(*mcastaddr));
++#endif
+     if (ret < 0) {
+         error_setg_errno(errp, errno, "can't bind ip=%s to socket",
+                          inet_ntoa(mcastaddr->sin_addr));

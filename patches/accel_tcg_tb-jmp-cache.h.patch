@@ -1,0 +1,33 @@
+diff --git a/accel/tcg/tb-jmp-cache.h b/accel/tcg/tb-jmp-cache.h
+index c3a505e..ad8d1ba 100644
+--- a/accel/tcg/tb-jmp-cache.h
++++ b/accel/tcg/tb-jmp-cache.h
+@@ -12,9 +12,28 @@
+ #include "qemu/rcu.h"
+ #include "exec/cpu-common.h"
+ 
++/*
++ * Overridable at configure time, e.g. --extra-cflags=-DTB_JMP_CACHE_BITS=14.
++ * Every hit is re-checked against pc/cs_base/flags/cflags, so the size cannot
++ * change guest behaviour, only how often an indirect branch falls through to
++ * the qht. A bigger cache makes every full TLB flush (which clears it) dearer.
++ */
++#ifndef TB_JMP_CACHE_BITS
+ #define TB_JMP_CACHE_BITS 12
++#endif
+ #define TB_JMP_CACHE_SIZE (1 << TB_JMP_CACHE_BITS)
+ 
++/*
++ * CDJ_JC_HASH=1: index the jump cache with a flat hash of the whole pc instead
++ * of the softmmu page-bucket hash. The bucket hash gives each 4 KiB page only
++ * 2^(BITS/2) slots so that a TLB page flush can clear just those; MAIN's hot
++ * call and return targets cluster in a few pages and collide there (an
++ * estimated 21 % misses at 12 bits against 16 % with the flat hash). With the
++ * flat hash a page flush clears the whole cache instead (cputlb.c), which MAIN
++ * never does: its MMU is off. Set once in tcg_exec_realizefn().
++ */
++extern bool cdj_jc_flat_hash;
++
+ /*
+  * Invalidated in parallel; all accesses to 'tb' must be atomic.
+  * A valid entry is read/written by a single CPU, therefore there is

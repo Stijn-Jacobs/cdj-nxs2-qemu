@@ -1,0 +1,261 @@
+diff --git a/target/sh4/helper.c b/target/sh4/helper.c
+index 9659c69..bfdd801 100644
+--- a/target/sh4/helper.c
++++ b/target/sh4/helper.c
+@@ -21,8 +21,11 @@
+ 
+ #include "cpu.h"
+ #include "exec/exec-all.h"
++#include "exec/cpu_ldst.h"      /* SH-2A entry pushes its frame with cpu_st*_data */
+ #include "exec/page-protection.h"
+ #include "exec/log.h"
++#include "qemu/error-report.h"
++#include "exec/cdj-pcring.h"
+ 
+ #if !defined(CONFIG_USER_ONLY)
+ #include "hw/sh4/sh_intc.h"
+@@ -73,6 +76,28 @@ void superh_cpu_do_interrupt(CPUState *cs)
+                initrd, they need to be reloaded and the program counter
+                should be loaded with the kernel entry point.
+                qemu_system_reset_request takes care of that.  */
++            qemu_log("BL-masked exception 0x%03x at pc=0x%08x "
++                          "(spc=0x%08x sr=0x%08x intevt=0x%03x expevt=0x%03x "
++                          "pr=0x%08x) -> MACHINE RESET\n",
++                          cs->exception_index, env->pc, env->spc,
++                          cpu_read_sr(env), env->intevt, env->expevt, env->pr);
++            /*
++             * Dump the full register file too; the one-line form above omits
++             * VBR and the GPRs, which a jump through a NULL dispatch slot needs.
++             */
++            log_cpu_state(cs, 0);
++            {
++                /* Oldest first, so the log reads in execution order. */
++                unsigned i;
++                unsigned show = 64;   /* only the tail is informative */
++                qemu_log("last %u translation blocks before the reset:\n", show);
++                for (i = CDJ_PC_RING_LEN - show; i < CDJ_PC_RING_LEN; i++) {
++                    unsigned slot = (cdj_pc_ring_idx + i) & (CDJ_PC_RING_LEN - 1);
++                    qemu_log("  tb[%4d] pc=0x%08" PRIx64 " sr=0x%08x\n",
++                             (int)i - CDJ_PC_RING_LEN,
++                             cdj_pc_ring[slot].pc, cdj_pc_ring[slot].sr);
++                }
++            }
+             qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
+             return;
+         }
+@@ -83,10 +108,19 @@ void superh_cpu_do_interrupt(CPUState *cs)
+     env->in_sleep = 0;
+ 
+     if (do_irq) {
+-        irq_vector = sh_intc_get_pending_vector(env->intc_handle,
+-                                                (env->sr >> 4) & 0xf);
+-        if (irq_vector == -1) {
+-            return; /* masked */
++        if (env->features & SH_FEATURE_SH2A) {
++            /*
++             * The SH-2A board has no sh_intc: devices carry their own vector
++             * number in sh2a_irq_vector. Calling sh_intc_get_pending_vector()
++             * here would dereference a NULL intc_handle.
++             */
++            irq_vector = env->sh2a_irq_vector;
++        } else {
++            irq_vector = sh_intc_get_pending_vector(env->intc_handle,
++                                                    (env->sr >> 4) & 0xf);
++            if (irq_vector == -1) {
++                return; /* masked */
++            }
+         }
+     }
+ 
+@@ -141,6 +175,118 @@ void superh_cpu_do_interrupt(CPUState *cs)
+         log_cpu_state(cs, 0);
+     }
+ 
++    if (env->features & SH_FEATURE_SH2A) {
++        /*
++         * SH-2A exception/interrupt entry (SH-1/SH-2 manual, "Exception
++         * Handling"). There is no SPC/SSR and no single VBR+0x600 entry:
++         *
++         *     R15 -= 4; Write_Long(R15, SR);
++         *     R15 -= 4; Write_Long(R15, PC);
++         *     PC = Read_Long(VBR + vecnum * 4);
++         *
++         * This is the exact counterpart of the stack-based RTE in translate.c
++         * -- delivering SH-4 style would push nothing, so the handler's RTE
++         * would pop whatever happened to be below the stack pointer.
++         *
++         * The GUI firmware's table confirms the layout: vectors 0-18 are CPU
++         * exceptions, 32-63 are TRAPA #0-#31 (the RTOS's syscalls, and the only
++         * individually-hooked entries), and 64+ are peripheral interrupts.
++         */
++        uint32_t save_sr = cpu_read_sr(env);
++        uint32_t save_pc = env->pc;
++        uint32_t vecnum;
++
++        if (env->flags & TB_FLAG_DELAY_SLOT_MASK) {
++            /* Re-execute the branch, not just the slot, on return. */
++            save_pc -= 2;
++            env->flags &= ~TB_FLAG_DELAY_SLOT_MASK;
++        }
++
++        if (do_exp) {
++            env->expevt = cs->exception_index;
++            switch (cs->exception_index) {
++            case 0x180: vecnum = 4;  break;              /* illegal general  */
++            case 0x1a0: vecnum = 6;  break;              /* illegal slot     */
++            case 0x0e0:
++            case 0x100: vecnum = 9;  break;              /* CPU address error*/
++            case 0x160:                                  /* TRAPA #imm       */
++                save_pc += 2;                            /* return past it   */
++                vecnum = 32 + ((env->tra >> 2) & 0x1f);
++                break;
++            default:    vecnum = 4;  break;
++            }
++        } else {
++            env->intevt = irq_vector;
++            vecnum = env->sh2a_irq_vector;
++        }
++
++        /*
++         * Hardware banks R0-R14/GBR/MACH/MACL/PR on interrupt entry so the
++         * handler can restore them with LDBANK/RESBANK. Without this the
++         * firmware's prologue reads an empty bank and restores GBR = 0.
++         */
++        if (!do_exp) {
++            helper_sh2a_bank_save(env, 0);
++        }
++
++        env->gregs[15] -= 4;
++        cpu_stl_data(env, env->gregs[15], save_sr);
++        env->gregs[15] -= 4;
++        cpu_stl_data(env, env->gregs[15], save_pc);
++        env->pc = cpu_ldl_data(env, env->vbr + vecnum * 4);
++        env->lock_addr = -1;
++
++        /*
++         * RTOS syscalls arrive as TRAPA #0-#31 (vectors 32-63). Logging the
++         * trap number with r4-r7 and the caller's stack pointer is what tells
++         * us which task blocked and on what -- r15 identifies the task, since
++         * each has its own stack.
++         */
++        if (do_exp && cs->exception_index == 0x160 &&
++            getenv("CDJ_GUI_TRAPA_DEBUG")) {
++            info_report("trapa: #%u from 0x%08x sp=0x%08x "
++                        "r4=0x%08x r5=0x%08x r6=0x%08x r7=0x%08x -> 0x%08x",
++                        vecnum - 32, save_pc - 2, env->gregs[15] + 8,
++                        env->gregs[4], env->gregs[5], env->gregs[6],
++                        env->gregs[7], env->pc);
++        }
++
++        if (getenv("CDJ_SH2A_VEC_DEBUG")) {
++            static int n;
++
++            /*
++             * The cap is high so that the tick alone cannot crowd out a rarer
++             * vector: a vector missing from the log is genuinely missing.
++             */
++            if (n++ < 100000) {
++                info_report("sh2a: %s vec=%u vbr=0x%08x slot=0x%08x "
++                            "-> pc=0x%08x (from 0x%08x, sr=0x%08x, r15=0x%08x)",
++                            do_exp ? "exception" : "irq", vecnum, env->vbr,
++                            env->vbr + vecnum * 4, env->pc, save_pc,
++                            save_sr, env->gregs[15]);
++            }
++        }
++
++        if (!do_exp) {
++            /*
++             * One delivery per raise. The request is level-driven in hardware
++             * and the handler is expected to clear the source, but this board
++             * has no INTC to arbitrate that: left asserted, the CPU re-enters
++             * the handler the instant SR.IMASK drops and no task ever runs.
++             */
++            cpu_reset_interrupt(cs, CPU_INTERRUPT_HARD);
++
++            /*
++             * Accepting an interrupt raises SR.IMASK to the accepted level, so
++             * the handler cannot be re-entered by its own still-asserted
++             * source. Priorities are not modelled here, so mask everything;
++             * SR is on the stack and RTE restores the interrupted level.
++             */
++            env->sr |= 0xf << 4;
++        }
++        return;
++    }
++
+     env->ssr = cpu_read_sr(env);
+     env->spc = env->pc;
+     env->sgr = env->gregs[15];
+@@ -179,8 +325,24 @@ void superh_cpu_do_interrupt(CPUState *cs)
+     }
+ 
+     if (do_irq) {
++        int prio;
++
+         env->intevt = irq_vector;
+         env->pc = env->vbr + 0x600;
++
++        /*
++         * SH-4 loads the accepted interrupt's priority into SR.IMASK on
++         * delivery (SH-4 manual, "Interrupt Exception Handling"), which is what
++         * stops the same source re-entering its own handler.
++         *
++         * SSR was captured above, so the interrupted context still sees its own
++         * IMASK on RTE.
++         */
++        prio = sh_intc_vector_priority(env->intc_handle, irq_vector);
++        if (prio >= 0) {
++            env->sr &= ~(0xfu << 4);
++            env->sr |= ((uint32_t)prio & 0xf) << 4;
++        }
+         return;
+     }
+ }
+@@ -781,13 +943,43 @@ int cpu_sh4_is_cached(CPUSH4State * env, target_ulong addr)
+ bool superh_cpu_exec_interrupt(CPUState *cs, int interrupt_request)
+ {
+     if (interrupt_request & CPU_INTERRUPT_HARD) {
++        CPUSH4State *env = cpu_env(cs);
++
+         /* Delay slots are indivisible, ignore interrupts */
+-        if (cpu_env(cs)->flags & TB_FLAG_DELAY_SLOT_MASK) {
++        if (env->flags & TB_FLAG_DELAY_SLOT_MASK) {
++            return false;
++        }
++
++        /*
++         * Only claim the interrupt if it will actually be delivered.
++         * superh_cpu_do_interrupt() returns without touching env->pc when the
++         * request is masked, and answering "true" to that makes cpu_exec retry
++         * immediately, so the CPU spins re-taking a masked request and never
++         * executes another guest instruction.
++         */
++        if (env->sr & (1u << SR_BL)) {
++            if (!env->in_sleep) {
++                return false;
++            }
++        } else if (env->features & SH_FEATURE_SH2A) {
++            /*
++             * SH-2A accepts an interrupt only when its priority exceeds
++             * SR.IMASK. There is no sh_intc on this board to consult, so the
++             * raising device's level travels in sh2a_irq_level. The
++             * intc_handle check below cannot stand in for it: the handle is
++             * NULL on this board.
++             */
++            if (env->sh2a_irq_level <= ((env->sr >> 4) & 0xf)) {
++                return false;
++            }
++        } else if (env->intc_handle &&
++                   sh_intc_get_pending_vector(env->intc_handle,
++                                              (env->sr >> 4) & 0xf) == -1) {
+             return false;
+-        } else {
+-            superh_cpu_do_interrupt(cs);
+-            return true;
+         }
++
++        superh_cpu_do_interrupt(cs);
++        return true;
+     }
+     return false;
+ }

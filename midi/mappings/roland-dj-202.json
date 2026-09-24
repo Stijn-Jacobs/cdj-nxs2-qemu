@@ -1,0 +1,107 @@
+{
+  "_about": [
+    "The map proper: a DJ-202 control name (from controllers/roland-dj-202.json, captured",
+    "off the device) bound to a CDJ action (from cdj_actions.py, read off the",
+    "firmware's own key table). No MIDI numbers live here -- that is the point",
+    "of the split. Re-learning the device changes controllers/roland-dj-202.json and this",
+    "file keeps working.",
+    "",
+    "'deck' is either a deck id from 'decks' below, or 'focus', meaning the",
+    "deck the LOAD buttons last pointed at. Browse is a single shared UI on a",
+    "real CDJ pair too -- you browse on the deck you are about to load."
+  ],
+
+  "controller": "roland-dj-202",
+
+  "decks": {
+    "_note": "deck id -> the tag its machine runs under, i.e. its key socket",
+    "cdjA": "show1",
+    "cdjB": "show2"
+  },
+
+  "focus": "cdjA",
+
+  "bindings": {
+    "_note_load": "LOAD does not load here -- on a CDJ the rotary push loads. LOAD picks which deck the browse knob drives.",
+    "deck1/load": {"action": "set_focus", "deck": "cdjA"},
+    "deck2/load": {"action": "set_focus", "deck": "cdjB"},
+
+    "browse/encoder": {"action": "select_turn", "deck": "focus", "scale": 1},
+    "browse/encoder_push": {"action": "rotary_push", "deck": "focus"},
+
+    "deck1/play": {"action": "play_pause", "deck": "cdjA"},
+    "deck2/play": {"action": "play_pause", "deck": "cdjB"},
+    "deck1/cue": {"action": "cue", "deck": "cdjA"},
+    "deck2/cue": {"action": "cue", "deck": "cdjB"},
+
+    "_note_pads": "The CDJ has panel keys the DJ-202 has no button for, so each deck's pads become that deck's panel: 1-4 navigate, 5-8 move within the track. Every one is a key the firmware's own table names, so a pad that does nothing means the deck ignored it, not that the map guessed.",
+    "deck1/pad_1": {"action": "browse", "deck": "cdjA"},
+    "deck1/pad_2": {"action": "menu_utility", "deck": "cdjA"},
+    "deck1/pad_3": {"action": "dev_usb", "deck": "cdjA"},
+    "deck1/pad_4": {"action": "back", "deck": "cdjA"},
+    "deck1/pad_5": {"action": "track_rev", "deck": "cdjA"},
+    "deck1/pad_6": {"action": "track_fwd", "deck": "cdjA"},
+    "_note_pad78_deck1": "Deck 1 pads 7-8 carry the two controls whose effect shows on the screen at once: TempoRange cycles the +/-10 -> +/-16 badge and MasterTempo lights a red MT. Deck 2 keeps scan on 7-8.",
+    "deck1/pad_7": {"action": "tempo_range", "deck": "cdjA"},
+    "deck1/pad_8": {"action": "master_tempo", "deck": "cdjA"},
+
+    "deck2/pad_1": {"action": "browse", "deck": "cdjB"},
+    "deck2/pad_2": {"action": "menu_utility", "deck": "cdjB"},
+    "deck2/pad_3": {"action": "dev_usb", "deck": "cdjB"},
+    "deck2/pad_4": {"action": "back", "deck": "cdjB"},
+    "deck2/pad_5": {"action": "track_rev", "deck": "cdjB"},
+    "deck2/pad_6": {"action": "track_fwd", "deck": "cdjB"},
+    "deck2/pad_7": {"action": "scan_rev", "deck": "cdjB"},
+    "deck2/pad_8": {"action": "scan_fwd", "deck": "cdjB"},
+
+    "_note_jog": "The platter's ticks drive JogMov + JogRoundFwd as levels, re-armed while it turns; the platter's touch sensor holds JogTouch on its own so a resting hand does not claim motion.",
+    "_note_jog_mode": "FX TAP toggles the NXS2's JOG MODE (VINYL/CDJ, report 0x15 bit 0x01). Only in VINYL mode does touching the platter top hold and scratch.",
+    "deck1/fx_tap": {"action": "jog_mode", "deck": "cdjA"},
+    "deck2/fx_tap": {"action": "jog_mode", "deck": "cdjB"},
+    "deck1/jog_turn": {"action": "jog", "deck": "cdjA"},
+    "deck2/jog_turn": {"action": "jog", "deck": "cdjB"},
+    "deck1/jog_touch": {"action": "jog_touch", "deck": "cdjA"},
+    "deck2/jog_touch": {"action": "jog_touch", "deck": "cdjB"},
+
+    "deck1/sync": {"action": "sync", "deck": "cdjA"},
+    "deck2/sync": {"action": "sync", "deck": "cdjB"},
+    "deck1/tempo": {"action": "tempo", "deck": "cdjA"},
+    "deck2/tempo": {"action": "tempo", "deck": "cdjB"},
+
+    "_note_keylock": "KEY LOCK is what the NXS2 calls MASTER TEMPO, and the DJ-202's SLIP is the NXS2's SLIP -- both firmware-table keys.",
+    "deck1/key_lock": {"action": "master_tempo", "deck": "cdjA"},
+    "deck2/key_lock": {"action": "master_tempo", "deck": "cdjB"},
+    "deck1/slip": {"action": "slip_mode", "deck": "cdjA"},
+    "deck2/slip": {"action": "slip_mode", "deck": "cdjB"}
+  },
+
+  "leds": {
+    "_note": "role -> control name; midi/leds.py says what each role shows. 'beat' is four LEDs in bar order. 'ring' is the NXS2's jog ring light on the headphone CUE buttons, the only lit DJ-202 buttons with no CDJ function (the deck switch's LED is the pad layer and cannot be used).",
+    "cdjA": {
+      "beat": ["deck1/fx_1", "deck1/fx_2", "deck1/fx_3", "deck1/fx_tap"],
+      "play": "deck1/play",
+      "cue": "deck1/cue",
+      "ring": "mixer/ch1_cue",
+      "slip": "deck1/slip",
+      "master_tempo": "deck1/key_lock"
+    },
+    "cdjB": {
+      "beat": ["deck2/fx_1", "deck2/fx_2", "deck2/fx_3", "deck2/fx_tap"],
+      "play": "deck2/play",
+      "cue": "deck2/cue",
+      "ring": "mixer/ch2_cue",
+      "slip": "deck2/slip",
+      "master_tempo": "deck2/key_lock"
+    }
+  },
+
+  "_unmapped": [
+    "The jog is three separate report bits (touch, direction, movement), not a",
+    "wheel position, so turning a platter into them is its own job. The DJ-202",
+    "jog also sends pitchwheel, which the bridge does not decode yet.",
+    "",
+    "The mixer (faders, EQ, filter, crossfader, cue) has no CDJ target by",
+    "design: on real hardware it is a DJM, a separate box. It belongs in an",
+    "audio mixer on the host side, not in a panel-key datagram."
+  ]
+}

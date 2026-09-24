@@ -1,0 +1,1238 @@
+diff --git a/target/sh4/op_helper.c b/target/sh4/op_helper.c
+index 99394b7..eb59bc0 100644
+--- a/target/sh4/op_helper.c
++++ b/target/sh4/op_helper.c
+@@ -22,6 +22,7 @@
+ #include "exec/exec-all.h"
+ #include "exec/cpu_ldst.h"
+ #include "fpu/softfloat.h"
++#include "sysemu/cpu-timers.h"
+ 
+ #ifndef CONFIG_USER_ONLY
+ 
+@@ -94,6 +95,31 @@ void helper_sleep(CPUSH4State *env)
+     raise_exception(env, EXCP_HLT, 0);
+ }
+ 
++/*
++ * CDJ_GUI_IDLE_PC: the display board's idle task, executed as a halt.
++ *
++ * The SH7269 board's RTOS idle task is a counter loop (mov.l @r1,r2 /
++ * add #1,r2 / bra / mov.l r2,@r1) that takes most of that QEMU's CPU time.
++ * Its only exit is an interrupt that switches to a ready task, which is
++ * exactly what SLEEP waits for, so the loop can be run as one.
++ *
++ * It refuses to halt while an interrupt is already pending: on this board a
++ * request the CPU cannot accept yet (SR.IMASK, SR.BL) stays set, and halting on
++ * it would trade a cheap four-instruction loop for an exception per iteration.
++ * The guest then runs its counter loop as before.
++ */
++void helper_cdj_gui_idle(CPUSH4State *env)
++{
++    CPUState *cs = env_cpu(env);
++
++    if (cs->interrupt_request & CPU_INTERRUPT_HARD) {
++        return;
++    }
++    cs->halted = 1;
++    env->in_sleep = 1;
++    raise_exception(env, EXCP_HLT, 0);
++}
++
+ void helper_trapa(CPUSH4State *env, uint32_t tra)
+ {
+     env->tra = tra << 2;
+@@ -204,6 +230,10 @@ void helper_macw(CPUSH4State *env, int32_t arg0, int32_t arg1)
+ 
+ void helper_ld_fpscr(CPUSH4State *env, uint32_t val)
+ {
++    env->cdj_fpscr_lds++;
++    if ((env->fpscr ^ val) & TB_FLAG_FPSCR_MASK) {
++        env->cdj_fpscr_lds_flagchg++;
++    }
+     env->fpscr = val & FPSCR_MASK;
+     if ((val & FPSCR_RM_MASK) == FPSCR_RM_ZERO) {
+         set_float_rounding_mode(float_round_to_zero, &env->fp_status);
+@@ -497,3 +527,1182 @@ void helper_ftrv(CPUSH4State *env, uint32_t n)
+         env->fregs[bank_vector + i] = r[i];
+     }
+ }
++
++/*
++ * SH-2A fast-interrupt register banks.
++ *
++ * LDBANK/STBANK do not take a memory address: the operand register carries a
++ * bank number and an entry number (SH-2A manual, "Register Banks"):
++ *
++ *     Rm = [ BN | EN | 00 ]      EN in bits 6:2, BN above bit 6
++ *     EN: 0-14 = R0-R14, 15 = MACH, 16 = interrupt vector offset,
++ *         17 = PR, 18 = GBR, 19 = MACL
++ *
++ * The entry order is fixed by observation as much as by the manual: the GUI
++ * firmware's interrupt prologue does `mov #0x48,r4; LDBANK @r4,r0; ldc r0,gbr`,
++ * and 0x48 gives EN = 18, so entry 18 must be GBR.
++ */
++static uint32_t *sh2a_bank_slot(CPUSH4State *env, uint32_t sel)
++{
++    unsigned en = (sel >> 2) & 0x1f;
++    unsigned bn = (sel >> 7) & 0xf;
++
++    if (en >= SH2A_BANK_ENTS) {
++        en = SH2A_BANK_ENTS - 1;
++    }
++    return &env->sh2a_bank[bn][en];
++}
++
++void helper_sh2a_bank_save(CPUSH4State *env, unsigned bn)
++{
++    uint32_t *b = env->sh2a_bank[bn & 0xf];
++    unsigned i;
++
++    for (i = 0; i < 15; i++) {
++        b[i] = env->gregs[i];
++    }
++    b[15] = env->mach;
++    b[17] = env->pr;
++    b[18] = env->gbr;
++    b[19] = env->macl;
++}
++
++uint32_t helper_sh2a_ldbank(CPUSH4State *env, uint32_t sel)
++{
++    return *sh2a_bank_slot(env, sel);
++}
++
++void helper_sh2a_stbank(CPUSH4State *env, uint32_t sel, uint32_t val)
++{
++    *sh2a_bank_slot(env, sel) = val;
++}
++
++void helper_sh2a_resbank(CPUSH4State *env)
++{
++    /*
++     * RESBANK restores R0-R14, GBR, MACH, MACL and PR in one go. Only bank 0
++     * is modelled: the hardware keeps a stack of banks indexed by the INTC's
++     * IBNR, but this firmware only ever selects BN = 0, and a deeper model
++     * would be untestable until something uses it.
++     */
++    uint32_t *b = env->sh2a_bank[0];
++    unsigned i;
++
++    for (i = 0; i < 15; i++) {
++        env->gregs[i] = b[i];
++    }
++    env->mach = b[15];
++    env->pr   = b[17];
++    env->gbr  = b[18];
++    env->macl = b[19];
++}
++
++/*
++ * CDJ-2000NXS2 firmware log tap.
++ *
++ * The firmware's printf-style logger (MAIN 0x084D8674) is called as
++ * log(level, fmt, ...) with fmt and the varargs pushed on the stack, and it
++ * writes the formatted line into an internal RAM buffer rather than to a
++ * serial port -- which is why none of the firmware's own `@Ui_Browse>`,
++ * `MOUNT %s(%s:%d)` or `CacheDB DSQLerror!` strings ever appear in a boot log.
++ * Worse, the logger returns immediately unless a runtime threshold word is low
++ * enough, so most calls produce nothing at all.
++ *
++ * Tapping the function's first instruction sidesteps both: it sees every call
++ * regardless of the threshold, and formats the line on the host. CDJ_FWLOG
++ * selects the address (empty = the default above, "0" = off).
++ */
++static bool cdj_fwlog_addr_ok(uint32_t a, uint32_t len)
++{
++    /*
++     * MAIN flash and its 0xA8 alias, then DRAM. The firmware spreads relocated
++     * code and data from 0x09xxxxxx to 0x11xxxxxx, so a narrower window would
++     * reject good pointers.
++     */
++    static const struct { uint32_t lo, hi; } ok[] = {
++        { 0x08000000, 0x12000000 }, { 0xa8000000, 0xac000000 },
++        /* The GUI board (SH7269): six pages, H'1C000000-H'1C27FFFF. */
++        { 0x1c000000, 0x1c280000 },
++        /*
++         * The cache-disabled alias of the same region. The firmware addresses its
++         * SPI buffers (in the last page, near 0x3C27B000) through this view, so
++         * it is the one a watch has to accept.
++         */
++        { 0x3c000000, 0x3c280000 },
++        /* The SH7269's on-chip RAM, where the GUI keeps live display state. */
++        { 0xfff80000, 0xfffa0000 },
++    };
++    unsigned i;
++
++    for (i = 0; i < ARRAY_SIZE(ok); i++) {
++        if (a >= ok[i].lo && a + len <= ok[i].hi) {
++            return true;
++        }
++    }
++    return false;
++}
++
++static void cdj_fwlog_str(CPUSH4State *env, uint32_t addr, char *dst, size_t n)
++{
++    size_t i;
++
++    if (!cdj_fwlog_addr_ok(addr, 1)) {
++        snprintf(dst, n, "<%#x>", addr);
++        return;
++    }
++    for (i = 0; i + 1 < n; i++) {
++        uint8_t c = cpu_ldub_data(env, addr + i);
++        if (!c) {
++            break;
++        }
++        /*
++         * Keep bytes >= 0x80 verbatim: the firmware's log strings are
++         * Shift-JIS. Control characters become '.' so a stray NUL or escape
++         * cannot corrupt the line.
++         */
++        dst[i] = (c >= 0x20 && c != 0x7f) ? c : '.';
++    }
++    dst[i] = '\0';
++}
++
++/*
++ * Enough of printf to render the firmware's own format strings. Every vararg
++ * is one 32-bit stack slot -- the SH-4 ABI passes the first four in registers,
++ * but this logger is variadic and its callers spill all of them.
++ */
++void helper_cdj_fwlog(CPUSH4State *env)
++{
++    char fmt[256], out[512], spec[32], sarg[192];
++    uint32_t sp = env->gregs[15];
++    uint32_t argp = sp + 4;
++    size_t o = 0;
++    const char *p;
++
++    cdj_fwlog_str(env, cpu_ldl_data(env, sp), fmt, sizeof(fmt));
++
++    for (p = fmt; *p && o + 1 < sizeof(out); p++) {
++        size_t n = 0;
++        bool is_long = false;
++        uint32_t arg;
++
++        if (*p != '%') {
++            out[o++] = *p;
++            continue;
++        }
++        spec[n++] = *p++;
++        while (*p && n + 2 < sizeof(spec) && !strchr("diouxXcspfge%", *p)) {
++            is_long |= *p == 'l';
++            if (*p != 'l' && *p != 'h') {
++                spec[n++] = *p;
++            }
++            p++;
++        }
++        if (!*p) {
++            break;
++        }
++        if (*p == '%') {
++            out[o++] = '%';
++            continue;
++        }
++        spec[n++] = (*p == 'i') ? 'd' : *p;
++        spec[n] = '\0';
++        (void)is_long;
++
++        arg = cdj_fwlog_addr_ok(argp, 4) ? cpu_ldl_data(env, argp) : 0;
++        argp += 4;
++
++        switch (spec[n - 1]) {
++        case 's':
++            cdj_fwlog_str(env, arg, sarg, sizeof(sarg));
++            o += snprintf(out + o, sizeof(out) - o, spec, sarg);
++            break;
++        case 'c':
++            /* The firmware's own %c arguments are not always printable -- an
++             * unassigned drive letter is 0, and rendering it verbatim put a NUL
++             * in the middle of the line and threw away everything after it,
++             * including the capacity and link speed that were the point. */
++            o += snprintf(out + o, sizeof(out) - o, "%c",
++                          (arg >= 0x20 && arg < 0x7f) ? (char)arg : '?');
++            break;
++        case 'f': case 'g': case 'e':
++            /* Doubles occupy two slots and are not worth decoding here. */
++            argp += 4;
++            o += snprintf(out + o, sizeof(out) - o, "<float>");
++            break;
++        case 'd':
++            o += snprintf(out + o, sizeof(out) - o, spec, (int32_t)arg);
++            break;
++        default:
++            o += snprintf(out + o, sizeof(out) - o, spec, arg);
++            break;
++        }
++        if (o >= sizeof(out)) {
++            o = sizeof(out) - 1;
++        }
++    }
++    out[o] = '\0';
++
++    fprintf(stderr, "FWLOG lv=%u pr=%08x %s\n", env->gregs[4],
++            (uint32_t)env->pr, out);
++}
++
++/*
++ * Memory tap: at a chosen PC, dump guest memory addressed off a register.
++ *
++ * CDJ_FWDUMP=<pc>:<reg>:<off>:<len>[:i]
++ *
++ * `reg` is a general register number, `off` is added to it, `len` bytes are
++ * dumped, and a trailing ":i" makes the address INDIRECT -- the 32-bit word at
++ * reg+off is used as the pointer, which is how a caller-supplied buffer is
++ * reached. Example, the READ CAPACITY response buffer:
++ *
++ *     CDJ_FWDUMP=0x082410c0:15:0xa8:16:i
++ *
++ * Same rationale as the log tap: a breakpoint slows the guest so much that the
++ * moment of interest never arrives, and this costs one comparison per
++ * translated instruction.
++ */
++extern uint32_t cdj_fwdump_reg, cdj_fwdump_off, cdj_fwdump_len,
++                cdj_fwdump_indirect;
++
++void helper_cdj_fwdump(CPUSH4State *env)
++{
++    /* 256 bytes: a UTF-16 file path does not fit in 64. */
++    char hex[3 * 256 + 1];
++    unsigned i, n = cdj_fwdump_len;
++    uint32_t addr = env->gregs[cdj_fwdump_reg] + cdj_fwdump_off;
++
++    if (cdj_fwdump_indirect) {
++        if (!cdj_fwlog_addr_ok(addr, 4)) {
++            fprintf(stderr, "FWDUMP pointer slot %#x unreadable\n", addr);
++            return;
++        }
++        addr = cpu_ldl_data(env, addr);
++    }
++    if (n > 256) {
++        n = 64;
++    }
++    if (!cdj_fwlog_addr_ok(addr, n)) {
++        fprintf(stderr, "FWDUMP addr %#x unreadable\n", addr);
++        return;
++    }
++    for (i = 0; i < n; i++) {
++        snprintf(hex + 3 * i, 4, "%02x ", cpu_ldub_data(env, addr + i));
++    }
++    fprintf(stderr, "FWDUMP pr=%08x r0=%08x r4=%08x r5=%08x r6=%08x r7=%08x "
++            "@%08x: %s\n", (uint32_t)env->pr, env->gregs[0], env->gregs[4],
++            env->gregs[5], env->gregs[6], env->gregs[7], addr, hex);
++}
++
++/*
++ * Branch trace: CDJ_FWTRACE=<pc>[,<pc>...] prints a line each time one of up to
++ * eight addresses is executed. Answering "which of these branches did it take"
++ * one address per boot is slow; this settles it in a single run, and an address
++ * that never prints is as informative as one that does.
++ */
++void helper_cdj_fwtrace(CPUSH4State *env, uint32_t pc)
++{
++    fprintf(stderr, "FWTRACE %08x pr=%08x r0=%08x r4=%08x r5=%08x\n", pc,
++            (uint32_t)env->pr, env->gregs[0], env->gregs[4], env->gregs[5]);
++}
++
++/*
++ * PC-anchored poke: CDJ_PPOKE=<pc>:<addr>:<or>[:<and>[:<n>]][,...] -- see
++ * cdj_ppoke_hit() in translate.c for why a timer cannot do this job and why
++ * there is more than one slot. <slot> is the index the translator matched, so
++ * the list is walked once at translate time and never here.
++ */
++extern CdjPpoke cdj_ppoke[];
++extern unsigned cdj_ppoke_n;
++
++/*
++ * CDJ_PPOKE_ARM=<pc>: keep the waiting pokes inert until the machine has got
++ * somewhere.
++ *
++ * A poke fires from the first execution of its anchor, and the anchors that
++ * matter for the transport run from boot, so an intervention meant for a
++ * loaded deck would land on an empty one. Anchoring on a one-shot post-load
++ * instruction does not help either: the effect is erased before the consumer
++ * next runs. What is needed is a poke that is held, and held only after a
++ * named event, so there is one global arming PC. Until it has executed once,
++ * every slot that waits for it is a no-op. Arm on whatever proves the state
++ * you are waiting for, e.g. the centre-waveform publisher, which runs once per
++ * successful load.
++ */
++static bool cdj_ppoke_arm_seen;
++
++void helper_cdj_ppoke_arm(CPUSH4State *env)
++{
++    if (!cdj_ppoke_arm_seen) {
++        cdj_ppoke_arm_seen = true;
++        fprintf(stderr, "ppoke: ARMED -- every poke is live from here\n");
++    }
++}
++
++bool cdj_ppoke_is_armed(void);
++bool cdj_ppoke_is_armed(void)
++{
++    return cdj_ppoke_arm_seen;
++}
++
++void helper_cdj_ppoke(CPUSH4State *env, uint32_t slot)
++{
++    CdjPpoke *p = &cdj_ppoke[slot];
++    uint32_t old, new;
++    if (p->wait_arm && !cdj_ppoke_arm_seen) {
++        return;
++    }
++
++    if (slot >= cdj_ppoke_n || !cdj_fwlog_addr_ok(p->addr, 4)) {
++        return;
++    }
++    /* Counted mode: fire the first p->max times and then stand down, so the
++     * guest can be pushed through one transition rather than pinned in it.
++     * Announced, because a poke that has stopped firing looks exactly like a
++     * poke that never fired. */
++    if (p->max && p->applied >= p->max) {
++        if (p->applied == p->max) {
++            p->applied++;
++            fprintf(stderr, "PPOKE[%u] EXHAUSTED after %u applications\n",
++                    slot, p->max);
++        }
++        return;
++    }
++    p->applied++;
++    old = cpu_ldl_data(env, p->addr);
++    new = (old & p->and) | p->or;
++    if (old != new) {
++        cpu_stl_data(env, p->addr, new);
++    }
++    /* Announced a few times and then silent, so a poke that is not firing
++     * shows. */
++    if (p->printed < 4) {
++        p->printed++;
++        fprintf(stderr, "PPOKE[%u] %08x %08x -> %08x pr=%08x\n", slot, p->addr,
++                old, new, (uint32_t)env->pr);
++    }
++}
++
++/*
++ * CDJ_PSTORE: at <pc>, store R<reg> into the guest word at <addr>. See
++ * cdj_pstore_specs() in translate.c for why a constant poke cannot do this job.
++ */
++extern CdjPstore cdj_pstore[];
++extern unsigned cdj_pstore_n;
++
++void helper_cdj_pstore(CPUSH4State *env, uint32_t slot)
++{
++    CdjPstore *p = &cdj_pstore[slot];
++    uint32_t v;
++
++    if (slot >= cdj_pstore_n || !cdj_fwlog_addr_ok(p->addr, 4)) {
++        return;
++    }
++    if (p->max && p->applied >= p->max) {
++        return;
++    }
++    p->applied++;
++    v = (uint32_t)env->gregs[p->reg];
++    cpu_stl_data(env, p->addr, v);
++    /* Announced a few times and then silent, so a store that is not firing
++     * shows. */
++    if (p->printed < 4) {
++        p->printed++;
++        fprintf(stderr, "PSTORE[%u] *%08x = r%u = %08x pr=%08x\n", slot,
++                p->addr, p->reg, v, (uint32_t)env->pr);
++    }
++}
++
++/*
++ * Injected call: CDJ_PCALL=<pc>:<func>:<r4>:<r5>:<r6>[:<n>] -- see the comment
++ * on cdj_pcall_armed() in translate.c for why this exists at all (short version:
++ * get_mpl/snd_mbx need a real task, and the gdbstub route that borrows one
++ * cannot be combined with the panel-driven load).
++ *
++ * The whole register file is saved, not just the caller-saved half: the guest
++ * instruction at <pc> has not executed yet, so on return the task must see
++ * exactly the machine it would have seen.
++ */
++extern CdjPcall cdj_pcall;
++extern uint32_t cdj_pcall_ret;
++
++static struct {
++    uint32_t gregs[16], pr, gbr, mach, macl, sr, sr_m, sr_q, sr_t, resume;
++    bool active;
++} cdj_pcall_saved;
++
++void helper_cdj_pcall(CPUSH4State *env, uint32_t pc)
++{
++    unsigned i;
++
++    /* Never re-enter: the called function may well run through <pc> itself. */
++    if (cdj_pcall_saved.active || cdj_pcall.applied >= cdj_pcall.max) {
++        return;
++    }
++    /* CDJ_PCALL_SKIP: let the anchor run <skip> times first, so a hot PC can be
++     * used to mean "at this point in the run" rather than "wherever this code
++     * happens to be entered". Announced, because a call that has not fired yet
++     * and a call that never fires read identically. */
++    if (cdj_pcall.seen++ < cdj_pcall.skip) {
++        if (cdj_pcall.seen == cdj_pcall.skip) {
++            fprintf(stderr, "PCALL armed after %u skipped visits to %08x\n",
++                    cdj_pcall.skip, pc);
++        }
++        return;
++    }
++    cdj_pcall.applied++;
++    for (i = 0; i < 16; i++) {
++        cdj_pcall_saved.gregs[i] = env->gregs[i];
++    }
++    cdj_pcall_saved.pr = env->pr;
++    cdj_pcall_saved.gbr = env->gbr;
++    cdj_pcall_saved.mach = env->mach;
++    cdj_pcall_saved.macl = env->macl;
++    cdj_pcall_saved.sr = env->sr;
++    cdj_pcall_saved.sr_m = env->sr_m;
++    cdj_pcall_saved.sr_q = env->sr_q;
++    cdj_pcall_saved.sr_t = env->sr_t;
++    cdj_pcall_saved.resume = pc;
++    cdj_pcall_saved.active = true;
++
++    env->gregs[4] = cdj_pcall.r4;
++    env->gregs[5] = cdj_pcall.r5;
++    env->gregs[6] = cdj_pcall.r6;
++    env->pr = cdj_pcall_ret;
++    env->pc = cdj_pcall.func;
++    fprintf(stderr, "PCALL enter 0x%08x(0x%x, 0x%x, 0x%x) from pc=%08x pr=%08x\n",
++            cdj_pcall.func, cdj_pcall.r4, cdj_pcall.r5, cdj_pcall.r6, pc,
++            (uint32_t)cdj_pcall_saved.pr);
++    cpu_loop_exit(env_cpu(env));
++}
++
++void helper_cdj_pcall_ret(CPUSH4State *env)
++{
++    unsigned i;
++
++    if (!cdj_pcall_saved.active) {
++        return;
++    }
++    fprintf(stderr, "PCALL return r0=%08x, resuming pc=%08x\n",
++            env->gregs[0], cdj_pcall_saved.resume);
++    for (i = 0; i < 16; i++) {
++        env->gregs[i] = cdj_pcall_saved.gregs[i];
++    }
++    env->pr = cdj_pcall_saved.pr;
++    env->gbr = cdj_pcall_saved.gbr;
++    env->mach = cdj_pcall_saved.mach;
++    env->macl = cdj_pcall_saved.macl;
++    env->sr = cdj_pcall_saved.sr;
++    env->sr_m = cdj_pcall_saved.sr_m;
++    env->sr_q = cdj_pcall_saved.sr_q;
++    env->sr_t = cdj_pcall_saved.sr_t;
++    env->pc = cdj_pcall_saved.resume;
++    cdj_pcall_saved.active = false;
++    cpu_loop_exit(env_cpu(env));
++}
++
++/*
++ * Store watch: CDJ_MWATCH=<addr>[,<addr>...] -- see the comment on
++ * cdj_mwatch_armed() in translate.c for why a watch rather than another scan.
++ *
++ * Sampled after every store instruction, so the first line for an address is
++ * its value at the first store the guest executes, not its value at reset.
++ */
++extern uint32_t cdj_mwatch_addr[];
++extern unsigned cdj_mwatch_n;
++
++void helper_cdj_mwatch(CPUSH4State *env, uint32_t pc)
++{
++    static uint32_t last[4];
++    static bool seen[4];
++    static unsigned printed;
++    unsigned i;
++
++    /* A word that genuinely oscillates would otherwise fill the disk and drown
++     * the run's real output; 4000 lines is far more than any writer census
++     * needs and the cap is announced so a truncated log is never read as a
++     * settled one. */
++    if (printed > 4000) {
++        return;
++    }
++
++    for (i = 0; i < cdj_mwatch_n; i++) {
++        uint32_t v;
++
++        if (!cdj_fwlog_addr_ok(cdj_mwatch_addr[i], 4)) {
++            continue;
++        }
++        v = cpu_ldl_data(env, cdj_mwatch_addr[i]);
++        if (seen[i] && v == last[i]) {
++            continue;
++        }
++        fprintf(stderr, "MWATCH %08x %08x -> %08x pc=%08x pr=%08x r0=%08x "
++                "r4=%08x r5=%08x\n", cdj_mwatch_addr[i],
++                seen[i] ? last[i] : 0, v, pc, (uint32_t)env->pr,
++                env->gregs[0], env->gregs[4], env->gregs[5]);
++        last[i] = v;
++        seen[i] = true;
++        if (++printed > 4000) {
++            fprintf(stderr, "MWATCH capped at 4000 lines -- log is TRUNCATED\n");
++        }
++    }
++}
++
++/*
++ * CDJ_RWATCH=<addr>[,<addr>...] -- the READ-side counterpart to CDJ_MWATCH.
++ *
++ * MWATCH polls: it samples the watched words after every store and reports a
++ * change, which is all a writer census needs. A reader changes nothing, so it
++ * leaves no trace that way, and a static scan cannot follow a register-held
++ * base. This one is exact rather than polled: the translator emits it before
++ * every load instruction (see cdj_is_load), and the helper recomputes that
++ * instruction's effective address from the live registers and compares.
++ *
++ * It does not cover PC-relative pool loads (mov.w/mov.l @(disp,PC)), which
++ * read the literal pool, never a RAM target; the SH-2A 32-bit load forms go
++ * through helper_cdj_rwatch_ea() below.
++ */
++#define CDJ_RWATCH_MAX 4
++extern uint32_t cdj_rwatch_addr[];
++extern uint32_t cdj_rwatch_len[];
++extern unsigned cdj_rwatch_n;
++
++/*
++ * The 4000-line budget is shared by BOTH read-watch entry points, so a log
++ * cannot be half-truncated with one of them still writing to it.
++ */
++static unsigned cdj_rwatch_printed;
++
++static void cdj_rwatch_report(CPUSH4State *env, uint32_t pc, uint32_t op,
++                              uint32_t ea)
++{
++    unsigned i;
++
++    for (i = 0; i < cdj_rwatch_n; i++) {
++        /* Any load that lands inside the watched span counts -- a byte or word
++         * read of one flag out of a status word is exactly the case this was
++         * built for. The span is 4 bytes unless the arm gave `addr+len`, which
++         * is how a whole buffer is asked about in one run. */
++        if (ea < cdj_rwatch_addr[i]
++            || ea > cdj_rwatch_addr[i] + cdj_rwatch_len[i] - 1) {
++            continue;
++        }
++        fprintf(stderr, "RWATCH %08x read ea=%08x op=%04x pc=%08x pr=%08x "
++                "r0=%08x r4=%08x r5=%08x\n", cdj_rwatch_addr[i], ea, op, pc,
++                (uint32_t)env->pr, env->gregs[0], env->gregs[4], env->gregs[5]);
++        if (++cdj_rwatch_printed > 4000) {
++            fprintf(stderr, "RWATCH capped at 4000 lines -- log is TRUNCATED\n");
++        }
++    }
++}
++
++/*
++ * CDJ_RWATCH for the SH-2A 32-bit loads.
++ *
++ * helper_cdj_rwatch() re-derives the effective address from a 16-bit opcode.
++ * That is impossible for the 0x3nm1 group, whose 12-bit displacement lives in a
++ * second instruction word the opcode cannot see, and those forms are how this
++ * firmware reaches a struct field past +0x3C (the reach of the 4-bit
++ * displacement in `mov.l @(disp,Rm),Rn`). Unlike a missed store, which still
++ * surfaces at the next sampled store, a missed read leaves no trace at all.
++ *
++ * The caller passes the address in, computed by the same TCG that performs the
++ * access.
++ */
++void helper_cdj_rwatch_ea(CPUSH4State *env, uint32_t pc, uint32_t ea)
++{
++    if (cdj_rwatch_printed > 4000 || !ea) {
++        return;
++    }
++    /* op is logged as 0x3001 so a reader can tell the SH-2A 32-bit group apart
++     * from the 16-bit forms without going back to the image. */
++    cdj_rwatch_report(env, pc, 0x3001, ea);
++}
++
++void helper_cdj_rwatch(CPUSH4State *env, uint32_t pc, uint32_t op)
++{
++    uint32_t ea = 0;
++    unsigned n = (op >> 8) & 0xF, m = (op >> 4) & 0xF, d = op & 0xF;
++
++    if (cdj_rwatch_printed > 4000) {
++        return;
++    }
++    switch (op >> 12) {
++    case 0x0:                       /* mov.X @(R0,Rm),Rn */
++        if (d == 0xC || d == 0xD || d == 0xE) {
++            ea = env->gregs[0] + env->gregs[m];
++        }
++        break;
++    case 0x4:                       /* lds.l/ldc.l @Rm+ */
++        if (d == 6 || d == 7) {
++            ea = env->gregs[n];
++        }
++        break;
++    case 0x5:                       /* mov.l @(disp,Rm),Rn */
++        ea = env->gregs[m] + d * 4;
++        break;
++    case 0x6:                       /* mov.X @Rm,Rn and @Rm+ */
++        if (d <= 2 || (d >= 4 && d <= 6)) {
++            ea = env->gregs[m];
++        }
++        break;
++    case 0x8:                       /* mov.b/mov.w @(disp,Rm),R0 */
++        if (n == 4) {
++            ea = env->gregs[m] + d;
++        } else if (n == 5) {
++            ea = env->gregs[m] + d * 2;
++        }
++        break;
++    case 0xC:                       /* mov.X @(disp,GBR),R0 */
++        if (n == 4) {
++            ea = env->gbr + (op & 0xFF);
++        } else if (n == 5) {
++            ea = env->gbr + (op & 0xFF) * 2;
++        } else if (n == 6) {
++            ea = env->gbr + (op & 0xFF) * 4;
++        }
++        break;
++    default:
++        break;
++    }
++    if (!ea) {
++        return;
++    }
++    cdj_rwatch_report(env, pc, op, ea);
++}
++
++/*
++ * CDJ_RPOKE=<pc>:<reg>:<value>[,...] -- set a REGISTER before the instruction at
++ * <pc>, rather than a memory word.
++ *
++ * Poking a shared memory word changes what every reader of it sees. Anchored
++ * one instruction after a load, a register poke changes the value for that one
++ * consumer only; memory, and every other reader of it, is untouched.
++ */
++#define CDJ_RPOKE_MAX 4
++extern uint32_t cdj_rpoke_pc[], cdj_rpoke_reg[], cdj_rpoke_val[];
++extern unsigned cdj_rpoke_n;
++
++extern uint32_t cdj_rpoke_step[], cdj_rpoke_max[];
++
++void helper_cdj_rpoke(CPUSH4State *env, uint32_t slot)
++{
++    static unsigned printed[CDJ_RPOKE_MAX];
++    static uint32_t cur[CDJ_RPOKE_MAX];
++    static bool started[CDJ_RPOKE_MAX];
++    uint32_t v;
++
++    if (slot >= cdj_rpoke_n || cdj_rpoke_reg[slot] > 15) {
++        return;
++    }
++    if (!started[slot]) {
++        started[slot] = true;
++        cur[slot] = cdj_rpoke_val[slot];
++    }
++    v = cur[slot];
++    if (printed[slot] < 4) {
++        printed[slot]++;
++        fprintf(stderr, "RPOKE[%u] pc=%08x r%u %08x -> %08x (step %d)\n",
++                slot, cdj_rpoke_pc[slot], cdj_rpoke_reg[slot],
++                env->gregs[cdj_rpoke_reg[slot]], v, (int)cdj_rpoke_step[slot]);
++    }
++    env->gregs[cdj_rpoke_reg[slot]] = v;
++    /* A ramp, when step is non-zero: each application advances the value and
++     * wraps at max, so a value can be made to move rather than just parked. */
++    if (cdj_rpoke_step[slot]) {
++        cur[slot] += cdj_rpoke_step[slot];
++        if (cdj_rpoke_max[slot] && cur[slot] >= cdj_rpoke_max[slot]) {
++            cur[slot] = cdj_rpoke_val[slot];
++        }
++    }
++}
++
++/* CDJ_PCALL2: second injected call */
++extern CdjPcall cdj_pcall2;
++
++static struct {
++    uint32_t gregs[16], pr, gbr, mach, macl, sr, sr_m, sr_q, sr_t, resume;
++    bool active;
++} cdj_pcall2_saved;
++
++void helper_cdj_pcall2(CPUSH4State *env, uint32_t pc)
++{
++    unsigned i;
++    if (cdj_pcall2_saved.active || cdj_pcall2.applied >= cdj_pcall2.max) {
++        return;
++    }
++    cdj_pcall2.applied++;
++    cdj_pcall2_saved.active = 1;
++    fprintf(stderr, "[CDJ] PCALL2 #%d: 0x%08x(0x%x,0x%x,0x%x)\n",
++            cdj_pcall2.applied, cdj_pcall2.func, cdj_pcall2.r4, cdj_pcall2.r5, cdj_pcall2.r6);
++    for (i = 0; i < 16; i++) {
++        cdj_pcall2_saved.gregs[i] = env->gregs[i];
++    }
++    cdj_pcall2_saved.pr = env->pr;
++    cdj_pcall2_saved.gbr = env->gbr;
++    cdj_pcall2_saved.mach = env->mach;
++    cdj_pcall2_saved.macl = env->macl;
++    cdj_pcall2_saved.sr = env->sr;
++    cdj_pcall2_saved.sr_m = env->sr_m;
++    cdj_pcall2_saved.sr_q = env->sr_q;
++    cdj_pcall2_saved.sr_t = env->sr_t;
++    /* Assigning env->pc alone does not redirect execution: the translation
++     * block carries on with the code it already generated. Hence the
++     * cpu_loop_exit() below, as in helper_cdj_pcall(). Resume at pc itself so
++     * the anchor instruction still runs; the whole register file is restored
++     * at the landing pad. */
++    cdj_pcall2_saved.resume = pc;
++    env->gregs[4] = cdj_pcall2.r4;
++    env->gregs[5] = cdj_pcall2.r5;
++    env->gregs[6] = cdj_pcall2.r6;
++    env->pr = cdj_pcall_ret;
++    env->pc = cdj_pcall2.func;
++    cpu_loop_exit(env_cpu(env));
++}
++
++/* The landing pad is shared with PCALL. Both helpers are emitted there and each
++ * returns immediately unless it is the one in flight, so the two calls never
++ * need separate unused addresses. */
++void helper_cdj_pcall2_ret(CPUSH4State *env)
++{
++    unsigned i;
++
++    if (!cdj_pcall2_saved.active) {
++        return;
++    }
++    fprintf(stderr, "[CDJ] PCALL2 return r0=%08x, resuming pc=%08x\n",
++            env->gregs[0], cdj_pcall2_saved.resume);
++    for (i = 0; i < 16; i++) {
++        env->gregs[i] = cdj_pcall2_saved.gregs[i];
++    }
++    env->pr = cdj_pcall2_saved.pr;
++    env->gbr = cdj_pcall2_saved.gbr;
++    env->mach = cdj_pcall2_saved.mach;
++    env->macl = cdj_pcall2_saved.macl;
++    env->sr = cdj_pcall2_saved.sr;
++    env->sr_m = cdj_pcall2_saved.sr_m;
++    env->sr_q = cdj_pcall2_saved.sr_q;
++    env->sr_t = cdj_pcall2_saved.sr_t;
++    env->pc = cdj_pcall2_saved.resume;
++    cdj_pcall2_saved.active = 0;
++    cpu_loop_exit(env_cpu(env));
++}
++
++/*
++ * CDJ_NATIVE_LIBC=1 -- the MAIN firmware's memcmp (0x085336B0) and strlen
++ * (0x085341C0) run as host code. In steady playback a large share of MAIN's
++ * vCPU thread sits in their byte-at-a-time loops, each byte a chained TB with
++ * two softmmu loads. The translator replaces the entry
++ * instruction with one of these helpers and an immediate return through PR;
++ * only r0 is written, which the callers' ABI already treats as the result and
++ * the other registers the loops clobber as scratch.
++ *
++ * Both walk memory a guest page at a time through the host pointer, and fall
++ * back to cpu_ldub_data_ra() where there is none (MMIO), so a fault is raised
++ * from the entry instruction exactly as the guest loop would have raised it.
++ *
++ * Under icount the skipped instructions are charged back (cdj_icount_charge):
++ * virtual time is the instruction count there, so an uncharged hook makes the
++ * firmware's clock run slow and the machine as a whole slower than real time.
++ */
++static void cdj_icount_charge(CPUSH4State *env, uint64_t insns)
++{
++    CPUState *cs = env_cpu(env);
++    uint64_t left;
++
++    if (!icount_enabled()) {
++        return;
++    }
++    left = cs->neg.icount_decr.u16.low + cs->icount_extra;
++    left -= MIN(insns, left);
++    cs->neg.icount_decr.u16.low = MIN(left, 0xffff);
++    cs->icount_extra = left - cs->neg.icount_decr.u16.low;
++}
++
++static const uint8_t *cdj_host_page(CPUSH4State *env, uint32_t addr,
++                                    uint32_t *avail, uintptr_t ra)
++{
++    *avail = TARGET_PAGE_SIZE - (addr & ~TARGET_PAGE_MASK);
++    return probe_access(env, addr, 1, MMU_DATA_LOAD,
++                        cpu_mmu_index(env_cpu(env), false), ra);
++}
++
++enum { CDJ_NC_MEMCMP, CDJ_NC_STRLEN, CDJ_NC_MEMCPY, CDJ_NC_MEMSET,
++       CDJ_NC_MOVMEM, CDJ_NC_N };
++
++static struct {
++    uint64_t calls, bytes, slow, insns;
++} cdj_nc_stat[CDJ_NC_N];
++static bool cdj_nc_report_on;
++
++/* Every ~10 host seconds while CDJ_NATIVE_COPY is on, one line of running
++ * totals per routine -- calls, bytes, instructions charged, fallbacks -- and,
++ * under icount, all the instructions MAIN has executed, so each routine's share
++ * of the guest's work can be read off one run. */
++static void cdj_nc_count(int which, uint32_t bytes, uint64_t insns)
++{
++    static const char *const name[CDJ_NC_N] = {
++        "memcmp", "strlen", "memcpy", "memset", "movmem"
++    };
++    static int64_t next_ms;
++    int64_t now;
++    int i;
++
++    cdj_nc_stat[which].calls++;
++    cdj_nc_stat[which].bytes += bytes;
++    cdj_nc_stat[which].insns += insns;
++    if (!cdj_nc_report_on || (cdj_nc_stat[which].calls & 1023)) {
++        return;
++    }
++    now = g_get_monotonic_time() / 1000;
++    if (now < next_ms) {
++        return;
++    }
++    if (next_ms) {
++        GString *s = g_string_new("native copy:");
++
++        for (i = 0; i < CDJ_NC_N; i++) {
++            g_string_append_printf(s, " %s %" PRIu64 "/%" PRIu64 "B/%" PRIu64
++                                   "i/%" PRIu64 "slow", name[i],
++                                   cdj_nc_stat[i].calls, cdj_nc_stat[i].bytes,
++                                   cdj_nc_stat[i].insns, cdj_nc_stat[i].slow);
++        }
++        if (icount_enabled()) {
++            g_string_append_printf(s, " of %" PRId64 "i", icount_get_raw());
++        }
++        fprintf(stderr, "[CDJ] %s\n", s->str);
++        g_string_free(s, true);
++    }
++    next_ms = now + 10000;
++}
++
++/* Charge the skipped instructions and count the call. */
++static void cdj_nc_charge(CPUSH4State *env, int which, uint32_t bytes,
++                          uint64_t insns)
++{
++    cdj_icount_charge(env, insns);
++    cdj_nc_count(which, bytes, insns);
++}
++
++uint32_t helper_cdj_memcmp(CPUSH4State *env, uint32_t a, uint32_t b,
++                           uint32_t len)
++{
++    uintptr_t ra = GETPC();
++    uint32_t done = 0;
++
++    while (len) {
++        uint32_t na, nb, n, i;
++        const uint8_t *ha = cdj_host_page(env, a, &na, ra);
++        const uint8_t *hb = cdj_host_page(env, b, &nb, ra);
++
++        n = MIN(len, MIN(na, nb));
++        for (i = 0; i < n; i++) {
++            uint8_t ca = ha ? ha[i] : cpu_ldub_data_ra(env, a + i, ra);
++            uint8_t cb = hb ? hb[i] : cpu_ldub_data_ra(env, b + i, ra);
++
++            if (ca != cb) {
++                cdj_nc_charge(env, CDJ_NC_MEMCMP, done + i,
++                              12 + 7 * (uint64_t)(done + i));
++                return (uint32_t)ca - cb;
++            }
++        }
++        a += n;
++        b += n;
++        len -= n;
++        done += n;
++    }
++    cdj_nc_charge(env, CDJ_NC_MEMCMP, done, 12 + 7 * (uint64_t)done);
++    return 0;
++}
++
++uint32_t helper_cdj_strlen(CPUSH4State *env, uint32_t s)
++{
++    uintptr_t ra = GETPC();
++    uint32_t len = 0;
++
++    for (;;) {
++        uint32_t n, i;
++        const uint8_t *h = cdj_host_page(env, s, &n, ra);
++
++        for (i = 0; i < n; i++) {
++            if (!(h ? h[i] : cpu_ldub_data_ra(env, s + i, ra))) {
++                cdj_nc_charge(env, CDJ_NC_STRLEN, len + i,
++                              4 + 6 * (uint64_t)(len + i));
++                return len + i;
++            }
++        }
++        s += n;
++        len += n;
++    }
++}
++
++/*
++ * CDJ_NATIVE_COPY=1 (default off), the tier after CDJ_NATIVE_LIBC: MAIN's
++ * memcpy (0x085336DC), memset (0x08533D50) and the compiler's block-copy
++ * helper (0x08531F88, a non-standard ABI: r0 = length, r1 = dst, r2 = src,
++ * returning r0 and r1) run as host code.
++ *
++ * Unlike memcmp/strlen these WRITE guest memory, so the helper first decides
++ * whether it can reproduce the guest routine exactly, and touches nothing if it
++ * cannot: every page of both ranges must be plain RAM reachable without a fault
++ * (probe_access_flags, non-faulting -- which also marks the written pages dirty
++ * and invalidates code translated from them), neither range may exceed 64 KiB,
++ * and where the guest routine is not memmove-safe (memcpy with n >= 24, the
++ * block-copy helper) the ranges must not overlap. Otherwise it returns 0 and the
++ * guest routine runs from its first instruction, so every fault, MMIO access and
++ * overlap artefact stays the guest's own.
++ *
++ * The charges are each routine's exact instruction count minus the entry
++ * instruction the translator already counted. They were derived from the
++ * control flow and checked against an instruction-level run of the firmware's
++ * own code over every alignment.
++ *
++ * Stores made here are invisible to CDJ_MWATCH/CDJ_RWATCH, whose taps sit on
++ * guest store/load instructions: leave this off for watch experiments.
++ */
++#define CDJ_NC_MAX   0x10000u
++#define CDJ_NC_PAGES (CDJ_NC_MAX / TARGET_PAGE_SIZE + 2)
++
++typedef struct {
++    uint8_t *host[CDJ_NC_PAGES];
++    uint32_t addr;
++    int n;
++} CdjSpan;
++
++static bool cdj_span(CPUSH4State *env, CdjSpan *s, uint32_t addr,
++                     uint32_t len, MMUAccessType type, uintptr_t ra)
++{
++    int mmu_idx = cpu_mmu_index(env_cpu(env), false);
++
++    s->addr = addr;
++    s->n = 0;
++    while (len) {
++        uint32_t chunk = MIN(len, TARGET_PAGE_SIZE
++                                  - (addr & ~TARGET_PAGE_MASK));
++        void *host;
++
++        if (probe_access_flags(env, addr, chunk, type, mmu_idx, true,
++                               &host, ra) || !host) {
++            return false;
++        }
++        s->host[s->n++] = host;
++        addr += chunk;
++        len -= chunk;
++    }
++    return true;
++}
++
++/* Host address of byte `off` of the span, and how many follow it in its page. */
++static uint8_t *cdj_span_at(const CdjSpan *s, uint32_t off, uint32_t *avail)
++{
++    uint32_t first = TARGET_PAGE_SIZE - (s->addr & ~TARGET_PAGE_MASK);
++
++    if (off < first) {
++        *avail = first - off;
++        return s->host[0] + off;
++    }
++    off -= first;
++    *avail = TARGET_PAGE_SIZE - off % TARGET_PAGE_SIZE;
++    return s->host[1 + off / TARGET_PAGE_SIZE] + off % TARGET_PAGE_SIZE;
++}
++
++/* Compared as host addresses, so P1/P2 aliases of one buffer are caught too. */
++static bool cdj_span_overlap(const CdjSpan *a, const CdjSpan *b, uint32_t n)
++{
++    uint32_t i, j, na, nb;
++
++    for (i = 0; i < n; i += na) {
++        const uint8_t *pa = cdj_span_at(a, i, &na);
++
++        na = MIN(na, n - i);
++        for (j = 0; j < n; j += nb) {
++            const uint8_t *pb = cdj_span_at(b, j, &nb);
++
++            nb = MIN(nb, n - j);
++            if (pa < pb + nb && pb < pa + na) {
++                return true;
++            }
++        }
++    }
++    return false;
++}
++
++static void cdj_span_copy(const CdjSpan *d, const CdjSpan *s, uint32_t n)
++{
++    uint32_t off = 0, nd, ns, k;
++
++    while (off < n) {
++        uint8_t *pd = cdj_span_at(d, off, &nd);
++        const uint8_t *ps = cdj_span_at(s, off, &ns);
++
++        k = MIN(n - off, MIN(nd, ns));
++        memmove(pd, ps, k);
++        off += k;
++    }
++}
++
++/* Exact guest instruction counts, entry to the return's delay slot. */
++static uint64_t cdj_memcpy_insns(uint32_t dst, uint32_t src, uint32_t n)
++{
++    uint64_t c = 4;
++    uint32_t k, d, m, b8;
++
++    if (n < 24) {                       /* memmove-safe byte/half/word loops */
++        bool back = dst >= src;
++
++        c += 5;
++        if (dst == src) {
++            return c + 3;
++        }
++        c += 2;
++        if (n == 0) {
++            return c + 3;
++        }
++        c += 8 + (back ? 6 : 3);
++        if ((dst | src | n) & 1) {
++            c += 5 * n + (back ? 0 : 2);
++        } else {
++            c += 4 + 5 * (n / (((dst | src | n) & 3) ? 2 : 4)) + 2;
++        }
++        return c + 3;
++    }
++    k = -src & 3;                       /* align the source byte-wise */
++    c += 2 + 7 * k + 3 + 5;
++    d = (dst + k) & 3;
++    m = n - k;
++    if (d == 0) {                       /* 8- then 32-byte blocks */
++        c += 4;
++        if (m & 4) {
++            c += 4;
++            m -= 4;
++        }
++        b8 = (m >> 3) & 3;
++        c += 10 * b8 + 3 + 4;
++        m -= 8 * b8;
++        if (m >= 4) {
++            return c + 2 + 11 + 20 * (m / 32) + 3 + 6 * (m % 32) + 2 + 8;
++        }
++        return c + 2 + 6 * m + 4;
++    }
++    c += 26;                            /* 16-byte shift-merge by dst & 3 */
++    if (d == 1) {
++        m -= 3;
++        c += 16 + 33 * (m / 16) + 10;
++    } else if (d == 2) {
++        m -= 2;
++        c += 2 + 16 + 29 * (m / 16) + 7;
++    } else {
++        m -= 1;
++        c += 6 + 17 + 34 * (m / 16) + 6;
++    }
++    m %= 16;
++    return c + 5 + 14 * (m / 4) + 13 + 6 * (m % 4) + 4;
++}
++
++static uint64_t cdj_memset_insns(uint32_t dst, uint32_t n)
++{
++    uint32_t e;
++
++    if (n < 31) {
++        return 13 + 5 * (uint64_t)n;
++    }
++    e = (dst + n) & 15;                 /* it fills from the end backwards */
++    return 37 + 4 * e + 7 * (uint64_t)((n - e) / 16) + 5 * ((n - e) % 16);
++}
++
++static uint64_t cdj_movmem_insns(uint32_t n)
++{
++    uint64_t w = n / 4;
++
++    if (n <= 64) {
++        return 10 + 2 * w;
++    }
++    return 13 + 3 * w + (w + 1) / 2 + 3 * (w / 2);
++}
++
++/* Returns 1 with the routine's effect and result registers in place, or 0 to
++ * run the guest routine instead (nothing has been written). */
++uint32_t helper_cdj_native_copy(CPUSH4State *env, uint32_t pc)
++{
++    uintptr_t ra = GETPC();
++    uint32_t *r = env->gregs;
++    int b = ((env->sr >> SR_MD) & 1) && ((env->sr >> SR_RB) & 1) ? 0x10 : 0;
++    CdjSpan d, s;
++    uint32_t dst, src, n, off, k;
++    uint64_t insns;
++    int which;
++
++    cdj_nc_report_on = true;
++    switch (pc) {
++    case 0x085336DCu:                               /* memcpy(r4, r5, r6) */
++        which = CDJ_NC_MEMCPY;
++        dst = r[4 ^ b];
++        src = r[5 ^ b];
++        n = r[6 ^ b];
++        /* n >= 24 reads whole source words: probe to the word's end */
++        if (n > CDJ_NC_MAX
++            || !cdj_span(env, &s, src, n < 24 ? n : ((src + n + 3) & ~3u) - src,
++                         MMU_DATA_LOAD, ra)
++            || !cdj_span(env, &d, dst, n, MMU_DATA_STORE, ra)
++            || (n >= 24 && cdj_span_overlap(&d, &s, n))) {
++            goto slow;
++        }
++        if (n < 24) {                   /* the guest is memmove-safe here */
++            uint8_t tmp[24];
++            CdjSpan t = { .host = { tmp }, .addr = 0, .n = 1 };
++
++            cdj_span_copy(&t, &s, n);
++            cdj_span_copy(&d, &t, n);
++        } else {
++            cdj_span_copy(&d, &s, n);
++        }
++        r[0 ^ b] = dst;
++        insns = cdj_memcpy_insns(dst, src, n);
++        break;
++    case 0x08533D50u:                               /* memset(r4, r5, r6) */
++        which = CDJ_NC_MEMSET;
++        dst = r[4 ^ b];
++        n = r[6 ^ b];
++        if (n > CDJ_NC_MAX || !cdj_span(env, &d, dst, n, MMU_DATA_STORE, ra)) {
++            goto slow;
++        }
++        for (off = 0; off < n; off += k) {
++            uint8_t *p = cdj_span_at(&d, off, &k);
++
++            k = MIN(k, n - off);
++            memset(p, r[5 ^ b] & 0xff, k);
++        }
++        r[0 ^ b] = dst;
++        insns = cdj_memset_insns(dst, n);
++        break;
++    case 0x08531F88u:                   /* block copy: r0 = n, r1 = dst, r2 = src */
++        which = CDJ_NC_MOVMEM;
++        n = r[0 ^ b];
++        dst = r[1 ^ b];
++        src = r[2 ^ b];
++        /* past 64 bytes its loop reads one word BEYOND the end, into r0 */
++        if (((n | dst | src) & 3) || n > CDJ_NC_MAX
++            || !cdj_span(env, &s, src, n <= 64 ? n : n + 4, MMU_DATA_LOAD, ra)
++            || !cdj_span(env, &d, dst, n, MMU_DATA_STORE, ra)
++            || cdj_span_overlap(&d, &s, n)) {
++            goto slow;
++        }
++        cdj_span_copy(&d, &s, n);
++        if (n <= 64) {
++            r[0 ^ b] = n ? (uint32_t)ldl_le_p(cdj_span_at(&s, 0, &k)) : 0;
++        } else {
++            r[0 ^ b] = (uint32_t)ldl_le_p(cdj_span_at(&s, n, &k));
++            r[1 ^ b] = dst + 8 * (n / 8);
++        }
++        insns = cdj_movmem_insns(n);
++        break;
++    default:
++        return 0;
++    }
++    cdj_nc_charge(env, which, n, insns - 1);
++    return 1;
++
++slow:
++    cdj_nc_stat[which].slow++;
++    return 0;
++}

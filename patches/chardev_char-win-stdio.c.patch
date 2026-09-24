@@ -1,0 +1,20 @@
+diff --git a/chardev/char-win-stdio.c b/chardev/char-win-stdio.c
+index 13325ca..015fe3a 100644
+--- a/chardev/char-win-stdio.c
++++ b/chardev/char-win-stdio.c
+@@ -93,8 +93,14 @@ static DWORD WINAPI win_stdio_thread(LPVOID param)
+         if (!ret) {
+             break;
+         }
++        /*
++         * A successful zero-byte read on a pipe, a file or NUL is end of file,
++         * and it stays that way; `continue` turned this thread into a busy
++         * loop for the life of the process. A QEMU started in the background
++         * has NUL as stdin and burned a whole host core here.
++         */
+         if (!dwSize) {
+-            continue;
++            break;
+         }
+ 
+         /* Some terminal emulator returns \r\n for Enter, just pass \n */

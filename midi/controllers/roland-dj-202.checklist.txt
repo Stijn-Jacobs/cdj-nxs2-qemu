@@ -1,0 +1,98 @@
+# The DJ-202's controls, as a checklist for learn.py.
+#
+# These are NAMES ONLY -- no MIDI numbers appear anywhere in this file, and
+# none should be added by hand. The numbers come from the device itself, via
+# `learn.py learn`, which walks this list and records what each control
+# actually sends. That is the whole point: nothing in this project trusts a
+# published chart over a measurement.
+#
+# The list is best-effort from the front panel layout. It does not have to be
+# right. Learn mode lets you skip anything that is not there (ENTER), and its
+# free mode captures controls this file never mentions, so a wrong or missing
+# line costs nothing.
+#
+# Format: one control per line, `group/name`. Lines starting with # are
+# comments. Anything after `--` on a line is a hint printed during learn.
+
+# --- Deck 1 -----------------------------------------------------------------
+deck1/play          -- PLAY/PAUSE
+deck1/cue           -- CUE
+deck1/sync          -- SYNC
+deck1/shift         -- SHIFT (hold it, then release)
+deck1/load          -- LOAD for this deck
+deck1/jog_top       -- touch the jog platter top, do not turn
+deck1/jog_turn      -- turn the jog forward about a quarter turn
+deck1/jog_edge      -- nudge the jog by the outer edge only
+deck1/tempo         -- sweep the TEMPO slider end to end
+deck1/pad_mode_1    -- first pad mode button (HOT CUE)
+deck1/pad_mode_2    -- second pad mode button (ROLL)
+deck1/pad_mode_3    -- third pad mode button (SAMPLER / TR)
+deck1/pad_mode_4    -- fourth pad mode button, if present
+deck1/pad_1         -- performance pad 1, in the mode selected now
+deck1/pad_2
+deck1/pad_3
+deck1/pad_4
+deck1/pad_5
+deck1/pad_6
+deck1/pad_7
+deck1/pad_8
+
+# --- Deck 2 -----------------------------------------------------------------
+deck2/play
+deck2/cue
+deck2/sync
+deck2/shift
+deck2/load
+deck2/jog_top
+deck2/jog_turn
+deck2/jog_edge
+deck2/tempo
+deck2/pad_mode_1
+deck2/pad_mode_2
+deck2/pad_mode_3
+deck2/pad_mode_4
+deck2/pad_1
+deck2/pad_2
+deck2/pad_3
+deck2/pad_4
+deck2/pad_5
+deck2/pad_6
+deck2/pad_7
+deck2/pad_8
+
+# --- Mixer ------------------------------------------------------------------
+mixer/ch1_fader     -- channel 1 volume fader, full travel
+mixer/ch1_eq_hi
+mixer/ch1_eq_mid
+mixer/ch1_eq_low
+mixer/ch1_filter    -- FILTER knob, full travel both ways
+mixer/ch1_gain      -- TRIM/GAIN, if it is a MIDI control
+mixer/ch1_cue       -- headphone CUE button
+mixer/ch2_fader
+mixer/ch2_eq_hi
+mixer/ch2_eq_mid
+mixer/ch2_eq_low
+mixer/ch2_filter
+mixer/ch2_gain
+mixer/ch2_cue
+mixer/crossfader    -- full travel
+mixer/master_level  -- may be analogue only; skip if nothing arrives
+mixer/booth_level   -- may be analogue only; skip if nothing arrives
+mixer/phones_level  -- may be analogue only; skip if nothing arrives
+mixer/phones_mix
+
+# --- Browse -----------------------------------------------------------------
+browse/encoder      -- turn the browse knob one way, several detents
+browse/encoder_push -- push the browse knob
+browse/back         -- BACK / VIEW
+
+# --- FX ---------------------------------------------------------------------
+fx/fx1
+fx/fx2
+fx/fx3
+fx/fx_knob
+
+# --- TR / sequencer section, if this unit has one ---------------------------
+tr/start_stop
+tr/pattern
+tr/level

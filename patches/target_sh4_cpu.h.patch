@@ -1,0 +1,146 @@
+diff --git a/target/sh4/cpu.h b/target/sh4/cpu.h
+index d928bcf..1e46b75 100644
+--- a/target/sh4/cpu.h
++++ b/target/sh4/cpu.h
+@@ -130,6 +130,13 @@ typedef struct tlb_t {
+ enum sh_features {
+     SH_FEATURE_SH4A = 1,
+     SH_FEATURE_BCR3_AND_BCR4 = 2,
++    /*
++     * SH-2A (SH7269) has no MD bit: the core is always privileged. Its SR is
++     * only T/S/Q/M and the interrupt mask, so firmware LDC ...,SR writes leave
++     * bit 30 clear -- which this SH-4 core would otherwise read as user mode,
++     * and then refuse every access to the on-chip region above 0xE0000000.
++     */
++    SH_FEATURE_SH2A = 4,
+ };
+ 
+ typedef struct memory_content {
+@@ -201,12 +208,62 @@ typedef struct CPUArchState {
+     /* The features that we should emulate. See sh_features above.  */
+     uint32_t features;
+ 
++    /*
++     * SH-2A vectors interrupts through VBR + n*4 rather than SH-4's single
++     * VBR+0x600 entry, so delivery needs a vector *number*, not an INTEVT
++     * code. A device raises an interrupt by storing its number here before
++     * asserting the line. Preserved over reset, like features.
++     */
++    uint32_t sh2a_irq_vector;
++    uint32_t sh2a_irq_level;   /* priority; delivered only when > SR.IMASK */
++
++    /*
++     * SH-2A fast-interrupt register banks. LDBANK/STBANK address one as
++     * [BN][EN] taken from the operand register: EN in bits 6:2, BN above.
++     * Entry order is R0-R14, MACH, interrupt-vector-offset, PR, GBR, MACL --
++     * pinned by the firmware doing LDBANK with EN=18 and then `ldc r0,gbr`.
++     */
++#define SH2A_BANKS      16
++#define SH2A_BANK_ENTS  20
++    uint32_t sh2a_bank[SH2A_BANKS][SH2A_BANK_ENTS];
++
+     void *intc_handle;
+     int in_sleep;               /* SR_BL ignored during sleep */
+     memory_content *movcal_backup;
+     memory_content **movcal_backup_tail;
++
++    /*
++     * CDJ_JCPROF: why the last TB left without chaining.
++     * Stored by translated code (only when the probe is armed at translation
++     * time) just before lookup_and_goto_ptr / exit_tb, read and cleared by
++     * tb_lookup(). See CDJ_EXIT_* below. The two FPSCR counters are bumped by
++     * helper_ld_fpscr() unconditionally: two increments on a helper that
++     * already rewrites the softfloat status.
++     */
++    uint32_t cdj_exit_kind;
++    uint64_t cdj_fpscr_lds;          /* LDS Rm,FPSCR / LDS.L executed */
++    uint64_t cdj_fpscr_lds_flagchg;  /* ... that changed PR, SZ or FR */
+ } CPUSH4State;
+ 
++/* Values of CPUSH4State.cdj_exit_kind. */
++enum {
++    CDJ_EXIT_UNKNOWN = 0,   /* delay slot split across TBs, irq, icount, ... */
++    CDJ_EXIT_RTS,           /* rts (return through PR) */
++    CDJ_EXIT_CALL,          /* jsr @Rn, bsrf Rn */
++    CDJ_EXIT_JMP,           /* jmp @Rn, braf Rn */
++    CDJ_EXIT_XPAGE,         /* direct branch / fall-through to another page */
++    CDJ_EXIT_NOW,           /* no-delay-slot jump: native libc, SH-2A rts/n */
++    CDJ_EXIT_FPSCR,         /* LDS FPSCR changed the TB flags */
++    CDJ_EXIT_STOP,          /* DISAS_STOP: exit_tb to the cpu loop */
++    CDJ_EXIT_CALLPRED_MISS, /* predicted jsr target was wrong */
++    CDJ_EXIT_NKINDS
++};
++
++/*
++ * CDJ_IOPROF / CDJ_IOSPLIT: note one cpu_io_recompile() at env->pc. Called from the io_recompile_replay_branch hook; see translate.c.
++ */
++void cdj_io_recompiled(CPUSH4State *env);
++
+ /**
+  * SuperHCPU:
+  * @env: #CPUSH4State
+@@ -372,12 +429,19 @@ static inline target_ulong cpu_read_sr(CPUSH4State *env)
+                      (env->sr_t << SR_T);
+ }
+ 
++void helper_sh2a_bank_save(CPUSH4State *env, unsigned bn);
++
+ static inline void cpu_write_sr(CPUSH4State *env, target_ulong sr)
+ {
+     env->sr_m = (sr >> SR_M) & 1;
+     env->sr_q = (sr >> SR_Q) & 1;
+     env->sr_t = (sr >> SR_T) & 1;
+     env->sr = sr & ~((1u << SR_M) | (1u << SR_Q) | (1u << SR_T));
++
++    /* SH-2A is always privileged -- see SH_FEATURE_SH2A. */
++    if (env->features & SH_FEATURE_SH2A) {
++        env->sr |= (1u << SR_MD);
++    }
+ }
+ 
+ static inline void cpu_get_tb_cpu_state(CPUSH4State *env, vaddr *pc,
+@@ -395,4 +459,44 @@ static inline void cpu_get_tb_cpu_state(CPUSH4State *env, vaddr *pc,
+ #endif
+ }
+ 
++/*
++ * One CDJ_PPOKE spec: *addr = (*addr & and) | or, applied just before <pc>
++ * runs, at most <max> times (0 = unlimited). Declared here rather than in
++ * translate.c because op_helper.c applies what translate.c parses; see
++ * cdj_ppoke_hit() for the syntax and for why there is more than one slot.
++ */
++typedef struct CdjPpoke {
++    uint32_t pc, addr, or, and;
++    unsigned max, applied, printed;
++    /* CDJ_PPOKE's sixth field: hold this slot inert until CDJ_PPOKE_ARM's pc
++     * has run. Per-slot and not global, because the load poke in slot 0 has to
++     * fire BEFORE the event every other slot is waiting for. */
++    unsigned wait_arm;
++} CdjPpoke;
++
++/*
++ * One CDJ_PSTORE spec: at <pc>, store the current value of R<reg> into the guest
++ * word at <addr>. Same split as CdjPpoke. CDJ_PPOKE can only assert a
++ * constant, which cannot install a pointer the firmware allocates afresh on
++ * every run.
++ */
++typedef struct CdjPstore {
++    uint32_t pc, reg, addr;
++    unsigned max, applied, printed;
++} CdjPstore;
++
++/*
++ * One CDJ_PCALL spec: at <pc>, call <func>(r4, r5, r6) in whatever task context
++ * is running, then resume the guest exactly where it was. Same split as
++ * CdjPpoke -- translate.c parses and hooks, op_helper.c performs.
++ */
++typedef struct CdjPcall {
++    uint32_t pc, func, r4, r5, r6;
++    unsigned max, applied;
++    /* CDJ_PCALL_SKIP: ignore the first <skip> visits to <pc>, so the call can
++     * be anchored on a hot PC (a message router, say) at the Nth visit rather
++     * than only somewhere that runs exactly once. */
++    unsigned skip, seen;
++} CdjPcall;
++
+ #endif /* SH4_CPU_H */

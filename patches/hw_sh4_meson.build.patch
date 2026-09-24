@@ -1,0 +1,9 @@
+diff --git a/hw/sh4/meson.build b/hw/sh4/meson.build
+index 70e814c..c7b9654 100644
+--- a/hw/sh4/meson.build
++++ b/hw/sh4/meson.build
+@@ -7,3 +7,4 @@ sh4_ss.add(when: 'CONFIG_R2D', if_true: files('r2d.c'))
+ sh4_ss.add(when: 'CONFIG_SHIX', if_true: files('shix.c'))
+ 
+ hw_arch += {'sh4': sh4_ss}
++subdir('cdj')

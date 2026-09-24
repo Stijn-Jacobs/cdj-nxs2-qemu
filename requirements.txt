@@ -1,0 +1,39 @@
+# Python packages for running the emulated deck. ./setup.sh checks for them and
+# offers to install them; by hand:
+#
+#   python -m pip install -r requirements.txt
+#
+# The rig's own scripts (scripts/run/ and scripts/net/) and the firmware
+# preparation (scripts/firmware/) use only the standard library. Tested on
+# Python 3.11 (Windows) and 3.14 (MSYS2 mingw64).
+#
+# --- MSYS2 mingw64 Python (the one `python3` resolves to in a MINGW64 shell) ---
+# It is marked EXTERNALLY-MANAGED, so pip refuses to install into it. Use
+# pacman where a package exists:
+#     pacman -S --needed mingw-w64-x86_64-python-pillow
+# pyfatfs, mido and python-rtmidi have no mingw package, and python-rtmidi does
+# not build for it. Install them into a native Windows Python (python.org, or
+# the Microsoft Store): `py -3 -m pip install -r requirements.txt`. ./setup.sh
+# finds that Python and records it in cdj.conf, and ./start.sh runs
+# midi/bridge.py with it.
+
+# Playhead scorer: play_real_dsp.sh runs scripts/run/score_playhead.py at the end of every
+# run. Without it only that final score line fails; the deck is unaffected.
+# Uses Image.open/convert/getpixel only.
+Pillow>=9.0
+
+# USB-stick image builder, run once: scripts/media/make_usb_image.py (PyFat.mkfs, and
+# PyFatFS with preserve_case). Tested with 1.1.0; the 1.0 lower bound is
+# UNVERIFIED.
+pyfatfs>=1.0
+
+# pyfatfs depends on fs (PyFilesystem2), whose fs/__init__.py imports
+# pkg_resources. setuptools 81 removed pkg_resources, and then `import pyfatfs`
+# fails with ModuleNotFoundError. MSYS2's setuptools is already past 81.
+setuptools<81
+
+# MIDI controller bridge, optional: midi/bridge.py, midi/leds.py,
+# midi/learn.py. Must be a Windows Python (it opens the USB MIDI device).
+# Tested with mido 1.3.3 and python-rtmidi 1.5.8.
+mido>=1.2
+python-rtmidi>=1.4

@@ -1,0 +1,35 @@
+diff --git a/target/sh4/helper.h b/target/sh4/helper.h
+index 29011d3..4b000cf 100644
+--- a/target/sh4/helper.h
++++ b/target/sh4/helper.h
+@@ -41,3 +41,30 @@ DEF_HELPER_FLAGS_2(ftrc_FT, TCG_CALL_NO_WG, i32, env, f32)
+ DEF_HELPER_FLAGS_2(ftrc_DT, TCG_CALL_NO_WG, i32, env, f64)
+ DEF_HELPER_3(fipr, void, env, i32, i32)
+ DEF_HELPER_2(ftrv, void, env, i32)
++
++DEF_HELPER_2(sh2a_ldbank, i32, env, i32)
++DEF_HELPER_3(sh2a_stbank, void, env, i32, i32)
++DEF_HELPER_1(sh2a_resbank, void, env)
++
++DEF_HELPER_1(cdj_fwlog, void, env)
++DEF_HELPER_1(cdj_fwdump, void, env)
++DEF_HELPER_2(cdj_fwtrace, void, env, i32)
++DEF_HELPER_2(cdj_mwatch, void, env, i32)
++DEF_HELPER_3(cdj_rwatch, void, env, i32, i32)
++/* The SH-2A 32-bit load twin. The effective address is passed in already
++ * computed, because those forms carry a 12-bit displacement in a second
++ * instruction word that helper_cdj_rwatch's 16-bit opcode cannot see. */
++DEF_HELPER_3(cdj_rwatch_ea, void, env, i32, i32)
++DEF_HELPER_2(cdj_rpoke, void, env, i32)
++DEF_HELPER_2(cdj_ppoke, void, env, i32)
++DEF_HELPER_2(cdj_pstore, void, env, i32)
++DEF_HELPER_1(cdj_ppoke_arm, void, env)
++DEF_HELPER_2(cdj_pcall, void, env, i32)
++DEF_HELPER_2(cdj_pcall2, void, env, i32)
++DEF_HELPER_1(cdj_pcall2_ret, void, env)
++DEF_HELPER_1(cdj_pcall_ret, void, env)
++DEF_HELPER_FLAGS_4(cdj_memcmp, TCG_CALL_NO_WG, i32, env, i32, i32, i32)
++DEF_HELPER_FLAGS_2(cdj_strlen, TCG_CALL_NO_WG, i32, env, i32)
++/* Writes r0 (and r1) itself, so it may not carry TCG_CALL_NO_WG. */
++DEF_HELPER_2(cdj_native_copy, i32, env, i32)
++DEF_HELPER_1(cdj_gui_idle, void, env)

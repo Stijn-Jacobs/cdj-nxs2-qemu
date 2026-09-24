@@ -1,0 +1,12 @@
+diff --git a/include/hw/sh4/sh_intc.h b/include/hw/sh4/sh_intc.h
+index f62d5c5..76e6647 100644
+--- a/include/hw/sh4/sh_intc.h
++++ b/include/hw/sh4/sh_intc.h
+@@ -58,6 +58,7 @@ struct intc_desc {
+ };
+ 
+ int sh_intc_get_pending_vector(struct intc_desc *desc, int imask);
++int sh_intc_vector_priority(struct intc_desc *desc, int vect);
+ 
+ void sh_intc_toggle_source(struct intc_source *source,
+                            int enable_adj, int assert_adj);

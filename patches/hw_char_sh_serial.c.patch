@@ -1,0 +1,70 @@
+diff --git a/hw/char/sh_serial.c b/hw/char/sh_serial.c
+index 355886e..f9c9b7d 100644
+--- a/hw/char/sh_serial.c
++++ b/hw/char/sh_serial.c
+@@ -28,6 +28,8 @@
+ #include "qemu/osdep.h"
+ #include "hw/sysbus.h"
+ #include "hw/irq.h"
++#include "hw/core/cpu.h"
++#include "qemu/log.h"
+ #include "hw/qdev-core.h"
+ #include "hw/qdev-properties.h"
+ #include "hw/qdev-properties-system.h"
+@@ -90,6 +92,40 @@ static void sh_serial_clear_fifo(SHSerialState *s)
+     s->rx_tail = 0;
+ }
+ 
++/* CDJ_SCIF2_DEBUG: log distinct (op,offset,guest-PC) accesses to the PANEL SCIF2
++ * link so its driver + RXI handler can be located. Env-gated, default off. */
++static int cdj_scif2_dbg = -1;
++static struct { char op; uint16_t offs; uint64_t pc; } cdj_scif2_seen[512];
++static unsigned cdj_scif2_seen_n;
++
++static void cdj_scif2_log(DeviceState *d, char op, hwaddr offs, uint64_t val)
++{
++    unsigned i;
++    uint64_t pc;
++
++    if (cdj_scif2_dbg < 0) {
++        cdj_scif2_dbg = getenv("CDJ_SCIF2_DEBUG") ? 1 : 0;
++    }
++    if (!cdj_scif2_dbg || !d->id || strcmp(d->id, "scif2") != 0 || !current_cpu) {
++        return;
++    }
++    pc = CPU_GET_CLASS(current_cpu)->get_pc(current_cpu);
++    for (i = 0; i < cdj_scif2_seen_n; i++) {
++        if (cdj_scif2_seen[i].op == op && cdj_scif2_seen[i].offs == offs
++            && cdj_scif2_seen[i].pc == pc) {
++            return;
++        }
++    }
++    if (cdj_scif2_seen_n < ARRAY_SIZE(cdj_scif2_seen)) {
++        cdj_scif2_seen[cdj_scif2_seen_n].op = op;
++        cdj_scif2_seen[cdj_scif2_seen_n].offs = offs;
++        cdj_scif2_seen[cdj_scif2_seen_n].pc = pc;
++        cdj_scif2_seen_n++;
++    }
++    qemu_log("scif2-%c: off 0x%02x val 0x%02x pc 0x%08x\n",
++             op, (unsigned)offs, (unsigned)(val & 0xff), (unsigned)pc);
++}
++
+ static void sh_serial_write(void *opaque, hwaddr offs,
+                             uint64_t val, unsigned size)
+ {
+@@ -97,6 +133,7 @@ static void sh_serial_write(void *opaque, hwaddr offs,
+     DeviceState *d = DEVICE(s);
+     unsigned char ch;
+ 
++    cdj_scif2_log(d, 'w', offs, val);
+     trace_sh_serial_write(d->id, size, offs, val);
+     switch (offs) {
+     case 0x00: /* SMR */
+@@ -216,6 +253,7 @@ static uint64_t sh_serial_read(void *opaque, hwaddr offs,
+     DeviceState *d = DEVICE(s);
+     uint32_t ret = UINT32_MAX;
+ 
++    cdj_scif2_log(d, 'r', offs, 0);
+ #if 0
+     switch (offs) {
+     case 0x00:

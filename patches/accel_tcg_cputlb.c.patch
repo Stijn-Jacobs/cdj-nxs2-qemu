@@ -1,0 +1,16 @@
+diff --git a/accel/tcg/cputlb.c b/accel/tcg/cputlb.c
+index 117b516..966ae38 100644
+--- a/accel/tcg/cputlb.c
++++ b/accel/tcg/cputlb.c
+@@ -162,6 +162,11 @@ static void tb_jmp_cache_clear_page(CPUState *cpu, vaddr page_addr)
+     if (unlikely(!jc)) {
+         return;
+     }
++    if (unlikely(cdj_jc_flat_hash)) {
++        /* A flat hash scatters one page over the whole cache. */
++        tcg_flush_jmp_cache(cpu);
++        return;
++    }
+ 
+     i0 = tb_jmp_cache_hash_page(page_addr);
+     for (i = 0; i < TB_JMP_PAGE_SIZE; i++) {
