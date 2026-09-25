@@ -2267,16 +2267,18 @@ static const CdjGuiKey cdj_gui_keys[] = {
     { Q_KEY_CODE_L,    0x13, 0x02, "LINK",      false },
     { Q_KEY_CODE_S,    0x13, 0x08, "SD",        false },
     { Q_KEY_CODE_D,    0x13, 0x10, "DISC",      false },
-    { Q_KEY_CODE_T,    0x14, 0x02, "TAG",       false },
-    { Q_KEY_CODE_I,    0x14, 0x04, "INFO",      false },
-    { Q_KEY_CODE_ESC,  0x14, 0x10, "BACK",      false },
+    /* Confirmed in midi/cdj_actions.py (taglist, information, back). */
+    { Q_KEY_CODE_T,    0x14, 0x02, "TAG",       true  },
+    { Q_KEY_CODE_I,    0x14, 0x04, "INFO",      true  },
+    { Q_KEY_CODE_ESC,  0x14, 0x10, "BACK",      true  },
     /* From the firmware's key-name table: 0x12:0x10 is ScanRev, Cue is
-     * 0x10:0x02, PlayPause 0x10:0x01. */
+     * 0x10:0x02, PlayPause 0x10:0x01, TempoRange 0x15:0x08, and 0x11:0x02
+     * is Slip (once mislabelled BEAT JUMP here). */
     { Q_KEY_CODE_C,    0x12, 0x10, "ScanRev (was mislabelled CUE)", true },
     { Q_KEY_CODE_SPC,  0x10, 0x01, "PlayPause", true  },
     { Q_KEY_CODE_X,    0x10, 0x02, "Cue",       true  },
-    { Q_KEY_CODE_P,    0x12, 0x02, "TEMPO RANGE", true },
-    { Q_KEY_CODE_J,    0x11, 0x02, "BEAT JUMP", true  },
+    { Q_KEY_CODE_P,    0x15, 0x08, "TEMPO RANGE", true },
+    { Q_KEY_CODE_J,    0x11, 0x02, "SLIP",      true  },
 };
 
 static unsigned cdj_gui_sweep_off = 0x15;   /* byte under keys 1-8 */
@@ -2317,28 +2319,30 @@ static void cdj_gui_key_event(DeviceState *dev, QemuConsole *src,
         return;                         /* the rest are taps, not held keys */
     }
     /*
-     * Select knob: Up/Down turn it, Enter pushes it. CDJ_PANEL_ROTARY=<off>
-     * and CDJ_PANEL_ROTPUSH=<off>:<mask> place them; the default is the sweep
-     * byte.
+     * Select knob: Up/Down turn it, Enter pushes it. The knob is the counter
+     * at report byte 0x0E, where +1 moves the list highlight down one row,
+     * and its push is 0x11:0x01 (select_turn and rotary_push in
+     * midi/cdj_actions.py). CDJ_PANEL_ROTARY=<off> and
+     * CDJ_PANEL_ROTPUSH=<off>:<mask> move them elsewhere.
      */
     if (qcode == Q_KEY_CODE_UP || qcode == Q_KEY_CODE_DOWN) {
         const char *e = getenv("CDJ_PANEL_ROTARY");
-        unsigned off = e ? (unsigned)strtoul(e, NULL, 0) : cdj_gui_sweep_off;
+        unsigned off = e ? (unsigned)strtoul(e, NULL, 0) : 0x0E;
 
-        cdj_panelkey_send_op(sock, off, qcode == Q_KEY_CODE_UP ? 1 : -1, 0,
+        cdj_panelkey_send_op(sock, off, qcode == Q_KEY_CODE_DOWN ? 1 : -1, 0,
                              "rot");
         return;
     }
     if (qcode == Q_KEY_CODE_RET || qcode == Q_KEY_CODE_KP_ENTER) {
         const char *e = getenv("CDJ_PANEL_ROTPUSH");
-        unsigned off = cdj_gui_sweep_off, mask = 0x01;
+        unsigned off = 0x11, mask = 0x01;
 
         if (e) {
             sscanf(e, "%i:%i", &off, &mask);
         }
         cdj_panelkey_send(sock, off, mask, 150);
-        info_report("panel key: SELECT push (report[0x%02x] |= 0x%02x)%s",
-                    off, mask, e ? "" : "   [sweep byte -- not the real one]");
+        info_report("panel key: SELECT push (report[0x%02x] |= 0x%02x)",
+                    off, mask);
         return;
     }
     if (qcode == Q_KEY_CODE_BRACKET_LEFT || qcode == Q_KEY_CODE_BRACKET_RIGHT) {
