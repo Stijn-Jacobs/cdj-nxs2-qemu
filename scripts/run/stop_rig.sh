@@ -6,4 +6,6 @@ for pat in run/live.sh run/live_linked.sh run/warm_jit.sh run/warm_jit.py run/ri
   for p in $(pgrep -f "$pat"); do [ "$p" != "$$" ] && [ "$p" != "$PPID" ] && kill "$p" 2>/dev/null; done
 done
 for p in $(pgrep -x qemu-system-sh4) $(pgrep -f qemu-system-sh4eb); do kill "$p" 2>/dev/null; done
-sleep 3; echo "qemu left: $(pgrep -f qemu-system | wc -l)"; pgrep -fa "run/live|run/rig|midi_relay" | grep -v pgrep
+# Full command lines: -a on Linux's procps pgrep, -l on the BSD one (macOS).
+LIST=-fa; [ "$(uname -s)" = Darwin ] && LIST=-fl
+sleep 3; echo "qemu left: $(pgrep -f qemu-system | wc -l | tr -d ' ')"; pgrep $LIST "run/live|run/rig|midi_relay" | grep -v pgrep

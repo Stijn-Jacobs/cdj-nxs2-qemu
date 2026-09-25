@@ -44,6 +44,17 @@ JOBS="${JOBS:-$(( CORES < 14 ? CORES : 14 ))}"
 WIN=0; EXE=""
 case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) WIN=1; EXE=".exe" ;; esac
 REPLAY="$LIBDIR/c6xreplay$EXE"
+# gcc's profile-guided build writes .gcda files; clang's (macOS's gcc is clang)
+# writes .profraw files that llvm-profdata merges into one .profdata.
+CLANG=0; PROFDATA=()
+if gcc --version 2>/dev/null | grep -q clang; then
+    CLANG=1
+    if command -v xcrun >/dev/null 2>&1 && xcrun --find llvm-profdata >/dev/null 2>&1; then
+        PROFDATA=(xcrun llvm-profdata)
+    elif command -v llvm-profdata >/dev/null 2>&1; then
+        PROFDATA=(llvm-profdata)
+    fi
+fi
 
 KEEP=0; DRY=0; PREFLIGHT=0
 for arg in "$@"; do
@@ -77,6 +88,10 @@ preflight() {
     for t in gcc make python3 pkg-config; do
         command -v "$t" >/dev/null 2>&1 || { echo "needs $t on PATH"; ok=1; }
     done
+    if [ "$CLANG" = 1 ] && [ "${#PROFDATA[@]}" -eq 0 ]; then
+        echo "gcc here is clang, and its profile-guided build needs llvm-profdata (Xcode's, via xcrun)"
+        ok=1
+    fi
     for t in main_unpacked.bin gui_unpacked.bin flash.bin usbmedia3.img; do
         [ -f "$CDJ_ROOT/extract/$t" ] || { echo "needs extract/$t (./setup.sh makes it)"; ok=1; }
     done
@@ -107,7 +122,7 @@ run env MODULE=none AUTOJIT=0 PLAY_S="$PLAY_S" \
 if [ "$DRY" = 0 ]; then
     [ -s "$REC" ] || die "no recording at $REC (the deck log is /tmp/bridge-main-rec1.log)"
     [ -s "$PROF/profile.txt" ] || die "no profile in $PROF: the deck did not shut down cleanly"
-    echo "recorded $(( $(stat -c %s "$REC") >> 20 )) MB"
+    echo "recorded $(( $(wc -c < "$REC") >> 20 )) MB"
 fi
 
 stage "3/5 generating C from the profile"
@@ -147,8 +162,9 @@ replay() {  # <module> <replay tool> <log> [max cycles]: the recording, with the
     echo "+ C66X_JIT=$1 $2 $REC ${4:-}  > $3"
     [ "$DRY" = 1 ] && return 0
     # An instrumented module's frames are large: give Linux's main thread 64 MB
-    # of stack too (Windows gets it from the trainer's link flag).
-    ( ulimit -s 65536 2>/dev/null; cd "$WORK" &&
+    # of stack too (Windows gets it from the trainer's link flag). macOS caps
+    # it just below that, so there it gets the cap.
+    ( ulimit -s 65536 2>/dev/null || ulimit -s hard 2>/dev/null; cd "$WORK" &&
       C66X_JIT="$(native "$1")" "$2" "$(native "$REC")" ${4:-} > "$3" 2>&1 )
     local rc=$?
     grep -aE '^replayed|^verdict|c66x jit: .*(ABI|error)' "$3" | sed 's/^/  /'
@@ -167,16 +183,25 @@ if [ "$WIN" = 1 ]; then
         "$LIBDIR/c66x_core.o" -o "$TRAINER" -Wl,--stack,67108864 -lm \
         $(pkg-config --libs gmodule-2.0) || die "the trainer did not link"
 fi
-build_module "instrumented" -fprofile-generate -fprofile-update=single \
-    "-fprofile-dir=$(native "$PGO_DIR")" || die "the instrumented build failed"
+if [ "$CLANG" = 1 ]; then
+    build_module "instrumented" "-fprofile-generate=$PGO_DIR" || die "the instrumented build failed"
+else
+    build_module "instrumented" -fprofile-generate -fprofile-update=single \
+        "-fprofile-dir=$(native "$PGO_DIR")" || die "the instrumented build failed"
+fi
 replay "$OBJ/m.so" "$TRAINER" "$OBJ/replay-train.log" "$TRAIN_CYCLES"
 if [ "$DRY" = 0 ]; then
-    n="$(find "$PGO_DIR" -name '*.gcda' | wc -l)"
+    n="$(find "$PGO_DIR" -name "$([ "$CLANG" = 1 ] && echo '*.profraw' || echo '*.gcda')" | wc -l)"
     [ "$n" -gt 0 ] || die "the training replay wrote no profile (see $OBJ/replay-train.log)"
     echo "  $n profile files"
 fi
-build_module "profiled" -fprofile-use -fprofile-partial-training -fprofile-correction \
-    -Wno-missing-profile "-fprofile-dir=$(native "$PGO_DIR")" || die "the profiled build failed"
+if [ "$CLANG" = 1 ]; then
+    run "${PROFDATA[@]}" merge -o "$OBJ/m.profdata" "$PGO_DIR" || die "llvm-profdata could not merge the profile"
+    build_module "profiled" "-fprofile-use=$OBJ/m.profdata" || die "the profiled build failed"
+else
+    build_module "profiled" -fprofile-use -fprofile-partial-training -fprofile-correction \
+        -Wno-missing-profile "-fprofile-dir=$(native "$PGO_DIR")" || die "the profiled build failed"
+fi
 
 stage "5/5 replaying the whole recording with the module"
 replay "$OBJ/m.so" "$REPLAY" "$OBJ/replay-final.log"

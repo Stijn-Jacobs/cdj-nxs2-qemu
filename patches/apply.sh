@@ -24,8 +24,9 @@ SRC="${1:-$CDJ_ROOT/qemu-src}"
 [ -d "$SRC/hw/sh4" ] || { echo "no QEMU source at $SRC" >&2; exit 1; }
 
 # The one new file the patches cannot create. The board sources belong to
-# install_machine.sh.
-install -D -m644 "$HERE/include_exec_cdj-pcring.h" "$SRC/include/exec/cdj-pcring.h"
+# install_machine.sh. No install -D: BSD install (macOS) reads it differently.
+mkdir -p "$SRC/include/exec"
+install -m644 "$HERE/include_exec_cdj-pcring.h" "$SRC/include/exec/cdj-pcring.h"
 echo "installed include/exec/cdj-pcring.h"
 
 for p in "$HERE"/*.patch; do

@@ -42,14 +42,15 @@ FILES=(
     target/sh4/helper.h
     target/sh4/op_helper.c
     target/sh4/translate.c
+    ui/cocoa.m
 )
 
 # Warn about edits to files not on the list: they would be built but never
 # captured.
 mapfile -t SEEN < <(git -C "$SRC" diff --name-only -- \
     'accel/tcg/**' 'chardev/**' 'hw/char/**' 'hw/intc/**' 'hw/sh4/**' 'hw/timer/**' \
-    'include/hw/sh4/**' 'net/**' 'system/**' 'target/sh4/**' 2>/dev/null \
-    | grep -E '\.(c|h|build)$|Kconfig$' || true)
+    'include/hw/sh4/**' 'net/**' 'system/**' 'target/sh4/**' 'ui/**' 2>/dev/null \
+    | grep -E '\.(c|h|m|build)$|Kconfig$' || true)
 for f in "${SEEN[@]:-}"; do
     [ -n "$f" ] || continue
     printf '%s\n' "${FILES[@]}" | grep -qxF "$f" \

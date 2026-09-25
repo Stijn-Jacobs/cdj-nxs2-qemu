@@ -1,0 +1,23 @@
+diff --git a/ui/cocoa.m b/ui/cocoa.m
+index 4c2dd33..305b25b 100644
+--- a/ui/cocoa.m
++++ b/ui/cocoa.m
+@@ -2129,6 +2129,18 @@ static void cocoa_display_init(DisplayState *ds, DisplayOptions *opts)
+ 
+     [QemuApplication sharedApplication];
+ 
++    /*
++     * Opt out of App Nap. A CDJ deck's display board runs in this process and
++     * MAIN waits on it over the SPI link, so the guest must keep real time
++     * while its window is hidden or behind another one; App Nap would
++     * coalesce its timers and stall both boards. The activity is never ended:
++     * it lasts as long as the process.
++     */
++    [[[NSProcessInfo processInfo]
++        beginActivityWithOptions:NSActivityUserInitiatedAllowingIdleSystemSleep |
++                                 NSActivityLatencyCritical
++                          reason:@"emulated machine must keep real time"] retain];
++
+     // Create an Application controller
+     QemuCocoaAppController *controller = [[QemuCocoaAppController alloc] init];
+     [NSApp setDelegate:controller];

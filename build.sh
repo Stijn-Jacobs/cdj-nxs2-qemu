@@ -3,7 +3,8 @@
 #
 # Build everything the decks need on THIS host: the two patched QEMUs (MAIN,
 # sh4; display board, sh4eb) and the C66x DSP core library that the run-time
-# JIT compiles against. Works from an MSYS2 MINGW64 shell on Windows and on Linux.
+# JIT compiles against. Works from an MSYS2 MINGW64 shell on Windows, on Linux
+# and on macOS (Homebrew; the window is Cocoa and the sound Core Audio there).
 # ./setup.sh runs these same phases one by one, with progress and logs.
 #
 #   usage: ./build.sh [phase ...]          (default: all of them, in order)
@@ -15,7 +16,7 @@
 #   env:    QEMU_BUILD / QEMU_EB_BUILD   build trees. Windows default
 #                                        /c/qemu-build-mingw[-eb]: they must be on
 #                                        the same drive as this source, on NTFS.
-#                                        Linux default ~/qemu-build[-eb].
+#                                        Linux and macOS default ~/qemu-build[-eb].
 #           C66X_JIT_LIBDIR              where libc66x.so goes (~/build/c6x)
 #           JOBS                         parallel make jobs for the DSP library
 #
@@ -24,6 +25,7 @@
 # first runs (it needs gcc at run time and libc66x.so from the dsp phase), so
 # early sessions run slower than real time while ~/c14gen fills. A curated
 # module is built from a recording of your own firmware and is not included.
+. "$(dirname "${BASH_SOURCE[0]}")/scripts/cdj_bash.sh"
 set -euo pipefail
 E="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HERE="$E/scripts"
@@ -56,7 +58,7 @@ phase_main() {
         echo "== building the MAIN QEMU (Windows, MSYS2)"
         bash "$E/scripts/build/build_windows.sh" main
     else
-        echo "== building the MAIN QEMU (Linux)"
+        echo "== building the MAIN QEMU ($(uname -s))"
         bash "$E/scripts/build/build_main.sh"
     fi
 }
@@ -66,7 +68,7 @@ phase_display() {
         echo "== building the display-board QEMU (Windows, MSYS2)"
         bash "$E/scripts/build/build_windows.sh" eb
     else
-        echo "== building the display-board QEMU (Linux)"
+        echo "== building the display-board QEMU ($(uname -s))"
         bash "$E/scripts/build/build_display.sh"
     fi
 }

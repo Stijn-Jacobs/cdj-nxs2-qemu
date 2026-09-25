@@ -102,7 +102,10 @@ simply leaves it out.
 
 On the machine the controller is plugged into (on Windows, a native Python
 from python.org or the Microsoft Store, not MSYS2's, with
-`py -3 -m pip install mido python-rtmidi`):
+`py -3 -m pip install mido python-rtmidi`; on macOS, a venv, since Homebrew's
+Python refuses a plain `pip install`: `python3 -m venv .venv &&
+.venv/bin/python -m pip install mido python-rtmidi`, then `.venv/bin/python`
+in place of `python` below):
 
 ```
 python midi/learn.py ports                        # is it there? note a word from its port name

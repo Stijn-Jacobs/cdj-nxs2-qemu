@@ -28,7 +28,16 @@ missing=""
 for t in ninja meson pkg-config flex bison; do
     command -v "$t" >/dev/null || missing="$missing $t"
 done
-if [ -n "$missing" ]; then
+if [ -n "$missing" ] && [ "$(uname -s)" = Darwin ]; then
+    cat >&2 <<EOF
+missing build tools:$missing
+
+install them with Homebrew:
+  brew install ninja meson pkgconf glib pixman
+(flex and bison come with the Xcode Command Line Tools: xcode-select --install)
+EOF
+    exit 1
+elif [ -n "$missing" ]; then
     cat >&2 <<EOF
 missing build tools:$missing
 
@@ -54,11 +63,22 @@ esac
 # at "none, dbus". Reconfigure when the requested UI backend is not in the
 # existing config, or when QEMU_RECONFIGURE=1 is set.
 CFG_ARGS="--target-list=sh4-softmmu --disable-werror --disable-docs --disable-tools"
-if pkg-config --exists gtk+-3.0 2>/dev/null; then
-    # Ask explicitly so a missing dependency fails loudly instead of quietly
-    # producing a binary with no window support.
-    CFG_ARGS="$CFG_ARGS --enable-gtk"
-fi
+# Ask explicitly for the UI and sound backends, so a missing dependency fails
+# loudly instead of quietly producing a binary with no window or no sound. On
+# macOS they are Cocoa and Core Audio, which need nothing beyond the SDK.
+case "$(uname -s)" in
+    Darwin)
+        CFG_ARGS="$CFG_ARGS --enable-cocoa --enable-coreaudio" ;;
+    *)
+        if pkg-config --exists gtk+-3.0 2>/dev/null; then
+            CFG_ARGS="$CFG_ARGS --enable-gtk"
+        fi ;;
+esac
+case "$(uname -s)" in
+    MINGW* | MSYS* | CYGWIN*) ;;
+    *) . "$HERE/qemu_python.sh"
+       CFG_ARGS="$CFG_ARGS${QEMU_PYTHON_ARG:+ $QEMU_PYTHON_ARG}" ;;
+esac
 
 need_configure=0
 [ -f build.ninja ] || need_configure=1

@@ -181,6 +181,11 @@ def main(argv):
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    # macOS: the decks' QEMUs bind this port with SO_REUSEPORT (see
+    # patches/net_socket.c.patch), and BSD shares a port only when every
+    # socket on it sets that.
+    if sys.platform == 'darwin':
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
     sock.bind(('', port))
     sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP,
                     struct.pack('4s4s', socket.inet_aton(group),

@@ -10,6 +10,7 @@
 #          ./start.sh --dry-run   show what would be started
 #   env:   every knob of scripts/run/rig.sh still works (AUDIODEV=, NOSOUND=1,
 #          GUI_DISPLAY=, PRIO=, TBFAST=0, ...).
+. "$(dirname "${BASH_SOURCE[0]}")/scripts/cdj_bash.sh"
 set -uo pipefail
 E="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONF="$E/cdj.conf"

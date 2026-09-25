@@ -80,7 +80,9 @@ export SNAP="${SNAP:-0x09944000:0x01C40000}"
 export FILMN="${FILMN:-8}" MOTION_MS="${MOTION_MS:-1500}"
 export GUI_DISPLAY="${GUI_DISPLAY:-none}" PREFLIGHT="${PREFLIGHT:-0}"
 export JOBS="${JOBS:-3}"
-echo "=== $PREFIX  C6X=${C6X:-1} MHZ=${CDJ_C6X_MHZ:-} LOCKSTEP=${LOCKSTEP:-1} ICOUNT=${ICOUNT:-}  qemu before: $(pgrep -c qemu-system || true)  load: $(cut -d' ' -f1-3 /proc/loadavg)"
+# The 1/5/15-minute load averages; /proc/loadavg is Linux-only.
+loadavg() { cut -d' ' -f1-3 /proc/loadavg 2>/dev/null || sysctl -n vm.loadavg 2>/dev/null | tr -d '{}' | xargs; }
+echo "=== $PREFIX  C6X=${C6X:-1} MHZ=${CDJ_C6X_MHZ:-} LOCKSTEP=${LOCKSTEP:-1} ICOUNT=${ICOUNT:-}  qemu before: $(pgrep qemu-system | wc -l | tr -d ' ')  load: $(loadavg)"
 bash "$HERE/instrumented_batch.sh" "$PREFIX" "$N"
 echo "--- DSP (c6x exit lines)"
 bash "$HERE/report_dsp.sh" "$PREFIX" "$N"
@@ -88,4 +90,4 @@ echo "--- minimap playhead"
 for i in $(seq 1 "$N"); do
     python3 "$HERE/score_playhead.py" "$PREFIX$i" 2>&1 | tail -2
 done
-echo "=== host load after: $(cut -d' ' -f1-3 /proc/loadavg)"
+echo "=== host load after: $(loadavg)"

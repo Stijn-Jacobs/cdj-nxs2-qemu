@@ -5,7 +5,7 @@
 **The firmware of a Pioneer DJ CDJ-2000NXS2, running unmodified on emulated hardware.**
 
 [![License: GPL-2.0-or-later](https://img.shields.io/badge/license-GPL--2.0--or--later-blue.svg)](LICENSE)
-[![Platform: Windows | Linux](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)](#quick-start)
+[![Platform: Windows | Linux | macOS](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)](#quick-start)
 [![QEMU 9.1](https://img.shields.io/badge/QEMU-9.1-orange.svg)](https://www.qemu.org/)
 [![Firmware not included](https://img.shields.io/badge/firmware-not%20included-red.svg)](#not-included)
 
@@ -53,7 +53,15 @@ Plug in a MIDI controller and it plays them.
 ## 🚀 Quick start
 
 On **Windows**, install [MSYS2](https://www.msys2.org) and open the
-**MSYS2 MINGW64** shell. On **Linux** (native or WSL), any shell will do.
+**MSYS2 MINGW64** shell. On **Linux** (native or WSL), any shell will do. On
+**macOS** (Apple silicon or Intel), install the Xcode Command Line Tools and
+[Homebrew](https://brew.sh), then the build's tools and a newer bash (macOS's
+own is 3.2; the scripts find Homebrew's by themselves):
+
+```sh
+xcode-select --install
+brew install bash ninja meson pkgconf glib pixman python
+```
 
 ```sh
 git clone <this repository> cdj-nxs2
@@ -65,7 +73,7 @@ cd cdj-nxs2
 skipped when it is already done:
 
 1. **Prerequisites** — checks compilers, libraries and Python packages, and
-   prints the exact `pacman` or `apt` command for whatever is missing.
+   prints the exact `pacman`, `apt` or `brew` command for whatever is missing.
 2. **Build** — fetches QEMU 9.1.0, applies this project's patches and builds
    the MAIN emulator, the display-board emulator and the DSP library, with a
    progress line per phase and full logs in `logs/` (10–40 minutes).
@@ -95,6 +103,26 @@ The deck window opens and the player boots to its screen. Press **USB** (or
 about 3 GB of disk for the build trees and the DSP code cache, Python 3.11 or
 newer, the update file (v1.87 — every address in the model is for that
 version), and your own music.
+
+<details>
+<summary><b>On macOS</b></summary>
+
+- The deck window is QEMU's native **Cocoa** window and the sound goes to the
+  default output through **Core Audio**; neither needs anything from
+  Homebrew. `GUI_DISPLAY=sdl` and `AUDIODEV=...` choose others, as elsewhere.
+- **Pro DJ Link** runs over multicast on your network interface. The first
+  time, macOS may ask whether your terminal may find devices on the local
+  network: allow it, or the two decks will not see each other.
+- The DSP JIT compiles with Apple's clang (`gcc` on macOS is clang), and
+  `--curated-jit` uses clang's own profile-guided build with Xcode's
+  `llvm-profdata`.
+- Python packages go into `.venv/` in this folder, since Homebrew's Python
+  refuses `pip install` outside a virtual environment; setup offers the exact
+  command. QEMU 9.1's configure needs `distlib`, which current `pip` no longer
+  carries, so the build makes itself a small venv with it in the build tree.
+- Over `ssh`, with no desktop session, the decks run without a window.
+
+</details>
 
 <details>
 <summary><b>Setup options</b></summary>
@@ -197,6 +225,8 @@ The bridge's own output is in `logs/bridge.log`. On Windows it runs on a normal
 Windows Python (python.org or the Microsoft Store) with `mido` and
 `python-rtmidi` installed, because MSYS2's Python cannot open MIDI devices; setup
 finds it and prints the one `pip` command it needs if the packages are missing.
+On macOS the packages go into this folder's `.venv/` (setup prints that command
+too), and the bridge reaches the controller through Core MIDI.
 
 Any controller works as a **profile** (what the hardware sends,
 `midi/controllers/<name>.json`) plus a **mapping** (which CDJ key each control
@@ -266,7 +296,7 @@ machine: the update file, and anything built from it, is Pioneer's.
 | `hw/cdj/` | the MAIN board, one file per device, and the display board (`sh7269gui.c`); `diag/` holds the diagnostic hooks, `standin/` historical models that are off by default |
 | `hw/cdj/c6x/` | the C66x DSP core, its SoC peripherals, the JIT generator (`tools/`) and unit tests |
 | `patches/` | the changes to QEMU 9.1.0 itself |
-| `scripts/build/` | the QEMU builds (Linux and MSYS2) and the board installer |
+| `scripts/build/` | the QEMU builds (Linux, macOS and MSYS2) and the board installer |
 | `scripts/firmware/` | unpacking and verifying the update file |
 | `scripts/media/` | the USB stick image builder |
 | `scripts/run/` | the run chain behind the launchers, the panel and monitor sockets, the controller relay and the run reports |
