@@ -2308,8 +2308,8 @@ static const CdjGuiKey cdj_gui_keys[] = {
  * pulse period in bytes 10-11 (27778 / P = platter speed %), so while the key
  * is held the counter is stepped and the period held. The counter has to move
  * at least 42 per 30 firmware passes before the bend engages; 2000 pulses/s
- * clears that. P 278 bent the deck to 1.06x, P 139 to 1.18x (graph
- * real-dsp-jog-path).
+ * clears that. Measured on the real DSP, P 278 bent the deck to 1.06x and
+ * P 139 to 1.18x.
  */
 #define CDJ_NUDGE_TICK_MS   40
 #define CDJ_NUDGE_STEP      80

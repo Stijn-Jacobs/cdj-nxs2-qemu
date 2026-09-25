@@ -164,9 +164,11 @@ export CDJ_GUI_FRAME_SCAN="${CDJ_GUI_FRAME_SCAN:-0}"
 # TOUCH=1 (default): a click/drag in the display window, or a 'touch'/'tap' on
 # the panel key socket, becomes the report's touch X/Y (bytes 0x16..0x19).
 export CDJ_TOUCH="${TOUCH:-1}"
-# MAXLAG=<ms>: cap how far a deck may fall behind real time. Without it a deck
-# that falls behind catches up by running fast for a while. 0 = QEMU's catch-up.
-export CDJ_ICOUNT_MAXLAG_MS="${MAXLAG:-0}"
+# MAXLAG=<ms>: cap how far a deck may fall behind real time. Without a cap a
+# deck that falls behind catches up by running fast, and the audio resampler
+# then plays up to 4 % sharp; with two decks and MASTER TEMPO the worst
+# lateness went from 20-54 s to 1 s at 250. 0 = QEMU's catch-up.
+export CDJ_ICOUNT_MAXLAG_MS="${MAXLAG:-250}"
 # TBFAST=1 (default): seven QEMU fast paths (TB lookup, FPSCR exits, code-page
 # store checks, getenv cache, MMIO splitting) that remove most of MAIN's
 # emulation overhead. TBFAST=0 runs the plain QEMU paths.
