@@ -47,6 +47,29 @@ else
 fi
 
 . "$E/scripts/cdj_paths.sh"
+
+# The boards and patches are compiled into the QEMU binaries, so after a pull
+# that changed them the decks would run the old code. build.sh stamps each build
+# tree with a fingerprint of those sources; a mismatch means rebuild.
+# STALE_CHECK=0 skips the check.
+if [ "${STALE_CHECK:-1}" = 1 ]; then
+    . "$E/scripts/build/source_stamp.sh"
+    CDJ_EMU_DIR="$E"
+    stale="$(cdj_stale_builds)"
+    if [ -n "$stale" ]; then
+        echo "the emulator's source has changed since it was last built:"
+        printf '%s\n' "$stale" | sed 's/^/    /'
+        if [ "$DRY" = 0 ] && [ -t 0 ]; then
+            read -r -p "rebuild now (a few minutes)? [Y/n] " ans
+            case "${ans:-y}" in
+                [Yy]*) bash "$E/build.sh" main display || exit 1 ;;
+                *) echo "starting the old build (./build.sh main display rebuilds it)" ;;
+            esac
+        else
+            echo "run ./build.sh main display to pick the changes up"
+        fi
+    fi
+fi
 missing=""
 for f in extract/main_unpacked.bin extract/gui_unpacked.bin extract/flash.bin; do
     [ -f "$CDJ_ROOT/$f" ] || missing="$missing $f"

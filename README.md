@@ -98,6 +98,10 @@ The deck window opens and the player boots to its screen. Click the window,
 press `U` for the USB stick, `↓` to a track, `Enter` to load it and `Space` to
 play (every key: [Keyboard](#keyboard)). Click the screen to touch it.
 
+**Updating:** `git pull`, then `./start.sh` as usual. The emulator is compiled,
+so when a pull changed its code `start.sh` notices and offers to rebuild
+(`./build.sh main display` does the same by hand).
+
 **You will need** a recent multi-core CPU (see [Limits](#limits)),
 about 3 GB of disk for the build trees and the DSP code cache, Python 3.11 or
 newer, the update file (v1.87 — every address in the model is for that

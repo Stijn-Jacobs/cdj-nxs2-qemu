@@ -30,6 +30,8 @@ set -euo pipefail
 E="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HERE="$E/scripts"
 . "$HERE/cdj_paths.sh"
+. "$HERE/build/source_stamp.sh"
+CDJ_EMU_DIR="$E"
 SRC="$CDJ_ROOT/qemu-src"
 # Regenerating patches/ from the tree is a maintainer step, not a build step.
 export SKIP_PATCH_REGEN=1
@@ -61,6 +63,8 @@ phase_main() {
         echo "== building the MAIN QEMU ($(uname -s))"
         bash "$E/scripts/build/build_main.sh"
     fi
+    cdj_build_dirs
+    cdj_stamp_write "$CDJ_MAIN_BUILD"
 }
 
 phase_display() {
@@ -71,6 +75,8 @@ phase_display() {
         echo "== building the display-board QEMU ($(uname -s))"
         bash "$E/scripts/build/build_display.sh"
     fi
+    cdj_build_dirs
+    cdj_stamp_write "$CDJ_EB_BUILD"
 }
 
 phase_dsp() {
