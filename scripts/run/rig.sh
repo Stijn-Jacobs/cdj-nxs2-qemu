@@ -191,7 +191,9 @@ case "$(uname -s)" in
         ;;
 esac
 
-env LADDER=0 W1=0 THIN="${THIN:-0}" HOLDS=0 C6X=1 KEYBITS=0x00 \
+# SNAP=none: no RAM snapshots at the play key. Each 29 MB memsave stalls the
+# machine just as the track starts (0.5x for ~10 s), and the rig never scores them.
+env LADDER=0 W1=0 THIN="${THIN:-0}" HOLDS=0 C6X=1 KEYBITS=0x00 SNAP="${SNAP:-none}" \
     ICOUNT="${ICOUNT:-shift=2,sleep=on,align=on}" DSPTHREAD="${DSPTHREAD:-2}" \
     GUI_DISPLAY="${GUI_DISPLAY:-gtk}" JOBS="$NDECKS" WARMUP="${WARM:-0}" \
     FILMN="$FRAMES" MOTION_MS="${MOTION_MS:-5000}" \

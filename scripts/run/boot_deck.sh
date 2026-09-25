@@ -158,10 +158,19 @@ case "$MEDIA_MODE" in
              [ /tmp/usbmedia3.img -nt "$MEDIA_SRC" ] || cp "$MEDIA_SRC" /tmp/usbmedia3.img || exit 1
              MEDIA_SRC=/tmp/usbmedia3.img
          fi
-         cp "$MEDIA_SRC" "$MEDIA_IMG" || exit 1
+         # snapshot=on puts the guest's writes in a throwaway overlay, which
+         # costs nothing, where copying the 256 MB image took 7-15 s a run.
+         # MEDIA_COPY=1 goes back to a private copy.
+         if [ "${MEDIA_COPY:-0}" = 1 ]; then
+             cp "$MEDIA_SRC" "$MEDIA_IMG" || exit 1
+             MEDIA_FILE="$MEDIA_IMG"
+         else
+             MEDIA_FILE="$(nativepath_or_self "$MEDIA_SRC"),snapshot=on"
+             MEDIA_IMG=""
+         fi
          # MEDIA_CACHE: unsafe ignores the guest's flushes, writeback (default)
          # honours them. The image is a throwaway copy either way.
-         MEDIA_DRIVE="format=raw,file=$MEDIA_IMG,cache=${MEDIA_CACHE:-writeback}" ;;
+         MEDIA_DRIVE="format=raw,file=$MEDIA_FILE,cache=${MEDIA_CACHE:-writeback}" ;;
     *)   MEDIA_DRIVE="format=raw,file=fat:rw:$MEDIADIR" ;;
 esac
 # NOMEDIA=1 attaches no stick. UTILITY refuses to change PLAYER No. while a
@@ -287,9 +296,16 @@ Darwin)
     ;;
 esac
 
+# The touch screen makes the window an absolute pointer, and QEMU then hides
+# the host cursor for a guest that never draws one; show-cursor keeps it.
+GUI_DISPLAY_ARG="${GUI_DISPLAY:-gtk}"
+case "$GUI_DISPLAY_ARG" in
+    none | *show-cursor=*) ;;
+    *) GUI_DISPLAY_ARG="$GUI_DISPLAY_ARG,show-cursor=on" ;;
+esac
 "$GUI_QEMU" -M sh7269gui -kernel "$PROJ_NATIVE/extract/gui_unpacked.bin" \
     -chardev "socket,id=spilink,path=$SOCK" \
-    -display "${GUI_DISPLAY:-gtk}" -serial null \
+    -display "$GUI_DISPLAY_ARG" -serial null \
     -monitor "$MON_ARG" \
     > "$GUILOG" 2>&1 &
 GUI_PID=$!

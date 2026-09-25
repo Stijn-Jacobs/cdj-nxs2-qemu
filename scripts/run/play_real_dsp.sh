@@ -78,6 +78,9 @@ export TAPS="${TAPS:-0x08443252,0x08443276,0x0842A160,0x084E294E}"
 export WORDS="${WORDS:-0x0B054D44 0x0B5125E8 0x09944170 0x09947478}"
 export SNAP="${SNAP:-0x09944000:0x01C40000}"
 export FILMN="${FILMN:-8}" MOTION_MS="${MOTION_MS:-1500}"
+# What load_track.py sees as the settings modal here is the browse list, which
+# never clears; waiting for it cost ~30 s a run.
+export MODAL_CLEAR="${MODAL_CLEAR:-2}"
 export GUI_DISPLAY="${GUI_DISPLAY:-none}" PREFLIGHT="${PREFLIGHT:-0}"
 export JOBS="${JOBS:-3}"
 # The 1/5/15-minute load averages; /proc/loadavg is Linux-only.

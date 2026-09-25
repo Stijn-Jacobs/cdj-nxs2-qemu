@@ -52,16 +52,15 @@ Plug in a MIDI controller and it plays them.
 
 ## 🚀 Quick start
 
-On **Windows**, install [MSYS2](https://www.msys2.org) and open the
-**MSYS2 MINGW64** shell. On **Linux** (native or WSL), any shell will do. On
-**macOS** (Apple silicon or Intel), install the Xcode Command Line Tools and
-[Homebrew](https://brew.sh), then the build's tools and a newer bash (macOS's
-own is 3.2; the scripts find Homebrew's by themselves):
+**1. Get a shell for your system** (only your own line applies):
 
-```sh
-xcode-select --install
-brew install bash ninja meson pkgconf glib pixman python
-```
+| system | what to do first |
+|---|---|
+| **Windows** | Install [MSYS2](https://www.msys2.org) and open the **MSYS2 MINGW64** shell. `setup.sh` tells you which packages to add. |
+| **Linux** (native or WSL) | Nothing. Any shell will do; `setup.sh` prints the `apt` command for anything missing. |
+| **macOS** (Apple silicon or Intel) | Install the Xcode Command Line Tools and [Homebrew](https://brew.sh), then the build tools and a newer bash (macOS's own is 3.2; the scripts find Homebrew's by themselves): `xcode-select --install` then `brew install bash ninja meson pkgconf glib pixman python` |
+
+**2. Clone and run setup** (the same on every system):
 
 ```sh
 git clone <this repository> cdj-nxs2
@@ -89,15 +88,15 @@ skipped when it is already done:
 6. **Your setup** — one deck or two, Pro DJ Link, sound, a MIDI controller;
    saved to `cdj.conf`.
 
-Then:
+**3. Play:**
 
 ```sh
 ./start.sh          # Ctrl-C stops everything
 ```
 
-The deck window opens and the player boots to its screen. Press **USB** (or
-**LINK**, for another player's stick) to browse, then load a track and press
-**PLAY**. Click the screen to touch it.
+The deck window opens and the player boots to its screen. Click the window,
+press `U` for the USB stick, `↓` to a track, `Enter` to load it and `Space` to
+play (every key: [Keyboard](#keyboard)). Click the screen to touch it.
 
 **You will need** a recent multi-core CPU (see [Limits](#limits)),
 about 3 GB of disk for the build trees and the DSP code cache, Python 3.11 or
@@ -214,6 +213,30 @@ with the SoC peripherals the program uses. Interpreted, it is far too slow for
 real-time audio, so a **JIT** compiles the hot parts of the DSP program to
 native code while you play (`hw/cdj/c6x/tools/`), caching what it has built.
 The instruction decode tables come from GNU binutils.
+
+<a id="keyboard"></a>
+
+## ⌨️ Keyboard
+
+No controller needed: click a deck's window and play it from the keyboard.
+Each window drives its own deck.
+
+| key | does | key | does |
+|---|---|---|---|
+| `Space` | PLAY/PAUSE | `C` | CUE (held, as on the deck) |
+| `↑` / `↓` | turn the browse knob | `PgUp` / `PgDn` | ten rows at a time |
+| `Enter` / `→` | push the knob: open a folder, load a track | `Esc` / `←` / `Backspace` | BACK |
+| `,` / `.` | TRACK previous / next | `[` / `]` | SEARCH back / forward (held) |
+| `-` / `=` | nudge slower / faster while held (`Shift` for more) | `Q` / `W` / `E` | LOOP IN / OUT / RELOOP |
+| `B` | BROWSE | `M` | MENU (UTILITY) |
+| `U` / `L` / `R` / `D` | USB / LINK / REKORDBOX / DISC source | `T` / `I` | TAG LIST / INFO |
+| `S` | SYNC | `A` | MASTER |
+| `K` | MASTER TEMPO | `P` | TEMPO RANGE |
+| `V` | SLIP | `Z` | REVERSE |
+| `J` | JOG MODE | | |
+
+The mouse is the touch screen. A typical start: `U` (or click the source), `↓`
+to a track, `Enter` to load, `Space` to play.
 
 ## 🎚️ MIDI controllers
 

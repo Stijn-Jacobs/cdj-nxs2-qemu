@@ -38,6 +38,9 @@ export FILMN="${FILMN:-5}" MOTION_MS="${MOTION_MS:-1800}"
 # since separate vvfat models writing one directory corrupt each other.
 # MEDIA_MODE=img already gives each run its own image, so it defaults to 0 there.
 PRIVATE_MEDIA="${PRIVATE_MEDIA:-$([ "${MEDIA_MODE:-rw}" = img ] && echo 0 || echo 1)}"
+# An image run never reads the folder, so copying it (83 MB, ~13 s) is waste
+# even when a caller asks for private media.
+[ "${MEDIA_MODE:-rw}" = img ] && PRIVATE_MEDIA=0
 SRC_MEDIA="${MEDIADIR:-$CDJ_ROOT/extract/usbmedia3}"
 
 # A warm-up wave that is thrown away: the first $JOBS runs of a batch tend to

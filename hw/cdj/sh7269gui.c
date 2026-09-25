@@ -2246,9 +2246,19 @@ static void lcd_invalidate(void *opaque)
 
 /*
  * Host keyboard to front panel. This board owns the window, but the panel is
- * on MAIN, so keys are forwarded over the socket in cdj_panelkeys.h.
- * Unmapped bits can be probed by hand: [ and ] pick a report byte, 1-8 press
- * its bits.
+ * on MAIN, so keys are forwarded over the socket in cdj_panelkeys.h. Each
+ * window drives its own deck. The report bits are the ones midi/cdj_actions.py
+ * lists as confirmed unless marked otherwise; keep the two tables in step.
+ *
+ *   Space play/pause    C cue           Q/W/E loop in/out/reloop
+ *   Up/Down browse      PgUp/PgDn x10   Enter/Right load/enter  Left/Esc/Bksp back
+ *   , .  track -/+      [ ]  search -/+ (held)
+ *   - =  nudge slower/faster while held, Shift for a harder nudge
+ *   B browse  M menu  U usb  L link  R rekordbox  D disc  T tag list  I info
+ *   S sync  A master  K master tempo  P tempo range  V slip  J jog mode  Z reverse
+ *
+ * CDJ_PANEL_SWEEP=1 adds a probe for unnamed bits: F9/F10 pick a report
+ * byte, F1-F8 press its bits.
  */
 typedef struct {
     int qcode;
@@ -2258,32 +2268,117 @@ typedef struct {
 } CdjGuiKey;
 
 static const CdjGuiKey cdj_gui_keys[] = {
-    /* Confirmed from the panel decoder. */
-    { Q_KEY_CODE_B,    0x14, 0x01, "BROWSE",    true  },
-    { Q_KEY_CODE_M,    0x14, 0x08, "MENU",      true  },
-    { Q_KEY_CODE_U,    0x13, 0x04, "USB",       true  },
-    /* Guessed from the front panel layout; unverified. */
-    { Q_KEY_CODE_R,    0x13, 0x01, "REKORDBOX", false },
-    { Q_KEY_CODE_L,    0x13, 0x02, "LINK",      false },
-    { Q_KEY_CODE_S,    0x13, 0x08, "SD",        false },
-    { Q_KEY_CODE_D,    0x13, 0x10, "DISC",      false },
-    { Q_KEY_CODE_T,    0x14, 0x02, "TAG",       false },
-    { Q_KEY_CODE_I,    0x14, 0x04, "INFO",      false },
-    { Q_KEY_CODE_ESC,  0x14, 0x10, "BACK",      false },
-    /* From the firmware's key-name table: 0x12:0x10 is ScanRev, Cue is
-     * 0x10:0x02, PlayPause 0x10:0x01. */
-    { Q_KEY_CODE_C,    0x12, 0x10, "ScanRev (was mislabelled CUE)", true },
-    { Q_KEY_CODE_SPC,  0x10, 0x01, "PlayPause", true  },
-    { Q_KEY_CODE_X,    0x10, 0x02, "Cue",       true  },
-    { Q_KEY_CODE_P,    0x12, 0x02, "TEMPO RANGE", true },
-    { Q_KEY_CODE_J,    0x11, 0x02, "BEAT JUMP", true  },
+    { Q_KEY_CODE_SPC,           0x10, 0x01, "PLAY/PAUSE",   true  },
+    { Q_KEY_CODE_C,             0x10, 0x02, "CUE",          true  },
+    { Q_KEY_CODE_E,             0x10, 0x04, "RELOOP/EXIT",  true  },
+    { Q_KEY_CODE_W,             0x10, 0x08, "LOOP OUT",     true  },
+    { Q_KEY_CODE_Q,             0x10, 0x10, "LOOP IN",      true  },
+    { Q_KEY_CODE_RET,           0x11, 0x01, "ROTARY PUSH",  true  },
+    { Q_KEY_CODE_KP_ENTER,      0x11, 0x01, "ROTARY PUSH",  true  },
+    { Q_KEY_CODE_RIGHT,         0x11, 0x01, "ROTARY PUSH",  true  },
+    { Q_KEY_CODE_V,             0x11, 0x02, "SLIP",         true  },
+    { Q_KEY_CODE_Z,             0x11, 0x04, "DIRECTION REV", true },
+    { Q_KEY_CODE_COMMA,         0x12, 0x04, "TRACK -",      true  },
+    { Q_KEY_CODE_DOT,           0x12, 0x08, "TRACK +",      true  },
+    { Q_KEY_CODE_BRACKET_LEFT,  0x12, 0x10, "SEARCH -",     true  },
+    { Q_KEY_CODE_BRACKET_RIGHT, 0x12, 0x20, "SEARCH +",     true  },
+    { Q_KEY_CODE_R,             0x13, 0x01, "REKORDBOX",    false },
+    { Q_KEY_CODE_L,             0x13, 0x02, "LINK",         false },
+    { Q_KEY_CODE_U,             0x13, 0x04, "USB",          true  },
+    { Q_KEY_CODE_D,             0x13, 0x10, "DISC",         false },
+    { Q_KEY_CODE_B,             0x14, 0x01, "BROWSE",       true  },
+    { Q_KEY_CODE_T,             0x14, 0x02, "TAG LIST",     true  },
+    { Q_KEY_CODE_I,             0x14, 0x04, "INFO",         true  },
+    { Q_KEY_CODE_M,             0x14, 0x08, "MENU",         true  },
+    { Q_KEY_CODE_ESC,           0x14, 0x10, "BACK",         true  },
+    { Q_KEY_CODE_LEFT,          0x14, 0x10, "BACK",         true  },
+    { Q_KEY_CODE_BACKSPACE,     0x14, 0x10, "BACK",         true  },
+    { Q_KEY_CODE_J,             0x15, 0x01, "JOG MODE",     false },
+    { Q_KEY_CODE_S,             0x15, 0x02, "SYNC",         true  },
+    { Q_KEY_CODE_A,             0x15, 0x04, "MASTER",       false },
+    { Q_KEY_CODE_P,             0x15, 0x08, "TEMPO RANGE",  true  },
+    { Q_KEY_CODE_K,             0x15, 0x10, "MASTER TEMPO", true  },
 };
 
-static unsigned cdj_gui_sweep_off = 0x15;   /* byte under keys 1-8 */
+#define CDJ_GUI_ROTARY      0x0E        /* select knob counter byte          */
+
+/*
+ * Nudge: a platter turned by hand. The firmware's jog engine takes motion
+ * from the rolling position counter in report bytes 8-9 and speed from the
+ * pulse period in bytes 10-11 (27778 / P = platter speed %), so while the key
+ * is held the counter is stepped and the period held. The counter has to move
+ * at least 42 per 30 firmware passes before the bend engages; 2000 pulses/s
+ * clears that. P 278 bent the deck to 1.06x, P 139 to 1.18x (graph
+ * real-dsp-jog-path).
+ */
+#define CDJ_NUDGE_TICK_MS   40
+#define CDJ_NUDGE_STEP      80
+#define CDJ_NUDGE_PERIOD    278
+#define CDJ_NUDGE_HARD      139
+
+static struct {
+    QEMUTimer *timer;
+    const char *sock;
+    int dir;                    /* -1 slower, +1 faster, 0 idle */
+    bool hard;
+    uint16_t count;
+} cdj_nudge;
+
+static void cdj_nudge_send(void)
+{
+    unsigned period = cdj_nudge.dir ? (cdj_nudge.hard ? CDJ_NUDGE_HARD
+                                                      : CDJ_NUDGE_PERIOD) : 0;
+    unsigned bits = 0x80 | (cdj_nudge.dir > 0 ? 0x40 : 0);
+
+    if (cdj_nudge.dir) {
+        cdj_nudge.count += cdj_nudge.dir * CDJ_NUDGE_STEP;
+        cdj_panelkey_send_op(cdj_nudge.sock, 0x08, cdj_nudge.count >> 8, 0, "lvl");
+        cdj_panelkey_send_op(cdj_nudge.sock, 0x09, cdj_nudge.count & 0xff, 0,
+                             "lvl");
+    }
+    cdj_panelkey_send_op(cdj_nudge.sock, 0x0A, period >> 8, 0, "lvl");
+    cdj_panelkey_send_op(cdj_nudge.sock, 0x0B, period & 0xff, 0, "lvl");
+    if (cdj_nudge.dir) {
+        cdj_panelkey_send_op(cdj_nudge.sock, 0x0F, bits, CDJ_NUDGE_TICK_MS * 3,
+                             "or");
+    }
+}
+
+static void cdj_nudge_tick(void *opaque)
+{
+    if (!cdj_nudge.dir) {
+        return;
+    }
+    cdj_nudge_send();
+    timer_mod(cdj_nudge.timer, qemu_clock_get_ms(QEMU_CLOCK_REALTIME)
+                               + CDJ_NUDGE_TICK_MS);
+}
+
+static void cdj_nudge_set(const char *sock, int dir, bool hard)
+{
+    if (dir == cdj_nudge.dir && hard == cdj_nudge.hard) {
+        return;
+    }
+    if (!cdj_nudge.timer) {
+        cdj_nudge.timer = timer_new_ms(QEMU_CLOCK_REALTIME, cdj_nudge_tick, NULL);
+    }
+    cdj_nudge.sock = sock;
+    cdj_nudge.dir = dir;
+    cdj_nudge.hard = hard;
+    if (dir) {
+        cdj_nudge_tick(NULL);
+    } else {
+        timer_del(cdj_nudge.timer);
+        cdj_nudge_send();       /* period 0: the platter has stopped */
+    }
+}
+
+static unsigned cdj_gui_sweep_off = 0x15;   /* byte under F1-F8 */
 
 static void cdj_gui_key_event(DeviceState *dev, QemuConsole *src,
                               InputEvent *evt)
 {
+    static bool shift, nudge_down[2];
     const char *sock = getenv(CDJ_PANELKEY_ENV);
     InputKeyEvent *k = evt->u.key.data;
     int qcode = qemu_input_key_value_to_qcode(k->key);
@@ -2292,8 +2387,22 @@ static void cdj_gui_key_event(DeviceState *dev, QemuConsole *src,
     if (!sock) {
         return;
     }
-    /* Mapped keys send hold on key-down and rel on key-up; host auto-repeat
-     * is swallowed. */
+    if (qcode == Q_KEY_CODE_SHIFT || qcode == Q_KEY_CODE_SHIFT_R) {
+        shift = k->down;
+        if (cdj_nudge.dir) {
+            cdj_nudge_set(sock, cdj_nudge.dir, shift);
+        }
+        return;
+    }
+    if (qcode == Q_KEY_CODE_MINUS || qcode == Q_KEY_CODE_EQUAL) {
+        nudge_down[qcode == Q_KEY_CODE_EQUAL] = k->down;
+        cdj_nudge_set(sock, nudge_down[1] - nudge_down[0], shift);
+        return;
+    }
+    /*
+     * Held keys send hold on key-down and rel on key-up, so a key is down as
+     * long as the finger is; host auto-repeat is swallowed.
+     */
     for (i = 0; i < ARRAY_SIZE(cdj_gui_keys); i++) {
         static bool held[ARRAY_SIZE(cdj_gui_keys)];
 
@@ -2306,50 +2415,41 @@ static void cdj_gui_key_event(DeviceState *dev, QemuConsole *src,
         held[i] = k->down;
         cdj_panelkey_send_op(sock, cdj_gui_keys[i].off, cdj_gui_keys[i].mask,
                              0, k->down ? "hold" : "rel");
-        info_report("panel key: %s %s (report[0x%02x] %s 0x%02x)%s",
-                    cdj_gui_keys[i].name, k->down ? "DOWN" : "UP",
-                    cdj_gui_keys[i].off, k->down ? "|=" : "&= ~",
-                    cdj_gui_keys[i].mask,
-                    cdj_gui_keys[i].confirmed ? "" : "   [UNVERIFIED]");
+        if (k->down) {
+            info_report("panel key: %s (report[0x%02x] 0x%02x)%s",
+                        cdj_gui_keys[i].name, cdj_gui_keys[i].off,
+                        cdj_gui_keys[i].mask,
+                        cdj_gui_keys[i].confirmed ? "" : "   [unverified]");
+        }
         return;
     }
     if (!k->down) {
         return;                         /* the rest are taps, not held keys */
     }
-    /*
-     * Select knob: Up/Down turn it, Enter pushes it. CDJ_PANEL_ROTARY=<off>
-     * and CDJ_PANEL_ROTPUSH=<off>:<mask> place them; the default is the sweep
-     * byte.
-     */
-    if (qcode == Q_KEY_CODE_UP || qcode == Q_KEY_CODE_DOWN) {
-        const char *e = getenv("CDJ_PANEL_ROTARY");
-        unsigned off = e ? (unsigned)strtoul(e, NULL, 0) : cdj_gui_sweep_off;
+    /* The select knob repeats with the host's auto-repeat, like a turn. */
+    if (qcode == Q_KEY_CODE_UP || qcode == Q_KEY_CODE_DOWN ||
+        qcode == Q_KEY_CODE_PGUP || qcode == Q_KEY_CODE_PGDN) {
+        int step = (qcode == Q_KEY_CODE_PGUP || qcode == Q_KEY_CODE_PGDN)
+                   ? 10 : 1;
 
-        cdj_panelkey_send_op(sock, off, qcode == Q_KEY_CODE_UP ? 1 : -1, 0,
-                             "rot");
-        return;
-    }
-    if (qcode == Q_KEY_CODE_RET || qcode == Q_KEY_CODE_KP_ENTER) {
-        const char *e = getenv("CDJ_PANEL_ROTPUSH");
-        unsigned off = cdj_gui_sweep_off, mask = 0x01;
-
-        if (e) {
-            sscanf(e, "%i:%i", &off, &mask);
+        if (qcode == Q_KEY_CODE_UP || qcode == Q_KEY_CODE_PGUP) {
+            step = -step;
         }
-        cdj_panelkey_send(sock, off, mask, 150);
-        info_report("panel key: SELECT push (report[0x%02x] |= 0x%02x)%s",
-                    off, mask, e ? "" : "   [sweep byte -- not the real one]");
+        cdj_panelkey_send_op(sock, CDJ_GUI_ROTARY, step, 0, "rot");
         return;
     }
-    if (qcode == Q_KEY_CODE_BRACKET_LEFT || qcode == Q_KEY_CODE_BRACKET_RIGHT) {
-        cdj_gui_sweep_off += (qcode == Q_KEY_CODE_BRACKET_RIGHT) ? 1 : -1;
+    if (!getenv("CDJ_PANEL_SWEEP")) {
+        return;
+    }
+    if (qcode == Q_KEY_CODE_F9 || qcode == Q_KEY_CODE_F10) {
+        cdj_gui_sweep_off += (qcode == Q_KEY_CODE_F10) ? 1 : -1;
         cdj_gui_sweep_off &= 0x1F;
-        info_report("panel sweep: byte is now 0x%02x (keys 1-8 press its bits)",
+        info_report("panel sweep: byte is now 0x%02x (F1-F8 press its bits)",
                     cdj_gui_sweep_off);
         return;
     }
-    if (qcode >= Q_KEY_CODE_1 && qcode <= Q_KEY_CODE_8) {
-        unsigned mask = 1u << (qcode - Q_KEY_CODE_1);
+    if (qcode >= Q_KEY_CODE_F1 && qcode <= Q_KEY_CODE_F8) {
+        unsigned mask = 1u << (qcode - Q_KEY_CODE_F1);
 
         cdj_panelkey_send(sock, cdj_gui_sweep_off, mask, 150);
         info_report("panel sweep: report[0x%02x] |= 0x%02x",
@@ -2369,10 +2469,9 @@ static void cdj_gui_keys_init(void)
         return;
     }
     qemu_input_handler_register(NULL, &cdj_gui_kbd);
-    info_report("sh7269gui: front-panel keys live -- "
-                "UP/DOWN turn the select knob, ENTER pushes it;  "
-                "B browse  M menu  U usb  ESC back;  "
-                "[ ] pick a sweep byte, 1-8 press its bits");
+    info_report("sh7269gui: keyboard live -- Space play/pause, C cue, "
+                "Up/Down browse, Enter load, Esc back, - = nudge "
+                "(emulator/README.md lists every key)");
 }
 
 /*

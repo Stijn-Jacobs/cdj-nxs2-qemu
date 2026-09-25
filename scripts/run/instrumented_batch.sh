@@ -44,6 +44,8 @@ fi
 export CDJ_FWLOG="${LOGPCS:-0x0853410C,0x084933F4}"
 export CDJ_FWTRACE="${TAPS:-0x082FBA6E,0x082FBAB6,0x082FBAD8,0x082FBE56,0x082FC216,0x082FFEBC,0x082FFEC0,0x0842B218,0x0842A160}"
 export MAIN_MON=1 RAMSNAP="${SNAP:-0x09947000:0x01713000}"
+# SNAP=none takes no snapshots (each memsave holds the machine while it copies).
+[ "$RAMSNAP" = none ] && RAMSNAP=""
 # Defaults only, so a caller's key is the key that gets pressed.
 export KEYBYTE="${KEYBYTE:-0x10}" KEYBITS="${KEYBITS:-0x01}"
 # RETRIES: load retries in load_track.py (default 0).

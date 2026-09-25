@@ -154,7 +154,9 @@ def _read_to_prompt(s, timeout):
         if not part:
             return False
         buf += part
-        if buf.rstrip(b"\r\n").endswith(_PROMPT.rstrip()):
+        # The prompt ends in a space, so strip all whitespace, not just CR/LF:
+        # the old test never matched and every grab sat out both timeouts.
+        if buf.rstrip().endswith(_PROMPT.rstrip()):
             return True
     return False
 
@@ -398,11 +400,18 @@ if os.environ.get("NOMODAL"):
 elif wait_modal(True, t_end, "m"):
     print("[%s] modal up at %.2f s" % (TAG, vnow() - (t_end - MAXWAIT)))
     # Deliberately NOT pressing MENU -- see the module docstring.
-    if wait_modal(False, t_end, "d"):
+    # MODAL_CLEAR=<s> caps the wait for it to clear. On the real-DSP rig what
+    # trips the detector is the browse list MENU opened, with its artist
+    # pop-up, which never clears; the uncapped wait burnt ~30 s a run.
+    _clear = os.environ.get("MODAL_CLEAR")
+    _clear_end = min(t_end, vnow() + float(_clear)) if _clear else t_end
+    if wait_modal(False, _clear_end, "d"):
         print("[%s] modal self-dismissed at %.2f s"
               % (TAG, vnow() - (t_end - MAXWAIT)))
     else:
-        print("[%s] modal never cleared -- run is suspect" % TAG)
+        print("[%s] modal never cleared -- run is suspect%s"
+              % (TAG, " (MODAL_CLEAR cap; on the real-DSP rig this is the "
+                      "browse list, which is expected)" if _clear else ""))
 else:
     # Not fatal, but the run should be discarded.
     print("[%s] MODAL NEVER APPEARED -- anchor did not fire" % TAG)
