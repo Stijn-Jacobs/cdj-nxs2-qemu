@@ -15,11 +15,9 @@
  * the port directly. UDP rather than AF_UNIX because Windows has no datagram
  * AF_UNIX.
  *
- * Known report bits: BROWSE 0x14/0x01, MENU 0x14/0x08, USB 0x13/0x04; the
- * select knob is the rotary counter at 0x0E and its push 0x11/0x01 (the full
- * catalogue is midi/cdj_actions.py). CDJ_PANEL_ROTARY=<off> and
- * CDJ_PANEL_ROTPUSH=<off>:<mask> move the display window's knob keys
- * elsewhere.
+ * Known report bits: BROWSE 0x14/0x01, MENU 0x14/0x08, USB 0x13/0x04.
+ * CDJ_PANEL_ROTARY=<off> and CDJ_PANEL_ROTPUSH=<off>:<mask> set the rotary
+ * byte and push bit, which are not yet identified.
  */
 #ifndef CDJ_PANELKEYS_H
 #define CDJ_PANELKEYS_H
