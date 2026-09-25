@@ -3226,6 +3226,95 @@ static void gui_mpoke_init(void)
               qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 2 * 1000000);
 }
 
+/*
+ * CDJ_GUI_CLOCK_DT=<ms>: how often the deck screen's REMAIN/elapsed clock is
+ * repainted (default 0: the firmware's own pace).
+ *
+ * The UI task (0x1C001430) times each frame's drawing, excluding its 15 ms
+ * sleep, and stores that dt at 0x1C048024. Two pacers add dt to an
+ * accumulator and act only once the sum passes 42 ms:
+ *   - while a track plays (*(0x0E5B82A0) == 2), gui_draw_layer_upload
+ *     (0x1C002CE6) posts the deck-screen redraw message 0x16 that way;
+ *   - otherwise the clock widget (0x1C00849E) repaints the time that way.
+ * On the real board a frame's drawing is slow enough for that to be every
+ * frame or two. The emulated board draws in a few ms, so the clock was
+ * repainted about three times a second while the waveform ran at ~45.
+ *
+ * With the knob both pacers add a fixed <ms> per frame instead: their dt
+ * load becomes `mov #<ms>,rN`. 22 repaints every second frame, 43 every
+ * frame. The frame-budget readers of dt keep the measured value.
+ */
+typedef struct GuiClockSite {
+    uint32_t pc;
+    uint16_t orig, before, after;   /* the dt load and its two neighbours */
+    uint8_t reg;                    /* destination of the load */
+} GuiClockSite;
+
+static const GuiClockSite gui_clock_sites[] = {
+    /* mov.l @r11,r13 between mov.l @(pc),r5 and mov #0x2a,r14 */
+    { 0x1C002D84, 0x6DB2, 0xD56F, 0xEE2A, 13 },
+    /* mov.l @r4,r7 between mov #0x2a,r12 and add r7,r2 */
+    { 0x1C0084C6, 0x6742, 0xEC2A, 0x327C, 7 },
+};
+
+static QEMUTimer *gui_clock_dt_timer;
+static uint8_t gui_clock_dt_ms;
+
+static uint16_t gui_ld16(uint32_t addr)
+{
+    uint8_t b[2];
+
+    cpu_physical_memory_read(addr, b, 2);
+    return (uint16_t)(b[0] << 8 | b[1]);        /* the guest is big-endian */
+}
+
+/* Patch only the exact instruction sequence, so a different image is left
+ * alone; re-check periodically in case the firmware reloads its code. */
+static void gui_clock_dt_apply(void *opaque)
+{
+    static bool announced[ARRAY_SIZE(gui_clock_sites)];
+    static bool mismatch[ARRAY_SIZE(gui_clock_sites)];
+    unsigned i;
+
+    for (i = 0; i < ARRAY_SIZE(gui_clock_sites); i++) {
+        const GuiClockSite *c = &gui_clock_sites[i];
+        uint16_t insn = 0xE000 | c->reg << 8 | gui_clock_dt_ms;  /* mov #imm */
+
+        if (gui_ld16(c->pc) == c->orig && gui_ld16(c->pc - 2) == c->before &&
+            gui_ld16(c->pc + 2) == c->after) {
+            uint8_t b[2] = { insn >> 8, insn & 0xFF };
+
+            cpu_physical_memory_write(c->pc, b, 2);
+            if (!announced[i]) {
+                announced[i] = true;
+                info_report("sh7269gui: clock pacer at 0x%08x counts %u ms "
+                            "per frame (CDJ_GUI_CLOCK_DT)", c->pc,
+                            gui_clock_dt_ms);
+            }
+        } else if (!announced[i] && !mismatch[i]) {
+            mismatch[i] = true;
+            warn_report("sh7269gui: CDJ_GUI_CLOCK_DT: unexpected code at "
+                        "0x%08x (0x%04x) -- not patched", c->pc,
+                        gui_ld16(c->pc));
+        }
+    }
+    timer_mod(gui_clock_dt_timer,
+              qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 500 * 1000000LL);
+}
+
+static void gui_clock_dt_init(void)
+{
+    const char *e = getenv("CDJ_GUI_CLOCK_DT");
+    long ms = e ? strtol(e, NULL, 0) : 0;
+
+    if (ms <= 0) {
+        return;
+    }
+    gui_clock_dt_ms = MIN(ms, 127);             /* mov #imm is signed 8-bit */
+    gui_clock_dt_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, gui_clock_dt_apply,
+                                      NULL);
+    gui_clock_dt_apply(NULL);
+}
 
 static void sh7269gui_init(MachineState *machine)
 {
@@ -3374,6 +3463,7 @@ static void sh7269gui_init(MachineState *machine)
         error_report("sh7269gui: load table produced no chunks");
         exit(1);
     }
+    gui_clock_dt_init();
 
     /*
      * CDJ_GUI_CS0_FLASH=1: also place the image in CS0 at 0x30000, its flash

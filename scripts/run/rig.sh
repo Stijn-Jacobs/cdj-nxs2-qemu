@@ -159,6 +159,10 @@ export CDJ_SPILINK_FRESH="${CDJ_SPILINK_FRESH:-16}"
 # A receive that finds the queue empty gets the newest heartbeat again after
 # 20 ms; a starved GUI link driver gives up and the display freezes.
 export CDJ_GUI_LINK_IDLE_MS="${CDJ_GUI_LINK_IDLE_MS:-20}"
+# The display firmware repaints REMAIN once its frames' measured drawing time
+# adds up to 42 ms; the emulated board draws so fast that this was ~3 times a
+# second. Count each frame as 43 ms: a repaint every frame. 0 = firmware.
+export CDJ_GUI_CLOCK_DT="${CDJ_GUI_CLOCK_DT:-43}"
 # Diagnostic re-read and scan of every DMA'd display frame; off.
 export CDJ_GUI_FRAME_SCAN="${CDJ_GUI_FRAME_SCAN:-0}"
 # TOUCH=1 (default): a click/drag in the display window, or a 'touch'/'tap' on
