@@ -45,11 +45,19 @@ rows = []
 slots = {}
 # LANDN's page says "4, Load", copied from a neighbouring page; LAND is single-cycle.
 OVERRIDE_SLOTS = {"LANDN": 0}
+# Section 4.93 repeats the heading "DINTHSP", but its title ("Convert 32-bit
+# Signed Integer ... Packed Signed 32-bit") and its Execution block
+# (sp(src2_e) -> dst_e, sp(src2_o) -> dst_o) are DINTSP, the signed twin of
+# 4.95 DINTSPU. Keeping the heading made its opfields decode as the 16-bit
+# DINTHSP, which broke the DSPINT/DINTSP round() pairs the firmware uses.
+OVERRIDE_NAME = {"4.93": "DINTSP"}
+# DINTSP/DINTSPU read a register pair (src2_e, src2_o); the operand rows say "xop".
+OVERRIDE_TYPES = {("DINTSP", "xop"): "xdwop", ("DINTSPU", "xop"): "xdwop"}
 for line in open(sys.argv[1], errors="replace"):
     s = " ".join(line.split())
-    m = re.match(r"^4\.\d+ ([A-Z][A-Z0-9]+)$", s)
+    m = re.match(r"^(4\.\d+) ([A-Z][A-Z0-9]+)$", s)
     if m:
-        name = m.group(1)
+        name = OVERRIDE_NAME.get(m.group(1), m.group(2))
         continue
     m = re.match(r"^Delay Slots (\d+)", s)
     if m and name and name not in slots:
@@ -64,6 +72,10 @@ for line in open(sys.argv[1], errors="replace"):
                 form = (fid, width)
                 break
         continue
+    # DINTSPU's operand rows are printed "src2 ,dst  xop, dwdst". Only its rows
+    # are tidied: doing it everywhere admits rows the table never had.
+    if name == "DINTSPU":
+        s = re.sub(r" ?, ?", ",", s)
     m = re.match(r"^(\S+) (\S+) (\.\w+(?: or \.\w+)?) ([01]+)$", s)
     if m and name and form:
         fields, types, unit, opf = m.groups()
@@ -71,7 +83,7 @@ for line in open(sys.argv[1], errors="replace"):
             print("/* skipped %s %s: opfield %s is not %d bits */" % (name, form[0], opf, form[1]))
             continue
         fl = fields.split(",")
-        tl = types.split(",")
+        tl = [OVERRIDE_TYPES.get((name, t), t) for t in types.split(",")]
         if len(fl) != len(tl) or any(t not in TYPES for t in tl):
             print("/* skipped %s %s: operands %s %s */" % (name, form[0], fields, types))
             continue

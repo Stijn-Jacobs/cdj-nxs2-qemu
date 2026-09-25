@@ -68,7 +68,7 @@ enum hid {
     H_CMPYSP,
     H_MPYU2, H_LAND, H_LANDN, H_LOR, H_DINTHSP, H_DINTHSPU, H_DSPINT, H_DSADD2,
     H_DAVGNR2, H_UNPKH2, H_DSHL2, H_DCMPGT2, H_DMPY2, H_QSMPY32R1,
-    H_SHL2, H_DPACKL4, H_DCCMPYR1,
+    H_SHL2, H_DPACKL4, H_DCCMPYR1, H_DINTSP, H_DINTSPU,
     H_COUNT
 };
 
@@ -157,6 +157,7 @@ static const struct { const char *name; uint16_t h; } hmap[] = {
     { "dshl2", H_DSHL2 }, { "dcmpgt2", H_DCMPGT2 }, { "dmpy2", H_DMPY2 },
     { "qsmpy32r1", H_QSMPY32R1 },
     { "shl2", H_SHL2 }, { "dpackl4", H_DPACKL4 }, { "dccmpyr1", H_DCCMPYR1 },
+    { "dintsp", H_DINTSP }, { "dintspu", H_DINTSPU },
 };
 
 /* ------------------------------------------------------------------------ */
@@ -2373,6 +2374,18 @@ static void exec_insn(c66x_core *c, c66x_insn *in, xctx *x)
         if (rm) fesetround(fe_mode[rm]);
         float e = h == H_DINTHSP ? (float)lsb16s(v[0]) : (float)lsb16u(v[0]);
         float o = h == H_DINTHSP ? (float)msb16s(v[0]) : (float)msb16u(v[0]);
+        if (rm) fesetround(FE_TONEAREST);
+        W(1, ((uint64_t)f2u(o) << 32) | f2u(e));
+        return;
+    }
+    case H_DINTSP: case H_DINTSPU: {
+        /* SPRUGH7 4.93 (printed under the heading DINTHSP) and 4.95: each
+         * 32-bit word of the src2 pair to single precision. */
+        unsigned rm = rmode(c, in);
+        if (rm) fesetround(fe_mode[rm]);
+        uint32_t w_e = (uint32_t)v[0], w_o = (uint32_t)(v[0] >> 32);
+        float e = h == H_DINTSP ? (float)(int32_t)w_e : (float)w_e;
+        float o = h == H_DINTSP ? (float)(int32_t)w_o : (float)w_o;
         if (rm) fesetround(FE_TONEAREST);
         W(1, ((uint64_t)f2u(o) << 32) | f2u(e));
         return;
