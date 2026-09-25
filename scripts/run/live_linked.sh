@@ -40,7 +40,7 @@ if [ "${SNIFF:-0}" = "1" ]; then
     echo "[$TAG] capturing the segment -> /tmp/j2-$TAG.pcap"
 fi
 
-# shellcheck disable=SC2064  -- KILL is wanted expanded NOW, not at trap time.
+# shellcheck disable=SC2064 # KILL is wanted expanded NOW, not at trap time.
 trap "kill $KILL 2>/dev/null" EXIT
 
 GROUP="$GROUP" NDECKS="$N" bash "$HERE/rig.sh" "$TAG" "${FRAMES:-240}"

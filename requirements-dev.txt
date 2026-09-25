@@ -1,0 +1,14 @@
+# What the unit tests need (tests/, run by .github/workflows/tests.yml):
+#
+#   python -m pip install -r requirements-dev.txt
+#   python -m pytest tests
+#
+# No firmware, no QEMU build and no MIDI device are needed. mido is the pure
+# Python half of the MIDI stack; python-rtmidi (the device backend in
+# requirements.txt) is deliberately left out, since the tests never open a port.
+pytest>=7
+mido>=1.2
+Pillow>=9.0
+pyfatfs>=1.0
+# pyfatfs imports pkg_resources through fs; see requirements.txt.
+setuptools<81

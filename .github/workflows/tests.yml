@@ -1,0 +1,74 @@
+# Unit tests for the parts of the emulator that run without firmware or a QEMU
+# build: the Python tools, the C66x DSP core and SoC models, and a lint pass
+# over every shell and Python script.
+name: tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12"]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Install test dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: Run the tests
+        run: python -m pytest tests -ra
+
+  c66x:
+    name: C66x core and SoC models
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install glib
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libglib2.0-dev
+      - name: C66x-only instructions against the manual's worked examples
+        run: make -C hw/cdj/c6x -j2 O="$RUNNER_TEMP/c6x" ext-test
+      - name: SoC model register sequences
+        run: make -C hw/cdj/c6x -f soc.mk -j2 O="$RUNNER_TEMP/c6x-soc" test
+
+  lint:
+    name: shell and python syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: bash -n
+        run: |
+          status=0
+          while IFS= read -r -d '' f; do
+            bash -n "$f" || status=1
+          done < <(git ls-files -z '*.sh')
+          exit $status
+      - name: shellcheck
+        # Warnings and errors, less a baseline: SC2034 (variables read by the
+        # scripts that source the file), SC2155 (local x=$(...)), and
+        # SC1072/SC1073 (a disable directive with a trailing "--" note, which
+        # shellcheck cannot parse).
+        run: |
+          command -v shellcheck || sudo apt-get install -y shellcheck
+          shellcheck --version
+          git ls-files -z '*.sh' | xargs -0 shellcheck --shell=bash --severity=warning \
+            --exclude=SC2034,SC2155,SC1072,SC1073
+      - name: py_compile
+        run: python -m compileall -q .

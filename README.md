@@ -362,3 +362,26 @@ describes the files' licences; it is not legal advice.
 
 [QEMU](https://www.qemu.org/), which this machine plugs into; GNU binutils, for
 the TI C6x opcode tables; [minimp3](https://github.com/lieff/minimp3).
+
+## ✅ Tests
+
+The tools that run without firmware or a QEMU build have unit tests in
+`tests/`: the MIDI bridge, actions, LEDs and shipped mappings, the relay and
+socket helpers, the firmware and USB-image builders, the DHCP and Pro DJ Link
+packet code, and the playhead scorer, all on synthetic inputs.
+
+```sh
+python -m pip install -r requirements-dev.txt
+python -m pytest tests
+```
+
+The C66x DSP core and SoC models have their own C tests (needs gcc, make and
+glib's development files):
+
+```sh
+make -C hw/cdj/c6x O=/tmp/c6x ext-test
+make -C hw/cdj/c6x -f soc.mk O=/tmp/c6x-soc test
+```
+
+`.github/workflows/tests.yml` runs both on every push and pull request, plus
+`bash -n`, shellcheck and a compile check over every script.
