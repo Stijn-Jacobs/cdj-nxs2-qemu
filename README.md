@@ -242,6 +242,75 @@ Each window drives its own deck.
 The mouse is the touch screen. A typical start: `U` (or click the source), `↓`
 to a track, `Enter` to load, `Space` to play.
 
+<a id="virtual-deck"></a>
+
+## 🎛️ The virtual deck app
+
+<img src="docs/img/app-deck.png" alt="The virtual deck app: a drawn NXS2-style player with the emulated screen in it and, beside it, the same screen at full size" width="900">
+
+```sh
+./start.sh --app          # or CDJ_APP=1 in cdj.conf; --no-app for the plain window
+```
+
+Instead of a bare screen, a window with the whole player drawn around it:
+source and browse keys, the rotary selector, hot cue pads, the loop section,
+CUE and PLAY, a jog with its centre display, the tempo fader. Everything on
+it is drawn by the app itself; no photo, logo or artwork of the real unit is
+used. With two decks (`CDJ_DECKS=2`) both stand side by side in one window.
+Closing the window, or Ctrl-C, stops the decks.
+
+| you do | the deck gets |
+|---|---|
+| click a key | the key, held for as long as the mouse button is |
+| drag the jog round | the platter turning: the rim bends the track, the top plate is touch-sensitive |
+| mouse wheel over the jog | a nudge |
+| wheel over (or drag) the rotary selector, click its centre | turn, push |
+| drag the tempo fader | the tempo slider |
+| click the screen | a touch |
+| type | the [keyboard](#keyboard) map, to the deck under the mouse |
+| `F2` | the screen beside the face at full size, on/off |
+| `F3`, or right-click the screen | the screen in a window of its own (resizable, `F11` full screen) |
+
+The lamps are the deck's own: PLAY, CUE, SLIP, MASTER TEMPO and the jog ring
+light and blink from MAIN's panel-lamp frame, and the jog's centre display
+turns with the firmware's own pointer. Keys whose report bit is decoded from
+the firmware but not yet tried on a running deck carry a small amber ring;
+keys with no known report bit (hot cues, BANK, QUANTIZE, TRACK FILTER, SHORT
+CUT, the vinyl speed knobs, the needle strip) are drawn but do nothing.
+Hovering a control says which is which in the status line.
+
+**The screen, and why it is beside the deck.** The NXS2's 7-inch screen is a
+small part of a tall deck, so a face that fits a monitor shows it at about
+half size. When the monitor has room the app therefore docks each deck's
+screen beside the face at its own 800 x 480 (`--screen dock|face|window|auto`,
+or `CDJ_APP_SCREEN`), and `F3` gives it a window of its own.
+
+**How it is built.** Python's own tkinter and Pillow, which the rig already
+needs, so nothing new to install on most systems (Debian/Ubuntu: `sudo apt
+install python3-tk python3-pil.imagetk`; MSYS2: `pacman -S
+mingw-w64-x86_64-tk`; on macOS Homebrew's `python-tk`). The face is drawn once
+per window size with anti-aliasing and every lamp is a small pre-drawn image,
+so a lamp or the jog costs almost nothing per frame and the time goes to the
+screen. pygame or PySide6 would add a dependency for no gain: Tk puts an
+800 x 480 frame on screen in about 3.5 ms, so the limit is how fast the frames
+arrive, not the toolkit. The app talks to the deck three ways:
+
+- **the screen** comes from a frame file the display board writes whenever
+  its picture changes (`CDJ_GUI_FRAME_FILE`, checked up to 120 times a
+  second), so every frame the firmware draws is shown. On a 16-thread Windows
+  desktop the app keeps up with **about 110 frames a second** (one deck or
+  two, measured against a 120 Hz test source); today the emulated display
+  processor itself draws about 18-20 frames a second while a track plays, so
+  that is what you see until it draws faster. QEMU's VNC server, the portable
+  alternative, stops at 33 updates a second and is kept only as the fallback
+  for an older build;
+- **the touch screen and the keyboard** go over that VNC server (loopback
+  only, one port per deck from 5921), straight into the display board's own
+  touch and key handlers, exactly as with the plain window;
+- **the drawn controls and the lamps** go through the controller relay, the
+  same path and the same key table (`midi/cdj_actions.py`) as a MIDI
+  controller, which can stay connected alongside.
+
 ## 🎚️ MIDI controllers
 
 **Using one:** plug the controller in before `./setup.sh`. Setup recognises a
@@ -329,6 +398,7 @@ machine: the update file, and anything built from it, is Pioneer's.
 | `scripts/run/` | the run chain behind the launchers, the panel and monitor sockets, the controller relay and the run reports |
 | `scripts/net/` | the Pro DJ Link segment: DHCP server, capture, capture scorer |
 | `midi/` | the MIDI controller bridge, controller profiles, mappings and the learn tool |
+| `app/` | the [virtual deck app](#virtual-deck): the drawn player around the emulated screen |
 | `docs/img/` | the screenshots on this page |
 
 The board sources are copied into the QEMU tree on every build; edit them here,

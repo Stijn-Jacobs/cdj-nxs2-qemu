@@ -300,7 +300,7 @@ esac
 # the host cursor for a guest that never draws one; show-cursor keeps it.
 GUI_DISPLAY_ARG="${GUI_DISPLAY:-gtk}"
 case "$GUI_DISPLAY_ARG" in
-    none | *show-cursor=*) ;;
+    none | vnc* | *show-cursor=*) ;;   # VNC has no host cursor option
     *) GUI_DISPLAY_ARG="$GUI_DISPLAY_ARG,show-cursor=on" ;;
 esac
 "$GUI_QEMU" -M sh7269gui -kernel "$PROJ_NATIVE/extract/gui_unpacked.bin" \

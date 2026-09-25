@@ -2245,6 +2245,104 @@ static void lcd_invalidate(void *opaque)
 }
 
 /*
+ * CDJ_GUI_FRAME_FILE=<path>: publish the scanned-out frame to a file, checked
+ * CDJ_GUI_FRAME_HZ (default 120) times a host second and rewritten whenever it
+ * changed, for a viewer that wants the screen faster than a display backend
+ * refreshes it (QEMU's VNC server stops at 33 Hz). The virtual deck app
+ * (emulator/app/) reads it. Off unless set; the console is untouched.
+ *
+ * Layout, integers little-endian:
+ *   0   "CDJLCD1\0"
+ *   8   u32 done      sequence number of the last frame written in full
+ *   12  u16 width, u16 height (800 x 480)
+ *   16  u32 format    1 = RGB565 big-endian, as the VDC scans it out
+ *   20  12 bytes zero
+ *   32  the frame, width * height * 2 bytes
+ *   end u32 started   sequence number of the frame being written
+ * A frame is written as started, pixels, done. A reader that reads the file
+ * front to back and finds done == started has a whole frame.
+ */
+#define CDJ_FRAME_HDR 32
+
+static struct {
+    FILE *f;
+    QEMUTimer *timer;
+    unsigned period_ms;
+    uint8_t *cur, *prev;
+    uint32_t seq;
+} gui_frame;
+
+static void gui_frame_put32(long off, uint32_t v)
+{
+    uint8_t b[4] = { v, v >> 8, v >> 16, v >> 24 };
+
+    fseek(gui_frame.f, off, SEEK_SET);
+    fwrite(b, 1, 4, gui_frame.f);
+}
+
+static void gui_frame_tick(void *opaque)
+{
+    Sh7269Lcd *s = opaque;
+    uint32_t reg = vdc_scanout_reg(), base = 0;
+
+    timer_mod(gui_frame.timer, qemu_clock_get_ms(QEMU_CLOCK_REALTIME)
+                               + gui_frame.period_ms);
+    if (reg) {
+        cpu_physical_memory_read(reg, &base, 4);
+        base = be32_to_cpu(base);
+    }
+    if (base) {
+        cpu_physical_memory_read(base, gui_frame.cur, SH7269_LCD_BYTES);
+    } else {
+        memcpy(gui_frame.cur, s->fb + SH7269_LCD_OFFSET, SH7269_LCD_BYTES);
+    }
+    if (gui_frame.seq && !memcmp(gui_frame.cur, gui_frame.prev, SH7269_LCD_BYTES)) {
+        return;
+    }
+    memcpy(gui_frame.prev, gui_frame.cur, SH7269_LCD_BYTES);
+    gui_frame.seq++;
+    gui_frame_put32(CDJ_FRAME_HDR + SH7269_LCD_BYTES, gui_frame.seq);
+    fflush(gui_frame.f);
+    fseek(gui_frame.f, CDJ_FRAME_HDR, SEEK_SET);
+    fwrite(gui_frame.cur, 1, SH7269_LCD_BYTES, gui_frame.f);
+    fflush(gui_frame.f);
+    gui_frame_put32(8, gui_frame.seq);
+    fflush(gui_frame.f);
+}
+
+static void gui_frame_init(Sh7269Lcd *s)
+{
+    const char *path = getenv("CDJ_GUI_FRAME_FILE");
+    const char *hz = getenv("CDJ_GUI_FRAME_HZ");
+    uint8_t hdr[CDJ_FRAME_HDR] = "CDJLCD1";
+    unsigned rate = hz && atoi(hz) > 0 ? atoi(hz) : 120;
+
+    if (!path || !*path) {
+        return;
+    }
+    gui_frame.f = fopen(path, "w+b");
+    if (!gui_frame.f) {
+        warn_report("CDJ_GUI_FRAME_FILE: cannot open %s: %s", path,
+                    strerror(errno));
+        return;
+    }
+    stw_le_p(hdr + 12, SH7269_LCD_WIDTH);
+    stw_le_p(hdr + 14, SH7269_LCD_HEIGHT);
+    stl_le_p(hdr + 16, 1);
+    fwrite(hdr, 1, sizeof(hdr), gui_frame.f);
+    gui_frame.cur = g_malloc0(SH7269_LCD_BYTES);
+    gui_frame.prev = g_malloc0(SH7269_LCD_BYTES);
+    fwrite(gui_frame.cur, 1, SH7269_LCD_BYTES, gui_frame.f);
+    gui_frame_put32(CDJ_FRAME_HDR + SH7269_LCD_BYTES, 0);
+    fflush(gui_frame.f);
+    gui_frame.period_ms = MAX(1000 / rate, 1);
+    gui_frame.timer = timer_new_ms(QEMU_CLOCK_REALTIME, gui_frame_tick, s);
+    timer_mod(gui_frame.timer, qemu_clock_get_ms(QEMU_CLOCK_REALTIME));
+    info_report("sh7269gui: frames to %s, checked every %u ms", path,
+                gui_frame.period_ms);
+}
+
+/*
  * Host keyboard to front panel. This board owns the window, but the panel is
  * on MAIN, so keys are forwarded over the socket in cdj_panelkeys.h. Each
  * window drives its own deck. The report bits are the ones midi/cdj_actions.py
@@ -2631,6 +2729,7 @@ static void lcd_init(MemoryRegion *sysmem, MemoryRegion *sdram)
     lcd_state = s;
     cdj_gui_keys_init();
     gui_touch_init();
+    gui_frame_init(s);
 }
 
 
