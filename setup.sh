@@ -493,7 +493,9 @@ else
     case "$PLATFORM:$PKG" in
         windows:*) fix="pacman -S --needed mingw-w64-x86_64-python-pillow" ;;
         *:apt-get) fix="sudo apt-get install -y python3-pil" ;;
-        macos:*) fix="brew install pillow" ;;
+        # The scorer runs on python3 itself, not .venv; Homebrew's refuses a
+        # plain --user install (PEP 668).
+        macos:*) fix="python3 -m pip install --user --break-system-packages Pillow" ;;
         *) fix="python3 -m pip install --user Pillow" ;;
     esac
     dim "no Pillow for python3: the rig runs, only its end-of-run playhead score fails ($fix)"
