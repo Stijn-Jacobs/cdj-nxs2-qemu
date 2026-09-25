@@ -97,7 +97,11 @@ fi
 # and the app draws the player around it.
 APP_CMD=()
 if [ "$APP" = 1 ]; then
-    read -r -a APP_PY <<< "${CDJ_APP_PYTHON:-python3}"
+    # setup.sh installs Pillow into .venv/, so the app runs there when it
+    # exists; python3 is for setups without one (MSYS2's pacman Pillow).
+    _app_py=python3
+    [ -x "$CDJ_ROOT/.venv/bin/python" ] && _app_py="$CDJ_ROOT/.venv/bin/python"
+    read -r -a APP_PY <<< "${CDJ_APP_PYTHON:-$_app_py}"
     if ! "${APP_PY[@]}" -c 'import tkinter, PIL.ImageTk' 2>/dev/null; then
         echo "the virtual deck app needs tkinter and Pillow's ImageTk in ${APP_PY[*]}:" >&2
         echo "  MSYS2:  pacman -S --needed mingw-w64-x86_64-tk mingw-w64-x86_64-python-pillow" >&2
