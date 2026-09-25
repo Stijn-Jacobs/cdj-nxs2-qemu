@@ -671,6 +671,11 @@ if [ "$CURATED" = 1 ]; then
         trap - INT TERM
     fi
 fi
+if [ "$CURATED" = 1 ] && [ "$DSP_DONE" = 0 ]; then
+    # Without this the "already warm" line below reads as if the curated build ran.
+    warn "--curated-jit did NOT build a module (the reason is above);"
+    warn "check it with: bash scripts/build/build_dsp_module.sh --preflight"
+fi
 if [ "$DSP_DONE" = 0 ]; then
     WARM_CMD=(bash "$HERE/run/warm_jit.sh" warm)
     WARM_LOG="$LOGDIR/warm-jit-$ts.log"
