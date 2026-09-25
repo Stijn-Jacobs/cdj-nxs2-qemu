@@ -10,7 +10,7 @@
 # already there:
 #
 #   1 prerequisites   compilers, libraries and Python packages, with the exact
-#                     pacman / apt command for whatever is missing
+#                     pacman / apt / brew command for whatever is missing
 #   2 build           QEMU 9.1.0 fetched and patched, the MAIN and display-board
 #                     emulators, the DSP core library (logs in logs/)
 #   3 firmware        your own C2KNXS2.UPD (v1.87) turned into the images the
@@ -43,6 +43,7 @@
 #
 # Nothing from Pioneer DJ / AlphaTheta is in this repository: the firmware file
 # and the music are yours, and they stay in extract/ on your machine.
+. "$(dirname "${BASH_SOURCE[0]}")/scripts/cdj_bash.sh"
 set -uo pipefail
 
 E="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -139,6 +140,20 @@ choose() {
     done
 }
 elapsed() { local s=$(( SECONDS - $1 )); printf '%d:%02d' $(( s / 60 )) $(( s % 60 )); }
+# dropped_path "<typed or dragged-in path>" -> the path. Terminals quote a
+# dropped file ("...", '...') and macOS's escape it instead (My\ Music/x.UPD)
+# with a space after it.
+dropped_path() {
+    local p="$1"
+    p="${p%"${p##*[![:space:]]}"}"; p="${p#"${p%%[![:space:]]*}"}"
+    p="${p%\"}"; p="${p#\"}"; p="${p%\'}"; p="${p#\'}"
+    if [ "$PLATFORM" = windows ]; then
+        command -v cygpath >/dev/null 2>&1 && [ -n "$p" ] && p="$(cygpath -u "$p")"
+    elif [ ! -e "$p" ]; then
+        p="$(printf '%s' "$p" | sed 's/\\\(.\)/\1/g')"
+    fi
+    printf '%s' "$p"
+}
 
 # run_phase <label> <log file> <hint> -- <command...>
 # Runs a noisy command with its output in a log. On a terminal it shows a
@@ -195,6 +210,8 @@ WSL=0
 PKG=""
 if [ "$PLATFORM" = windows ]; then
     command -v pacman >/dev/null 2>&1 && PKG=pacman
+elif [ "$PLATFORM" = macos ]; then
+    command -v brew >/dev/null 2>&1 && PKG=brew
 else
     for p in apt-get dnf pacman zypper; do command -v "$p" >/dev/null 2>&1 && { PKG="$p"; break; }; done
 fi
@@ -235,7 +252,7 @@ info "platform: $PLATFORM$([ "$WSL" = 1 ] && echo ' (WSL)'), $CORES CPU threads$
 info "this folder: $E"
 [ "$DRY" = 1 ] && warn "dry run: nothing is installed, built or written"
 case "$PLATFORM" in
-    macos | unknown) die "only Windows (MSYS2) and Linux are supported." ;;
+    unknown) die "only Windows (MSYS2), Linux and macOS are supported." ;;
 esac
 
 # ======================================================= 1. prerequisites ====
@@ -253,12 +270,31 @@ if [ "$PLATFORM" = windows ]; then
     fi
     export PATH="/mingw64/bin:$PATH"
 fi
+if [ "$PLATFORM" = macos ]; then
+    if [ -z "$PKG" ]; then
+        fail "no Homebrew: the build's libraries and tools come from it."
+        info "Install it from https://brew.sh, then run ./setup.sh again."
+        [ "$DRY" = 1 ] || exit 1
+    fi
+    # /usr/bin/gcc is a stub until the Command Line Tools are installed: it
+    # exists, but running it only offers to install them.
+    if ! xcode-select -p >/dev/null 2>&1; then
+        fail "no Xcode Command Line Tools (the C compiler, make, git)."
+        info "install them:  ${B}xcode-select --install${N}   and run ./setup.sh again"
+        [ "$DRY" = 1 ] || exit 1
+    fi
+fi
 
 tools="gcc make ninja meson pkg-config flex bison git patch"
 [ "$PLATFORM" = windows ] && tools="$tools python diff" || tools="$tools python3"
 for t in $tools; do command -v "$t" >/dev/null 2>&1 || MISSING_TOOLS+=("$t"); done
-libs="glib-2.0 pixman-1 zlib gtk+-3.0"
-[ "$PLATFORM" = windows ] && libs="$libs sdl2" || libs="$libs libpulse"
+# The window: GTK on Windows and Linux, macOS's own Cocoa there. The sound:
+# SDL2 (WASAPI) on Windows, PulseAudio on Linux, Core Audio on macOS.
+case "$PLATFORM" in
+    windows) libs="glib-2.0 pixman-1 zlib gtk+-3.0 sdl2" ;;
+    macos) libs="glib-2.0 pixman-1 zlib" ;;
+    *) libs="glib-2.0 pixman-1 zlib gtk+-3.0 libpulse" ;;
+esac
 if command -v pkg-config >/dev/null 2>&1; then
     for l in $libs; do pkg-config --exists "$l" 2>/dev/null || MISSING_LIBS+=("$l"); done
 else
@@ -279,6 +315,11 @@ pkg_for() {  # <tool or pkg-config module> -> the package that provides it here
         windows:sdl2) echo mingw-w64-x86_64-SDL2 ;;
         windows:diff) echo diffutils ;;
         windows:*) echo "$1" ;;
+        macos:pkg-config) echo pkgconf ;;
+        macos:python3) echo python ;;
+        macos:glib-2.0) echo glib ;;
+        macos:pixman-1) echo pixman ;;
+        macos:*) echo "$1" ;;
         *:gcc | *:make) echo build-essential ;;
         *:ninja) echo ninja-build ;;
         *:python3) echo "python3 python3-venv python3-pip" ;;
@@ -300,6 +341,7 @@ else
     pkgs="$(printf '%s\n' $pkgs | sort -u | tr '\n' ' ')"
     case "$PLATFORM:$PKG" in
         windows:*) info "install them:  ${B}pacman -S --needed $pkgs${N}" ;;
+        macos:*) info "install them:  ${B}brew install $pkgs${N}" ;;
         *:apt-get) info "install them:  ${B}sudo apt-get install -y $pkgs${N}" ;;
         *) info "install the equivalents of: $pkgs (Debian package names)" ;;
     esac
@@ -385,7 +427,11 @@ fi
 # pip_fix <what> -> the command that installs <what> into a suitable Python.
 # On Windows that is a native Python only.
 pip_fix() {
-    if [ "$PLATFORM" != windows ]; then
+    if [ "$PLATFORM" = macos ]; then
+        # Homebrew's Python refuses pip installs outside a venv (PEP 668), so
+        # everything goes into this folder's .venv, which setup looks in.
+        echo "{ [ -x .venv/bin/python ] || python3 -m venv .venv; } && .venv/bin/python -m pip install $1"
+    elif [ "$PLATFORM" != windows ]; then
         case "$1" in
             -r*) echo "python3 -m venv .venv && .venv/bin/python -m pip install $1" ;;
             *) echo "python3 -m pip install --user $1" ;;
@@ -412,10 +458,15 @@ else
         if [ "$DRY" = 1 ]; then
             would "$fix"
         elif ask_yn "run that now?" y; then
-            ( cd "$E" && eval "$fix" ) &&
+            if ( cd "$E" && eval "$fix" ); then
+                # The candidates were listed before the fix made .venv, which
+                # now holds mido and python-rtmidi too.
+                [ -x "$E/.venv/bin/python" ] &&
+                    PY_CANDIDATES=("$E/.venv/bin/python" "${PY_CANDIDATES[@]}")
                 { PY_TOOLS="$(first_python_with pyfatfs)" ||
                   { [ -x "$E/.venv/bin/python" ] && PY_TOOLS="$E/.venv/bin/python"; }; } &&
-                good "installed"
+                    good "installed"
+            fi
         fi
     fi
 fi
@@ -442,6 +493,9 @@ else
     case "$PLATFORM:$PKG" in
         windows:*) fix="pacman -S --needed mingw-w64-x86_64-python-pillow" ;;
         *:apt-get) fix="sudo apt-get install -y python3-pil" ;;
+        # The scorer runs on python3 itself, not .venv; Homebrew's refuses a
+        # plain --user install (PEP 668).
+        macos:*) fix="python3 -m pip install --user --break-system-packages Pillow" ;;
         *) fix="python3 -m pip install --user Pillow" ;;
     esac
     dim "no Pillow for python3: the rig runs, only its end-of-run playhead score fails ($fix)"
@@ -514,9 +568,7 @@ else
             die "no firmware: pass --firmware /path/to/C2KNXS2.UPD"
         fi
         [ -n "$upd" ] && warn "no such file: $upd"
-        upd="$(ask "path to C2KNXS2.UPD (drag the file here):" "")"
-        upd="${upd%\"}"; upd="${upd#\"}"; upd="${upd%\'}"; upd="${upd#\'}"
-        [ "$PLATFORM" = windows ] && command -v cygpath >/dev/null 2>&1 && [ -n "$upd" ] && upd="$(cygpath -u "$upd")"
+        upd="$(dropped_path "$(ask "path to C2KNXS2.UPD (drag the file here):" "")")"
     done
     if [ -n "$upd" ] && [ -f "$upd" ]; then
         force=""
@@ -567,9 +619,7 @@ if [ ! -f "$USB_IMG" ] || [ -n "$OPT_MUSIC" ]; then
         info "Point me at a folder with your own music exported by rekordbox (the"
         info "folder that holds PIONEER/ and the tracks). Nothing is uploaded anywhere."
         [ -n "$music" ] && warn "no such folder: $music"
-        music="$(ask "music folder:" "")"
-        music="${music%\"}"; music="${music#\"}"; music="${music%\'}"; music="${music#\'}"
-        [ "$PLATFORM" = windows ] && command -v cygpath >/dev/null 2>&1 && [ -n "$music" ] && music="$(cygpath -u "$music")"
+        music="$(dropped_path "$(ask "music folder:" "")")"
     done
     if [ -n "$music" ] && [ -d "$music" ]; then
         mkdir -p "$EXTRACT" 2>/dev/null || true

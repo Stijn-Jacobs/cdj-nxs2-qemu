@@ -1,23 +1,40 @@
 diff --git a/net/socket.c b/net/socket.c
-index 8e3702e..d9b5c5d 100644
+index 8e3702e..8ee9ce7 100644
 --- a/net/socket.c
 +++ b/net/socket.c
-@@ -250,7 +250,27 @@ static int net_socket_mcast_create(struct sockaddr_in *mcastaddr,
+@@ -250,7 +250,44 @@ static int net_socket_mcast_create(struct sockaddr_in *mcastaddr,
          goto fail;
      }
  
++#ifdef __APPLE__
 +    /*
-+     * Bind INADDR_ANY on Windows.
++     * On the BSD stack SO_REUSEADDR shares a port only between sockets bound
++     * to a multicast address; for the INADDR_ANY bind below every sharer
++     * needs SO_REUSEPORT too.
++     */
++    ret = setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &val, sizeof(val));
++    if (ret < 0) {
++        error_setg_errno(errp, errno,
++                         "can't set socket option SO_REUSEPORT");
++        goto fail;
++    }
++#endif
++
++    /*
++     * Bind INADDR_ANY on Windows and macOS.
 +     *
 +     * Binding the group address is legal on Linux and is how a receiver
 +     * filters to that group. Windows rejects it, since a bind() address must
 +     * be one the host owns, so the netdev fails at construction with
-+     * "can't bind ip=... to socket" and the machine never starts. Binding
-+     * INADDR_ANY on the same port and then joining the group (below,
-+     * unchanged) is the portable form; SO_REUSEADDR is already set above, so
-+     * several instances still share the port.
++     * "can't bind ip=... to socket" and the machine never starts. macOS
++     * accepts the bind, but a datagram sent from a socket bound to a group
++     * address never arrives anywhere, the sender's own loopback included, so
++     * the decks never hear each other. Binding INADDR_ANY on the same port and
++     * then joining the group (below, unchanged) is the portable form;
++     * SO_REUSEADDR is already set above, so several instances still share the
++     * port.
 +     */
-+#ifdef _WIN32
++#if defined(_WIN32) || defined(__APPLE__)
 +    {
 +        struct sockaddr_in anyaddr = *mcastaddr;
 +

@@ -12,7 +12,7 @@
 #
 #   usage: bash scripts/run/rig.sh [prefix=show] [film-frames=120]
 #   env:   DJLINK=1 (Pro DJ Link on; 0 = off)   GROUP=<ip:port> (own segment)
-#          NDECKS=1 (2 for both DJ-202 sides)   GUI_DISPLAY=gtk|none   AUDIODEV=<-audio spec, %TAG% ok>
+#          NDECKS=1 (2 for both DJ-202 sides)   GUI_DISPLAY=gtk|cocoa|none   AUDIODEV=<-audio spec, %TAG% ok>
 #          RING=3000 PREFILL=150 MAXLAT=450 (ms)   NOSOUND=1   WARM=0 (1 = throwaway warm-up wave first)
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -36,6 +36,11 @@ if [ "${NOSOUND:-0}" != "1" ]; then
     case "$(uname -s)" in
         MINGW*|MSYS*|CYGWIN*)
             DEFAULT_AUDIODEV="sdl,out.buffer-length=200000,timer-period=5000" ;;
+        # macOS: Core Audio, the default output device. Its buffer-length is
+        # per buffer, times buffer-count, not the total as for pa, so pa's
+        # 200000 would queue 800 ms; 8 x 23 ms is about pa's 200 ms in all.
+        Darwin)
+            DEFAULT_AUDIODEV="coreaudio,out.buffer-length=23220,out.buffer-count=8,timer-period=5000" ;;
         *)
             DEFAULT_AUDIODEV="pa,server=unix:/mnt/wslg/PulseServer,out.buffer-length=200000,timer-period=5000" ;;
     esac

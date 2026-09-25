@@ -89,7 +89,8 @@ if [ -n "${CDJ_AUDIODEV-}" ]; then
 fi
 # The QEMU monitor is not a gdbstub: screendumps go through it without
 # stopping the machine. No -gdb here on purpose.
-# GUI_DISPLAY: gtk (default) shows the panel; none for a headless batch.
+# GUI_DISPLAY: gtk (default; cocoa on macOS) shows the panel; none for a
+# headless batch.
 nativepath_or_self() {
     if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi
 }
@@ -224,6 +225,7 @@ fi
 # CDJ_AUDIODEV=<spec> gives the model's DSP audio output an audio backend.
 # Device selection is QEMU's own, e.g.
 #   CDJ_AUDIODEV="pa,id=cdj,server=unix:/mnt/wslg/PulseServer"
+#   CDJ_AUDIODEV="coreaudio,id=cdj"                                 (macOS)
 #   CDJ_AUDIODEV="wav,id=cdj,path=/tmp/deck.wav"
 AUDIO_ARGS=""
 # -audio, not -audiodev: the model's sound card is not a qdev device and binds
@@ -255,8 +257,23 @@ for _ in $(seq 1 100); do [ -e "$SOCK" ] && break; sleep 0.1; done
 # X server mid-session, and -display gtk then kills the GUI QEMU). The test is
 # on the value, since boot_decks.sh always exports GUI_DISPLAY. Skipped on
 # Windows, where GTK talks to Win32 and there is no such socket.
+#
+# macOS has no GTK build: its window is Cocoa, so the callers' default gtk
+# becomes cocoa. A window needs the logged-in desktop session (Aqua); over ssh
+# there is none, and the deck runs headless.
 case "$(uname -s)" in
 MINGW* | MSYS* | CYGWIN*) ;;
+Darwin)
+    [ "${GUI_DISPLAY:-gtk}" = gtk ] && GUI_DISPLAY=cocoa
+    case "$GUI_DISPLAY" in
+    cocoa | sdl)
+        if [ "$(launchctl managername 2>/dev/null)" != Aqua ]; then
+            echo "[$TAG] no desktop session (ssh?) -- falling back to GUI_DISPLAY=none" >&2
+            GUI_DISPLAY=none
+        fi
+        ;;
+    esac
+    ;;
 *)
     case "${GUI_DISPLAY:-gtk}" in
     gtk | sdl)
