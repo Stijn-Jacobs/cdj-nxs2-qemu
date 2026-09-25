@@ -31,16 +31,15 @@ CFG_ARGS="--target-list=sh4eb-softmmu --disable-werror --disable-docs --disable-
 # The display board's window: Cocoa on macOS, GTK elsewhere (see build_main.sh).
 case "$(uname -s)" in
     Darwin)
-        CFG_ARGS="$CFG_ARGS --enable-cocoa" ;;
+        CFG_ARGS="$CFG_ARGS --enable-cocoa"
+        # A Python QEMU's configure can use (qemu_python.sh). Only here:
+        # elsewhere the host's python3 has always done.
+        . "$HERE/qemu_python.sh"
+        CFG_ARGS="$CFG_ARGS${QEMU_PYTHON_ARG:+ $QEMU_PYTHON_ARG}" ;;
     *)
         if pkg-config --exists gtk+-3.0 2>/dev/null; then
             CFG_ARGS="$CFG_ARGS --enable-gtk"
         fi ;;
-esac
-case "$(uname -s)" in
-    MINGW* | MSYS* | CYGWIN*) ;;
-    *) . "$HERE/qemu_python.sh"
-       CFG_ARGS="$CFG_ARGS${QEMU_PYTHON_ARG:+ $QEMU_PYTHON_ARG}" ;;
 esac
 
 need_configure=0

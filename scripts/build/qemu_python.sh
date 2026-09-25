@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-# Sourced by build_main.sh and build_display.sh, from inside the build tree.
+# Sourced on macOS by build_main.sh and build_display.sh, from inside the
+# build tree.
 # Sets QEMU_PYTHON_ARG: empty, or a --python= for QEMU's configure.
 #
 # QEMU 9.1's configure builds its own venv and needs two things from the Python

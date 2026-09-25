@@ -68,16 +68,15 @@ CFG_ARGS="--target-list=sh4-softmmu --disable-werror --disable-docs --disable-to
 # macOS they are Cocoa and Core Audio, which need nothing beyond the SDK.
 case "$(uname -s)" in
     Darwin)
-        CFG_ARGS="$CFG_ARGS --enable-cocoa --enable-coreaudio" ;;
+        CFG_ARGS="$CFG_ARGS --enable-cocoa --enable-coreaudio"
+        # A Python QEMU's configure can use (qemu_python.sh). Only here:
+        # elsewhere the host's python3 has always done.
+        . "$HERE/qemu_python.sh"
+        CFG_ARGS="$CFG_ARGS${QEMU_PYTHON_ARG:+ $QEMU_PYTHON_ARG}" ;;
     *)
         if pkg-config --exists gtk+-3.0 2>/dev/null; then
             CFG_ARGS="$CFG_ARGS --enable-gtk"
         fi ;;
-esac
-case "$(uname -s)" in
-    MINGW* | MSYS* | CYGWIN*) ;;
-    *) . "$HERE/qemu_python.sh"
-       CFG_ARGS="$CFG_ARGS${QEMU_PYTHON_ARG:+ $QEMU_PYTHON_ARG}" ;;
 esac
 
 need_configure=0
