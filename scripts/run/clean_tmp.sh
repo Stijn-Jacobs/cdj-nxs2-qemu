@@ -13,7 +13,7 @@ find /tmp -maxdepth 1 -name 'ram-*.bin' -mmin +120 -delete
 find /tmp -mindepth 2 -maxdepth 2 -name 'ram-*.bin' -mmin +25 -delete 2>/dev/null
 # Never blanket-delete /tmp/media-*: each running run has its own medium there.
 # Only removed when no qemu is running.
-if ! pgrep qemu > /dev/null 2>&1; then
+if command -v pgrep >/dev/null 2>&1 && ! pgrep qemu >/dev/null 2>&1; then
     rm -rf /tmp/media-* 2>/dev/null || true
 else
     echo "qemu is running -- leaving /tmp/media-* alone"
