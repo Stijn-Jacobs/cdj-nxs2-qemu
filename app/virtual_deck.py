@@ -26,9 +26,10 @@ sys.path.insert(0, HERE)
 import layout as L  # noqa: E402
 from deck_view import DeckView  # noqa: E402
 from frames import FrameFile, Screen  # noqa: E402
-from screen_view import LCD_H, LCD_W, ScreenView, ScreenWindow  # noqa: E402
+from screen_view import LCD_H, LCD_W, DockView, ScreenWindow  # noqa: E402
 from relay_link import RelayLink  # noqa: E402
 from rfb import RfbClient  # noqa: E402
+from status_bar import StatusBar  # noqa: E402
 
 # A new frame is on screen within one tick. On Windows Tk's timer runs at the
 # system tick (15.6 ms) unless the process asks for 1 ms (fine_timer below).
@@ -36,10 +37,30 @@ TICK_MS = 4
 BG = "#050505"
 BG_RGB = (5, 5, 5)
 STATUS_MS = 500
-RESCALE_MS = 350
+# A resize redraws once the window has held still this long. Redrawing is a
+# downscale of cached images (art.py, ~50 ms), so this can be short.
+RESCALE_MS = 60
+# What the window's frame takes, for the first layout.
+TITLE_BAR = 32
 # The key release Tk reports for host auto-repeat comes a moment before the
 # next press; a release only goes out if no press follows within this.
 RELEASE_GRACE_MS = 40
+
+
+def work_area(root):
+    """(x, y, w, h): the part of the screen a window may use, without the
+    taskbar where the system says where it is."""
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            from ctypes import wintypes
+            r = wintypes.RECT()
+            if ctypes.windll.user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(r), 0):
+                return r.left, r.top, r.right - r.left, r.bottom - r.top
+        except (OSError, AttributeError):
+            pass
+    # Elsewhere Tk cannot see the menu bar or the dock; leave room for them.
+    return 0, 0, root.winfo_screenwidth(), root.winfo_screenheight() - 90
 
 
 def fine_timer():
@@ -60,7 +81,7 @@ class App:
         fine_timer()
         self.args = args
         self.root = tk.Tk()
-        self.root.title("NXS2 virtual deck")
+        self.root.title("NXS2 Virtual Deck")
         self.root.configure(bg=BG)
         host, _, port = args.relay.partition(":")
         self.relay = RelayLink(host, int(port))
@@ -73,8 +94,7 @@ class App:
 
         self.row = tk.Frame(self.root, bg=BG)
         self.row.pack(side="top")
-        self.dock = tk.Frame(self.row, bg=BG)
-        self.docked = {}                # deck number -> ScreenView in the dock
+        self.dock = DockView(self.row)
         for n in range(1, args.decks + 1):
             tag = f"{args.prefix}{n}"
             frames = (FrameFile(os.path.join(args.frame_dir, f"cdj-lcd-{tag}.bin"))
@@ -86,16 +106,19 @@ class App:
             deck.canvas.bind("<Enter>", lambda e, d=deck: self._set_focus(d), add="+")
             self.decks.append(deck)
         self.focus = self.decks[0]
-        self.status = tk.Label(self.root, anchor="w", justify="left", bg="#111214",
-                               fg="#b8bcc4", font=("TkDefaultFont", 9), padx=8)
-        self.status.pack(side="bottom", fill="x")
+        self.status = StatusBar(self.root)
+        self.status.canvas.pack(side="bottom", fill="x")
 
-        sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
-        self.room = (sw - 40, sh - 120)     # the window's content, at first
+        # The first size: most of the work area, the frame and status included.
+        wx, wy, ww, wh = work_area(self.root)
+        self.room = (int(ww * 0.94), int(wh * 0.94) - TITLE_BAR - StatusBar.H)
         self.mode = args.screen
         if self.mode == "auto":
             self.mode = "dock" if self._dock_fits(*self.room) else "face"
         self.arrange()
+        self.root.update_idletasks()
+        self.root.geometry(f"+{wx + max(0, (ww - self.root.winfo_reqwidth()) // 2)}"
+                           f"+{wy + max(0, (wh - TITLE_BAR - self.root.winfo_reqheight()) // 2)}")
         if args.screen == "window":
             for d in self.decks:
                 self.toggle_window(d)
@@ -135,12 +158,16 @@ class App:
         if self.mode != "dock":
             s = min(h / L.H, (w - gaps) / (n * L.W))
             return max(0.3, min(1.6, s)), 0
-        label = ScreenView.LABEL_H
-        z = min(self.SCREEN_MAX, (h - n * label - self.GAP * (n - 1)) / (n * LCD_H))
-        s = min(h / L.H, (w - LCD_W * z - self.GAP * n) / (n * L.W))
+        # The dock's bezels and padding are in face units, so they scale with
+        # s; its screens get whatever height the faces leave them.
+        ew, eh, e1 = DockView.overhead()
+        s = h / L.H
+        z = min(self.SCREEN_MAX, (h - s * (n * eh + e1)) / (n * LCD_H))
+        if n * L.W * s + LCD_W * z + ew * s + self.GAP * n > w:
+            s = (w - LCD_W * z - self.GAP * n) / (n * L.W + ew)
         if s < self.FACE_MIN:
             s = self.FACE_MIN
-            z = (w - n * L.W * s - self.GAP * n) / LCD_W
+            z = (w - (n * L.W + ew) * s - self.GAP * n) / LCD_W
         if self.args.scale:
             s = self.args.scale
         return max(0.3, s), max(0.25, z)
@@ -159,22 +186,11 @@ class App:
             widget.pack_forget()
         faces = [d.canvas for d in self.decks]
         if self.mode == "dock":
-            size = (round(LCD_W * z), round(LCD_H * z))
-            for d in self.decks:
-                view = self.docked.get(d.number)
-                if view is None:
-                    view = ScreenView(self.dock, d, size, f"DECK {d.number}")
-                    self.docked[d.number] = view
-                    view.canvas.pack(side="top", pady=(0 if d.number == 1 else self.GAP, 0))
-                    d.add_sink("dock", view)
-                view.resize(size)
+            self.dock.place(self.decks, z, s)
             # One deck: face | screen. Two: face | screens | face.
-            order = [faces[0], self.dock] + faces[1:]
+            order = [faces[0], self.dock.canvas] + faces[1:]
         else:
-            for d in self.decks:
-                if d.number in self.docked:
-                    d.drop_sink("dock")
-                    self.docked.pop(d.number).canvas.destroy()
+            self.dock.clear(self.decks)
             order = faces
         for i, widget in enumerate(order):
             widget.pack(side="left", anchor="n", padx=(0 if i == 0 else self.GAP, 0))
@@ -202,7 +218,7 @@ class App:
 
     def _content(self):
         return (self.root.winfo_width(),
-                self.root.winfo_height() - self.status.winfo_height())
+                self.root.winfo_height() - self.status.canvas.winfo_height())
 
     def _resized(self, e):
         if e.widget is not self.root:
@@ -234,15 +250,7 @@ class App:
         self.root.after(TICK_MS, self._tick)
 
     def _status(self):
-        parts = [d.status() for d in self.decks] + [self.relay.status]
-        line = "   ·   ".join(parts)
-        if self.hover_text:
-            line += "\n" + self.hover_text
-        else:
-            line += (f"\nkeys go to deck {self.focus.number} · hover a control for what "
-                     "it does · F2: screen beside the deck on/off · F3 or right-click "
-                     "the screen: screen in its own window")
-        self.status.config(text=line)
+        self.status.show([d.health() for d in self.decks], self.hover_text)
         self.root.after(STATUS_MS, self._status)
 
     def _hover(self, deck, text):
@@ -289,17 +297,8 @@ class App:
             deck = next((d for d in self.decks if d.canvas is widget), None)
             if deck:
                 parts.append(deck.snapshot())
-            elif widget is self.dock:
-                col = [self.docked[d.number].snapshot() for d in self.decks
-                       if d.number in self.docked]
-                img = Image.new("RGB", (max(c.width for c in col),
-                                        sum(c.height for c in col)
-                                        + self.GAP * (len(col) - 1)), BG_RGB)
-                y = 0
-                for c in col:
-                    img.paste(c, (0, y))
-                    y += c.height + self.GAP
-                parts.append(img)
+            elif widget is self.dock.canvas:
+                parts.append(self.dock.snapshot())
         w = sum(p.width for p in parts) + self.GAP * (len(parts) - 1)
         out = Image.new("RGB", (w, max(p.height for p in parts)), BG_RGB)
         x = 0
@@ -338,12 +337,13 @@ def parse_args(argv=None):
                     help="where the display boards write cdj-lcd-<tag>.bin "
                          "(app/gui_vnc.sh; env CDJ_APP_FRAME_DIR); without it "
                          "the screen comes over VNC, at up to 33 frames a second")
-    ap.add_argument("--screen", default=os.environ.get("CDJ_APP_SCREEN", "auto"),
-                    choices=("auto", "dock", "face", "window"),
-                    help="dock: each deck's screen large beside the faces; face: "
-                         "the faces alone; window: the screens in windows of their "
-                         "own; auto: dock when the monitor has room (env "
-                         "CDJ_APP_SCREEN; F2 and F3 switch while running)")
+    ap.add_argument("--screen", default=os.environ.get("CDJ_APP_SCREEN", "face"),
+                    choices=("face", "dock", "window", "auto"),
+                    help="face (default): the decks alone, each with its screen in "
+                         "it; dock: each deck's screen large beside the faces as "
+                         "well; window: the screens in windows of their own; auto: "
+                         "dock when the monitor has room (env CDJ_APP_SCREEN; F2 "
+                         "and F3 switch while running)")
     ap.add_argument("--scale", type=float, default=0,
                     help="face scale, 1.0 = 972 x 1252 px a deck (default: fit)")
     ap.add_argument("--stats", type=float, default=0, metavar="S",

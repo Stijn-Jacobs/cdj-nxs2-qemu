@@ -10,8 +10,8 @@ used, and the manufacturer's logos, model name and disc marks are left off.
 Each control names an action from midi/cdj_actions.py, so the report bits live
 in one table. `lamp` is a role from midi/leds.py's LAMPS: the NXS2 lamp that
 lights it. How a control behaves follows its action's evidence status (see
-controls.py): confirmed and partial ones work, decoded ones work and carry a
-small amber "untested" mark, the rest are drawn but inert.
+controls.py): confirmed, partial and decoded ones work, the rest are drawn but
+inert. The status bar names the status of the control under the mouse.
 """
 
 from dataclasses import dataclass
@@ -22,7 +22,7 @@ LCD = (246, 110, 716, 392)              # 470 x 282: the panel's 5:3
 TOP_BLOCK = (137, 0, 835, 402)          # the gloss-black raised display panel
 LEFT_COL = (0, 52, 137, H)
 RIGHT_COL = (835, 52, W, H)
-JOG = (485, 807, 327)                   # centre x, centre y, outer radius
+JOG = (483, 815, 327)                   # centre x, centre y, outer radius
 JOG_RIM = 257                           # the rubber rim ends here
 JOG_TOP = 238                           # the touch-sensitive platter top
 JOG_DISPLAY = 120                       # the centre display's window
@@ -46,8 +46,9 @@ WHITE = (235, 240, 255)
 class Key:
     """One pressable control.
 
-    kind picks the look (art.py): src, top, pad, dome, chrome, loop, call,
-    big, arc, lever, rect. A key has a box (x0, y0, x1, y1) or a circle
+    kind picks the look (art.py): src, top, pad, dome (black), cdome (chrome),
+    ring (black in a chrome ring), pale (black in a pale ring), chrome, plate
+    (chrome with a label plate), loop, call, big, arc, lever, rect. A key has a box (x0, y0, x1, y1) or a circle
     (cx, cy, r).
     """
     name: str
@@ -96,21 +97,21 @@ def _pad(letter, y, color):
 
 KEYS = [
     # Left column.
-    Key("usb_stop", "dome", None, circle=(101, 141, 13)),
+    Key("usb_stop", "cdome", None, circle=(101, 141, 13)),
     _pad("a", 316, RED), _pad("b", 390, CYAN), _pad("c", 464, YELLOW),
     _pad("d", 540, BLUE),
     # BANK and the hot cue CALL/DELETE: no report bits are known for them.
-    Key("bank_rev", "dome", None, circle=(30, 634, 13), dot=BLUE),
+    Key("bank_rev", "ring", None, circle=(30, 634, 11), dot=BLUE),
     Key("hot_cue_call", "rect", None, box=(60, 623, 80, 645)),
-    Key("bank_fwd", "dome", None, circle=(110, 634, 13), dot=BLUE),
+    Key("bank_fwd", "ring", None, circle=(110, 634, 11), dot=BLUE),
     Key("reverse", "lever", "direction_rev", box=(28, 700, 78, 752), keycap="Z"),
-    Key("track_rev", "chrome", "track_rev", circle=(40, 838, 22),
+    Key("track_rev", "chrome", "track_rev", circle=(39, 835, 22),
         symbol="track_rev", keycap=","),
-    Key("track_fwd", "chrome", "track_fwd", circle=(101, 838, 22),
+    Key("track_fwd", "chrome", "track_fwd", circle=(100, 835, 22),
         symbol="track_fwd", keycap="."),
-    Key("scan_rev", "chrome", "scan_rev", circle=(40, 920, 22),
+    Key("scan_rev", "chrome", "scan_rev", circle=(39, 916, 22),
         symbol="scan_rev", keycap="["),
-    Key("scan_fwd", "chrome", "scan_fwd", circle=(101, 920, 22),
+    Key("scan_fwd", "chrome", "scan_fwd", circle=(100, 916, 22),
         symbol="scan_fwd", keycap="]"),
     Key("cue", "big", "cue", circle=(68, 1037, 52), label="CUE", lamp="cue",
         color=ORANGE, font=15, keycap="C"),
@@ -127,7 +128,7 @@ KEYS = [
     Key("sd", "src", "dev_sd", box=(168, 189, 208, 210), label="SD"),
     Key("disc", "src", "dev_disc", box=(168, 234, 208, 255), label="DISC",
         keycap="D"),
-    Key("time_mode", "dome", "time_a_cue", circle=(188, 302, 12)),
+    Key("time_mode", "cdome", "time_a_cue", circle=(188, 302, 12)),
     Key("quantize", "dome", None, circle=(188, 357, 12), dot=RED),
     Key("browse", "top", "browse", box=(280, 55, 368, 74), label="BROWSE",
         keycap="B"),
@@ -148,13 +149,13 @@ KEYS = [
         color=GREEN),
     Key("jog_mode", "rect", "jog_mode", box=(904, 512, 948, 545),
         label="JOG\nMODE", font=9, color=BLUE, keycap="J"),
-    Key("sync", "chrome", "sync", circle=(870, 628, 22), label="SYNC",
+    Key("sync", "plate", "sync", circle=(870, 628, 22), label="SYNC",
         color=WHITE, font=8, keycap="S"),
-    Key("master", "chrome", "master", circle=(930, 628, 22), label="MASTER",
+    Key("master", "plate", "master", circle=(930, 628, 22), label="MASTER",
         color=ORANGE, font=7, keycap="A"),
-    Key("tempo_range", "dome", "tempo_range", circle=(900, 700, 12),
+    Key("tempo_range", "cdome", "tempo_range", circle=(900, 700, 12),
         keycap="P"),
-    Key("master_tempo", "dome", "master_tempo", circle=(900, 773, 12),
+    Key("master_tempo", "cdome", "master_tempo", circle=(900, 773, 12),
         dot=RED, lamp="master_tempo", keycap="K"),
     Key("tempo_reset", "dome", "tempo_reset", circle=(803, 1000, 15)),
 
@@ -163,15 +164,15 @@ KEYS = [
         keycap="Q"),
     Key("loop_out", "loop", "loop_out", circle=(256, 468, 25), color=ORANGE,
         keycap="W"),
-    Key("reloop", "dome", "reloop_exit", circle=(350, 468, 20), dot=ORANGE,
+    Key("reloop", "ring", "reloop_exit", circle=(350, 468, 20), dot=ORANGE,
         keycap="E"),
-    Key("four_beat", "dome", "four_beat_loop", circle=(180, 545, 15)),
-    Key("slip", "dome", "slip_mode", circle=(180, 604, 13), dot=RED,
+    Key("four_beat", "pale", "four_beat_loop", circle=(178, 543, 15)),
+    Key("slip", "ring", "slip_mode", circle=(178, 603, 13), dot=RED,
         lamp="slip", keycap="V"),
     Key("call_rev", "call", "call_rev", circle=(628, 468, 12), symbol="left"),
     Key("call_fwd", "call", "call_fwd", circle=(686, 468, 12), symbol="right"),
-    Key("delete", "dome", "delete", circle=(748, 468, 20)),
-    Key("memory", "dome", "memory", circle=(803, 468, 13)),
+    Key("delete", "ring", "delete", circle=(748, 468, 20)),
+    Key("memory", "ring", "memory", circle=(803, 468, 13)),
 ]
 
 TEXTS = [
@@ -181,11 +182,11 @@ TEXTS = [
     Text(70, 305, "HOT  CUE", 10),
     *[Text(26, y + 18, a, 9) for a, y in zip("ABCD", (316, 390, 464, 540))],
     *[Text(115, y + 18, a, 9) for a, y in zip("EFGH", (316, 390, 464, 540))],
-    Text(44, 608, "•CALL /", 8),
+    Text(44, 606, "•CALL /", 8),
     Text(70, 662, "BANK", 9), Text(70, 686, "DIRECTION", 9),
-    Text(110, 704, "SLIP", 8), Text(110, 714, "REV", 8), Text(110, 728, "FWD", 8),
-    Text(70, 804, "TRACK  SEARCH", 9), Text(70, 885, "SEARCH", 9),
-    Text(70, 1112, "PLAY / PAUSE", 9),
+    Text(110, 698, "SLIP", 8), Text(110, 708, "REV", 8), Text(110, 723, "FWD", 8),
+    Text(70, 801, "TRACK  SEARCH", 9), Text(70, 882, "SEARCH", 9),
+    Text(70, 1112, "PLAY/PAUSE", 9),
 
     # The display panel.
     Text(152, 296, "TIME", 8), Text(152, 306, "MODE", 8),
@@ -203,39 +204,91 @@ TEXTS = [
     # Right column.
     Text(900, 90, "STANDBY", 7), Text(900, 120, "DISC EJECT", 9),
     Text(900, 300, "VINYL", 9), Text(900, 311, "SPEED ADJUST", 9),
-    Text(900, 330, "TOUCH / BRAKE", 8), Text(900, 413, "RELEASE / START", 8),
+    Text(900, 329, "TOUCH/BRAKE", 8), Text(900, 412, "RELEASE/START", 8),
     Text(903, 578, "BEAT SYNC", 9), Text(903, 593, "— INST. DOUBLES", 8),
     Text(900, 665, "TEMPO", 9), Text(900, 677, "±6 / ±10 / ±16 / WIDE", 7),
     Text(900, 740, "MASTER", 9), Text(900, 751, "TEMPO", 9),
     Text(900, 1171, "TEMPO", 9),
-    Text(803, 1025, "TEMPO", 7), Text(803, 1035, "RESET", 7),
+    Text(803, 1022, "TEMPO", 7), Text(803, 1031, "RESET", 7),
     Text(858, 845, "–", 11), Text(858, 997, "0", 9), Text(858, 1150, "+", 11),
 
     # The loop section and its neighbours.
-    Text(180, 436, "IN / CUE", 9), Text(256, 436, "OUT", 9),
-    Text(305, 455, "LOOP", 9), Text(348, 436, "RELOOP / EXIT", 9),
-    Text(178, 522, "• 4 / — 8BEAT", 8), Text(180, 586, "SLIP", 9),
-    Text(657, 440, "CUE / LOOP", 9), Text(657, 455, "CALL", 9),
-    Text(610, 493, "1/2X", 7), Text(703, 493, "2X", 7),
-    Text(748, 440, "DELETE", 9), Text(803, 440, "MEMORY", 9),
-    Text(760, 514, "JOG ADJUST", 9), Text(730, 582, "LIGHT", 6),
-    Text(793, 582, "HEAVY", 6),
-    Text(243, 1100, "REV", 8), Text(243, 1088, "–", 9),
-    Text(727, 1100, "FWD", 8), Text(727, 1088, "+", 9),
+    Text(179, 435, "IN/CUE", 9), Text(256, 435, "OUT", 9),
+    Text(305, 455, "LOOP", 9), Text(349, 435, "RELOOP/EXIT", 9),
+    Text(178, 522, "• 4 / — 8BEAT", 8), Text(178, 583, "SLIP", 9),
+    Text(657, 433, "CUE/LOOP", 9), Text(657, 452, "CALL", 9),
+    Text(628, 489, "1/2X", 7), Text(686, 489, "2X", 7),
+    Text(748, 433, "DELETE", 9), Text(803, 433, "MEMORY", 9),
+    Text(762, 512, "JOG ADJUST", 9), Text(737, 578, "LIGHT", 6),
+    Text(793, 578, "HEAVY", 6),
+    Text(243, 1089, "REV", 8), Text(243, 1078, "–", 9),
+    Text(727, 1089, "FWD", 8), Text(727, 1078, "+", 9),
 ]
 
 # Printed boxes: the white pill labels and the coloured badges.
 PILLS = [
-    (180, 506, "IN ADJUST"), (256, 506, "OUT ADJUST"),
-    (178, 571, "LOOP CUTTER"), (657, 493, "LOOP"), (88, 608, "DELETE"),
+    (179, 504, "IN ADJUST"), (256, 504, "OUT ADJUST"),
+    (178, 569, "LOOP CUTTER"), (657, 493, "LOOP"),
 ]
 BADGES = [
-    (868, 519, "VINYL", BLUE), (868, 540, "CDJ", GREEN), (110, 747, "REV", RED),
+    (868, 519, "VINYL", BLUE), (868, 540, "CDJ", GREEN), (110, 745, "REV", RED),
 ]
 # Decorative knobs: (cx, cy, r) -- vinyl speed adjust and jog adjust are not
 # modelled on this emulator.
-KNOBS = [(900, 362, 18), (900, 445, 18), (760, 548, 20)]
+# The wells key groups sit in, full stadiums: (the keys, the margin round
+# them). A well is its keys' outline plus the margin on every side, so it is
+# centred on them by construction.
+RECESSES = [(("bank_rev", "hot_cue_call", "bank_fwd"), 5),
+            (("track_rev", "track_fwd"), 4),
+            (("scan_rev", "scan_fwd"), 4),
+            (("sync", "master"), 4)]
+
+
+def recess_box(names, margin):
+    """The well round a group of keys, in face units."""
+    boxes = [k.bounds() for k in KEYS if k.name in names]
+    return (min(b[0] for b in boxes) - margin, min(b[1] for b in boxes) - margin,
+            max(b[2] for b in boxes) + margin, max(b[3] for b in boxes) + margin)
+
+# The light the face is drawn under: one soft source above its left edge, as
+# the NXS2's top panel is seen. (x, y) it falls off from, and how far it
+# reaches across (x) and down (y), in face units.
+LIGHT = (140, 404, 300, 190)
+
+# Outlined boxes: printed frames around a word, as DELETE beside CALL.
+FRAMES = [(88, 606, "DELETE")]
+# Decorative knobs: (style, cx, cy, r) -- vinyl speed adjust and jog adjust
+# are not modelled on this emulator. A vinyl knob has tick lines round it, the
+# jog adjust dots, its two end marks and a silver cap.
+KNOBS = [("vinyl", 901, 361, 21), ("vinyl", 901, 443, 21),
+         ("jog_adjust", 762, 548, 20)]
+
+# Printed lines, as polylines in face units, measured off the NXS2's top
+# panel: the rules joining keys, the brackets, and the vinyl speed curves.
+PRINTED_LINES = [
+    # The loop row: IN/CUE to OUT, OUT to RELOOP/EXIT under "LOOP", and the
+    # cue/loop call row on to DELETE and MEMORY.
+    [(210, 468), (224, 468)], [(287, 468), (324, 468)],
+    [(643, 468), (671, 468)], [(701, 468), (724, 468)], [(772, 468), (787, 468)],
+    # "INST. DOUBLES" hangs off a bracket running down to SYNC.
+    [(852, 601), (852, 592), (858, 592)],
+    # BANK sits in a bracket with its ends turned up.
+    [(24, 655), (24, 660), (52, 660)], [(88, 660), (116, 660), (116, 655)],
+    # TOUCH/BRAKE: how the platter stops, sharp at one end of the knob's
+    # travel and gradual at the other; RELEASE/START: how it starts.
+    [(870, 389), (878, 389), (878, 401), (886, 401)],
+    [(913, 389), (919, 389), (931, 401), (937, 401)],
+    [(867, 483), (877, 483), (877, 472), (885, 472)],
+    [(912, 483), (918, 483), (929, 472), (935, 472)],
+]
 
 # The face's own name. Generic on purpose: nothing of the manufacturer's is
 # shipped, and that includes its marks.
 TITLE = "NXS2 VIRTUAL DECK"
+
+# The dock (F2): each deck's screen large beside the faces, in a bezel of the
+# face's materials. In face units, drawn at the face's scale so its print
+# matches the face's.
+DOCK_PAD = 16                           # the panel's edge to a bezel
+DOCK_BEZEL = 12                         # the gloss surround around the glass
+DOCK_HEADER = 26                        # the deck's name above its bezel

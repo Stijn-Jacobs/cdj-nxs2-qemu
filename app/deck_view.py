@@ -55,7 +55,7 @@ class DeckView:
         self.items = {}
         self.item_imgs = {}             # canvas item -> the PIL image it shows
         self.frames_shown = []
-        self.sinks = {}                 # name -> ScreenView showing this screen too
+        self.sinks = {}                 # name -> ScreenSlot showing this screen too
         self.face_shown = 0.0
         self.on_popup = on_popup
         self.lcd_size = None
@@ -70,7 +70,7 @@ class DeckView:
 
     def rescale(self, scale):
         self.scale = scale
-        self.art = ART.Art(scale, f"DECK {self.number}")
+        self.art = ART.make_art(scale, f"DECK {self.number}")
         self.photos.clear()
         self.lit.clear()
         self.canvas.delete("all")
@@ -100,6 +100,8 @@ class DeckView:
         # of a lamp does not stall the screen while its sprite is made.
         self.warm = [(k, lit, down) for k in L.KEYS if k.lamp or self.controls[k.name].live
                      for lit, down in ((True, False), (False, True), (True, True))]
+        # And the jog's rotation phases, drawn the first time it turns otherwise.
+        self.warm += [("jog", phase) for phase in range(1, self.art.JOG_PHASES)]
 
     def _photo(self, key, img):
         if key not in self.photos:
@@ -172,7 +174,7 @@ class DeckView:
                            round((y - h / 2 - 4) * self.scale))
 
     def add_sink(self, name, view):
-        """Show this deck's screen in `view` (a ScreenView) as well."""
+        """Show this deck's screen in `view` (a ScreenSlot) as well."""
         self.sinks[name] = view
         self.views_changed()
 
@@ -228,7 +230,11 @@ class DeckView:
 
     def _warm_one(self):
         if self.warm:
-            key, lit, down = self.warm.pop(0)
+            job = self.warm.pop(0)
+            if job[0] == "jog":
+                self.art.jog_sprite(job[1])
+                return
+            key, lit, down = job
             img, _ = self.art.key_sprite(key, lit, down, self.controls[key.name].look)
             self._photo(("key", key.name, lit, down), img)
 
@@ -250,6 +256,18 @@ class DeckView:
 
     def fps(self):
         return len(self.frames_shown) / 2.0
+
+    def health(self):
+        """(name, state in words, whether that is the normal state) for the
+        status strip."""
+        name = f"Deck {self.number}"
+        if not self.screen.connected:
+            return name, "Waiting for the screen", False
+        if not self.relay.connected:
+            return name, "Panel offline", False
+        if not self.relay.state(self.tag).live:
+            return name, "Starting up", False
+        return name, f"Running  ·  {self.fps():.0f} fps", True
 
     def status(self):
         st = self.relay.state(self.tag)
@@ -384,13 +402,13 @@ class DeckView:
         if self._in_lcd(x, y):
             text = "screen: click to touch; right-click (or F3) opens it in a window"
         elif self._polar(x, y, L.SELECT)[0] <= L.SELECT[2] + 8:
-            text = "rotary selector: wheel or drag to turn, click the centre to push"
+            text = "Rotary selector  ·  wheel or drag to turn, click the centre to push"
         elif self._polar(x, y, L.JOG)[0] <= L.JOG[2]:
-            text = ("jog: drag round to bend (the top plate is touch-sensitive), "
-                    "wheel to nudge")
+            text = ("Jog  ·  drag round to bend, the top plate is touch-sensitive  "
+                    "·  wheel to nudge")
         elif L.SLIDER_FRAME[0] <= x <= L.SLIDER_FRAME[2] and \
                 L.SLIDER_FRAME[1] <= y <= L.SLIDER_FRAME[3]:
-            text = "tempo: " + C.describe_action("tempo")
+            text = "Tempo  ·  " + C.describe_action("tempo")
         else:
             key = next((k for k in L.KEYS if k.hit(x, y)), None)
             text = C.describe(key) if key else ""

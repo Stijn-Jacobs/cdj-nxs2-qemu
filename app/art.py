@@ -16,8 +16,11 @@ display, the rotary selector and the tempo slider's cap. The view
 state changes.
 """
 
+import hashlib
 import math
+import os
 import random
+import tempfile
 from functools import lru_cache
 
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
@@ -30,34 +33,50 @@ PRINT = (225, 228, 232)                  # panel lettering
 PRINT_DIM = (150, 154, 160)
 GUNMETAL_TOP = (50, 51, 54)
 GUNMETAL_BOTTOM = (30, 31, 33)
-BRUSHED_TOP = (66, 67, 70)
-BRUSHED_BOTTOM = (22, 23, 25)
 GLOSS = (9, 9, 10)
-UNTESTED = (255, 176, 40)
 
+# Panel print is a Helvetica-style grotesque, as on the hardware: Helvetica
+# itself where the system has it, Arial or a metric twin elsewhere.
+# (file, .ttc index or None).
 _FONT_FILES = {
-    True: ["arialbd.ttf", "DejaVuSans-Bold.ttf", "LiberationSans-Bold.ttf",
-           "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
-           "/Library/Fonts/Arial Bold.ttf", "/System/Library/Fonts/Helvetica.ttc"],
-    False: ["arial.ttf", "DejaVuSans.ttf", "LiberationSans-Regular.ttf",
-            "/System/Library/Fonts/Supplemental/Arial.ttf",
-            "/Library/Fonts/Arial.ttf", "/System/Library/Fonts/Helvetica.ttc"],
+    True: [("/System/Library/Fonts/Helvetica.ttc", 1),
+           ("arialbd.ttf", None),
+           ("/System/Library/Fonts/Supplemental/Arial Bold.ttf", None),
+           ("LiberationSans-Bold.ttf", None), ("NimbusSans-Bold.otf", None),
+           ("DejaVuSans-Bold.ttf", None)],
+    False: [("/System/Library/Fonts/Helvetica.ttc", 0),
+            ("arial.ttf", None),
+            ("/System/Library/Fonts/Supplemental/Arial.ttf", None),
+            ("LiberationSans-Regular.ttf", None), ("NimbusSans-Regular.otf", None),
+            ("DejaVuSans.ttf", None)],
 }
+TRACKING = 0.05                          # letter spacing, a fraction of the size
 
 
 @lru_cache(maxsize=None)
 def font(px, bold=False):
     """A TrueType font at px pixels, whichever this system has."""
     px = max(4, int(round(px)))
-    for name in _FONT_FILES[bold]:
+    for name, style in _FONT_FILES[bold]:
         try:
-            return ImageFont.truetype(name, px)
-        except OSError:
+            if isinstance(style, int):
+                return ImageFont.truetype(name, px, index=style)
+            f = ImageFont.truetype(name, px)
+            if style:
+                f.set_variation_by_name(style)
+            return f
+        except (OSError, ValueError):
             continue
     try:
         return ImageFont.load_default(size=px)      # Pillow >= 10.1
     except TypeError:
         return ImageFont.load_default()
+
+
+def text_width(text, px, bold=False):
+    """How wide `text` prints at px pixels, letter spacing included."""
+    f = font(px, bold)
+    return sum(f.getlength(ch) for ch in text) + TRACKING * px * max(0, len(text) - 1)
 
 
 def _mix(a, b, t):
@@ -85,7 +104,7 @@ def _conic(lobes, spin, tint):
         v = 0.5 + 0.5 * math.cos(math.radians(lobes * (a - 35 - spin)))
         g = int(70 + 170 * v)
         d.pieslice((-n // 2, -n // 2, n + n // 2, n + n // 2), a, a + 2.5,
-                   fill=tuple(min(255, g + t) for t in tint))
+                   fill=tuple(max(0, min(255, g + t)) for t in tint))
     return img.filter(ImageFilter.GaussianBlur(1.0))
 
 
@@ -176,6 +195,35 @@ class Painter:
             return Image.blend(base, ImageChops.add(base, lit, 1.6), 0.5).convert("RGBA")
         self._paste(fill, box, radius)
 
+    def lit(self, box, base, peak, light, radius=0, brushed=False, seed=7):
+        """A surface under the face's light: base colour plus `peak` more at
+        the light, falling off with distance -- light = (x, y, reach across,
+        reach down) in face units. brushed adds the plate's fine streaks."""
+        lx, ly, rx, ry = light
+        x0, y0, x1, y1 = box
+
+        def fill(w, h):
+            sw, sh = max(1, w // 8), max(1, h // 8)
+            mask = Image.new("L", (sw, sh))
+            mask.putdata([int(255 * math.exp(-math.hypot(
+                ((x0 + (i % sw + 0.5) / sw * (x1 - x0)) - lx) / rx,
+                ((y0 + (i // sw + 0.5) / sh * (y1 - y0)) - ly) / ry)))
+                for i in range(sw * sh)])
+            mask = mask.resize((w, h), Image.BILINEAR)
+            lo = Image.new("RGB", (w, h), base)
+            hi = Image.new("RGB", (w, h), tuple(min(255, c + peak) for c in base))
+            out = Image.composite(hi, lo, mask)
+            if brushed:
+                rnd = random.Random(seed)
+                cols = max(1, w // SS)
+                streak = Image.new("L", (cols, 1))
+                streak.putdata([rnd.randint(90, 255) for _ in range(cols)])
+                streak = streak.resize((w, h), Image.NEAREST)
+                streaks = ImageChops.multiply(out, Image.merge("RGB", [streak] * 3))
+                out = Image.blend(out, ImageChops.add(out, streaks, 1.6), 0.5)
+            return out.convert("RGBA")
+        self._paste(fill, box, radius)
+
     def chrome(self, cx, cy, r, tint=(0, 0, 0), lobes=2, spin=0):
         """Spun chrome: light and dark lobes around the centre."""
         def fill(w, h):
@@ -191,14 +239,25 @@ class Painter:
                   over=True)
 
     def text(self, x, y, text, px, fill, anchor="mm", bold=False):
+        """Panel print, letter-spaced like the hardware's. Lines of a
+        multi-line text are centred on each other."""
         if not text:
             return
-        f = font(self.n(px), bold)
-        if "\n" in text:
-            self.d.multiline_text(self.p(x, y), text, font=f, fill=fill, anchor=anchor,
-                                  align="center", spacing=self.n(1))
-        else:
-            self.d.text(self.p(x, y), text, font=f, fill=fill, anchor=anchor)
+        n = self.n(px)
+        lines = text.split("\n")
+        lead = n * 1.12
+        top = self.p(x, y)[1] - {"t": 0, "a": 0, "m": lead * (len(lines) - 1) / 2,
+                                 "s": lead * (len(lines) - 1),
+                                 "b": lead * (len(lines) - 1),
+                                 "d": lead * (len(lines) - 1)}[anchor[1]]
+        f = font(n, bold)
+        for i, line in enumerate(lines):
+            w = text_width(line, n, bold)
+            x0 = self.p(x, y)[0] - {"l": 0, "m": w / 2, "r": w}[anchor[0]]
+            cy = top + i * lead
+            for ch in line:
+                self.d.text((x0, cy), ch, font=f, fill=fill, anchor="l" + anchor[1])
+                x0 += f.getlength(ch) + TRACKING * n
 
     def glow(self, box, draw_fn, color, blur, strength=1.0, over=False):
         """A soft light: draw_fn's shape (inside box) in color, blurred.
@@ -233,6 +292,45 @@ class Painter:
         return self.img.resize(self.size, Image.LANCZOS)
 
 
+def dock(size, scale, slots):
+    """The dock panel: gunmetal like the face's side columns, each deck's
+    screen in a gloss bezel under its name.
+
+    size is the panel in face units, drawn at `scale` so its print matches
+    the faces beside it. slots: [(title, glass box)] in face units, the glass
+    being where the screen image goes.
+    """
+    w, h = size
+    B, pad = L.DOCK_BEZEL, L.DOCK_PAD
+    p = Painter((0, 0, w, h), scale)
+    p.rrect((0, 0, w, h), 10, fill=(6, 6, 7))
+    p.gradient((2, 2, w - 2, h - 2), GUNMETAL_TOP, GUNMETAL_BOTTOM, radius=8)
+
+    def heading(x0, x1, y, text, px):
+        """A printed title with a rule after it, as the face prints '— SEARCH'."""
+        p.text(x0, y, text, px, PRINT, anchor="lm", bold=True)
+        tw = text_width(text, p.n(px), True) / p.k
+        p.line([(x0 + tw + 8, y), (x1, y)], PRINT_DIM, 1)
+
+    for title, (x0, y0, x1, y1) in slots:
+        heading(x0 - B, x1 + B, y0 - B - L.DOCK_HEADER / 2, title, 11)
+        # The bezel: the display panel's gloss black and its chrome front edge.
+        p.rrect((x0 - B - 2, y0 - B - 2, x1 + B + 2, y1 + B + 5), 9, fill=(4, 4, 5))
+        p.gradient((x0 - B, y0 - B, x1 + B, y1 + B), (26, 26, 28), GLOSS, radius=8)
+        p.gradient((x0 - B + 4, y1 + B - 2, x1 + B - 4, y1 + B + 3),
+                   (170, 172, 178), (40, 41, 44), radius=2)
+        p.glow((x0 - B, y0 - B, x1 + B, y1 + B),
+               lambda d, c, x0=x0, y0=y0, y1=y1: d.polygon(
+                   [p.p(x0 - B, y1 + B), p.p(x0 - B, y0 - B),
+                    p.p(x0 + (y1 - y0) * 0.6, y0 - B), p.p(x0 + (y1 - y0) * 0.2, y1 + B)],
+                   fill=c), (255, 255, 255), 30, 0.04, over=True)
+        # The glass's own edge; the screen image covers the inside.
+        p.rrect((x0 - 2, y0 - 2, x1 + 2, y1 + 2), 3, fill=(2, 2, 3),
+                outline=(48, 49, 52), width=1)
+
+    return p.finish().convert("RGB")
+
+
 class Art:
     """Every image of one deck face at one scale."""
 
@@ -259,8 +357,14 @@ class Art:
             self._pill(p, x, y, text)
         for x, y, text, col in L.BADGES:
             self._badge(p, x, y, text, col)
-        for cx, cy, r in L.KNOBS:
-            self._knob(p, cx, cy, r)
+        for names, margin in L.RECESSES:
+            self._recess(p, L.recess_box(names, margin))
+        for x, y, text in L.FRAMES:
+            self._frame(p, x, y, text)
+        for style, cx, cy, r in L.KNOBS:
+            self._knob(p, style, cx, cy, r)
+        for pts in L.PRINTED_LINES:
+            p.line(pts, PRINT, 1.2)
         for t in L.TEXTS:
             p.text(t.x, t.y, t.text, t.size, PRINT, t.anchor, t.bold)
         for key, look in keys_rest:
@@ -272,11 +376,12 @@ class Art:
 
     def _chassis(self, p):
         H, W = L.H, L.W
-        # The columns and the lower plate first, the raised panel over them.
-        p.rrect((0, 52, W, H), 10, fill=(6, 6, 7))
-        p.gradient((2, 54, 135, H - 2), GUNMETAL_TOP, GUNMETAL_BOTTOM, radius=8)
-        p.gradient((837, 54, W - 2, H - 2), GUNMETAL_TOP, GUNMETAL_BOTTOM, radius=8)
-        p.brushed((139, 404, 833, H - 2), BRUSHED_TOP, BRUSHED_BOTTOM)
+        # The columns and the lower plate first, the raised panel over them,
+        # all under the face's one light from above its left edge.
+        p.rrect((0, 52, W, H), 10, fill=(4, 4, 5))
+        p.lit((2, 54, 135, H - 2), (20, 20, 21), 80, (0, 52, 400, 700), radius=8)
+        p.lit((837, 54, W - 2, H - 2), (26, 26, 27), 14, (837, 52, 300, 900), radius=8)
+        p.lit((139, 404, 833, H - 2), (6, 6, 7), 150, L.LIGHT, brushed=True)
         p.line([(137, 404), (137, H)], (8, 8, 9), 2)
         p.line([(835, 404), (835, H)], (8, 8, 9), 2)
         # The foot at the front edge.
@@ -324,8 +429,6 @@ class Art:
         for x in (26, 115):
             for y0, y1 in ((330, 366), (404, 440), (478, 514), (554, 596)):
                 p.line([(x, y0 + 10), (x, y1 - 4)], PRINT_DIM, 1)
-        p.line([(28, 662), (52, 662)], PRINT_DIM, 1)
-        p.line([(88, 662), (112, 662)], PRINT_DIM, 1)
 
     def _right_column(self, p):
         p.circle(900, 99, 2.5, fill=(200, 20, 20))
@@ -334,15 +437,6 @@ class Art:
         # The jog mode panel.
         p.rrect((843, 504, 958, 554), 4, fill=(16, 16, 17), outline=(70, 72, 76),
                 width=1)
-        # Vinyl speed adjust: the curve each knob sets.
-        for y, up in ((385, True), (468, False)):
-            lo, hi = (y, y - 8) if up else (y - 8, y)
-            p.line([(865, lo), (873, lo), (873, hi), (927, hi), (927, lo), (935, lo)],
-                   PRINT_DIM, 1)
-        p.line([(850, 588), (850, 598), (858, 598)], PRINT, 1)
-        for x0, x1 in ((208, 228), (284, 290), (322, 326), (643, 671), (701, 724),
-                       (772, 787)):
-            p.line([(x0, 468), (x1, 468)], PRINT, 1.2)
 
     def _jog_surround(self, p):
         cx, cy, r = L.JOG
@@ -351,10 +445,11 @@ class Art:
             p.d.arc(p.c(cx, cy, r + 24), a0, a1, fill=PRINT, width=p.w(1.2))
             a = math.radians(head)
             tip = (cx + (r + 24) * math.cos(a), cy + (r + 24) * math.sin(a))
-            back = math.radians(head + (6 if head > 90 else -6))
-            for off in (-5, 5):
-                p.line([tip, (cx + (r + 24 + off) * math.cos(back),
-                              cy + (r + 24 + off) * math.sin(back))], PRINT, 1.2)
+            # A small solid wedge, as printed on the panel.
+            back = math.radians(head + (7 if head > 90 else -7))
+            p.d.polygon([p.p(*tip)] + [
+                p.p(cx + (r + 24 + off) * math.cos(back), cy + (r + 24 + off) * math.sin(back))
+                for off in (-3.5, 3.5)], fill=PRINT)
 
     def _slider_frame(self, p):
         x0, y0, x1, y1 = L.SLIDER_FRAME
@@ -370,8 +465,7 @@ class Art:
         p.rrect((838, 994, 850, 999), 1, fill=(200, 230, 40))
 
     def _pill(self, p, x, y, text):
-        f = font(p.n(7.5), True)
-        tw = p.d.textlength(text, font=f) / p.k
+        tw = text_width(text, p.n(7.5), True) / p.k
         p.rrect((x - tw / 2 - 5, y - 6, x + tw / 2 + 5, y + 6), 3, fill=(190, 192, 196))
         p.text(x, y, text, 7.5, (20, 20, 22), bold=True)
 
@@ -379,18 +473,56 @@ class Art:
         p.rrect((x - 19, y - 7, x + 19, y + 7), 2, fill=_mix(col, (0, 0, 0), 0.25))
         p.text(x, y, text, 8, (240, 240, 245), bold=True)
 
-    def _knob(self, p, cx, cy, r):
-        for i in range(11):
-            a = math.radians(135 + i * 27)
-            p.circle(cx + (r + 7) * math.cos(a), cy + (r + 7) * math.sin(a), 0.9,
-                     fill=PRINT_DIM)
+    def _recess(self, p, box):
+        """A well a key group sits in: a shallow stadium, its top edge in
+        shadow and a faint lip of light along its bottom."""
+        x0, y0, x1, y1 = box
+        r = (y1 - y0) / 2
+        p.rrect((x0, y0 + 0.5, x1, y1 + 1), r, fill=(58, 59, 62))
+        p.rrect(box, r, fill=(14, 14, 15))
+        p.gradient((x0 + 0.8, y0 + 1.2, x1 - 0.8, y1 - 0.4), (30, 30, 32), (44, 44, 47),
+                   radius=r - 1)
+
+    def _frame(self, p, x, y, text):
+        """A word in a printed outline, as DELETE beside CALL."""
+        tw = text_width(text, p.n(7.5), True) / p.k
+        p.rrect((x - tw / 2 - 4, y - 6, x + tw / 2 + 4, y + 6), 2, outline=PRINT, width=1)
+        p.text(x, y, text, 7.5, PRINT, bold=True)
+
+    def _knob(self, p, style, cx, cy, r):
+        if style == "vinyl":
+            # Tick lines round the dial, all but its bottom.
+            for i in range(11):
+                a = math.radians(118 + i * 30.4)
+                p.line([(cx + (r + 4) * math.cos(a), cy + (r + 4) * math.sin(a)),
+                        (cx + (r + 9) * math.cos(a), cy + (r + 9) * math.sin(a))],
+                       PRINT_DIM, 1.1)
+        else:
+            # Jog adjust: dots over the top, a bigger one at twelve, and a
+            # short line at each end, at LIGHT and HEAVY.
+            for i in range(11):
+                a = math.radians(135 + i * 27)
+                big = i == 5
+                p.circle(cx + (r + 6) * math.cos(a), cy + (r + 6) * math.sin(a),
+                         1.5 if big else 0.9, fill=PRINT if big else PRINT_DIM)
+            for deg in (121, 59):
+                a = math.radians(deg)
+                p.line([(cx + (r + 9) * math.cos(a), cy + (r + 9) * math.sin(a)),
+                        (cx + (r + 16) * math.cos(a), cy + (r + 16) * math.sin(a))],
+                       PRINT, 1.2)
         p.circle(cx, cy, r, fill=(6, 6, 7))
-        for i in range(20):
-            a = math.radians(i * 18)
+        for i in range(24):
+            a = math.radians(i * 15)
             p.line([(cx + (r - 3) * math.cos(a), cy + (r - 3) * math.sin(a)),
                     (cx + r * math.cos(a), cy + r * math.sin(a))], (60, 62, 66), 1)
+        if style == "jog_adjust":
+            # A spun silver cap inside the knurled rim, its pointer at twelve.
+            p.chrome(cx, cy, r - 5, lobes=3)
+            p.line([(cx, cy), (cx, cy - (r - 6))], (250, 250, 252), 2.2)
+            return
         p.dome(cx, cy, r - 4, (20, 20, 22))
-        a = math.radians(300)
+        # The pointer at rest, as the knob ships: about seven o'clock.
+        a = math.radians(120)
         p.line([(cx, cy), (cx + (r - 4) * math.cos(a), cy + (r - 4) * math.sin(a))],
                (235, 236, 240), 2)
 
@@ -411,12 +543,10 @@ class Art:
         return self._sprites[k]
 
     def _key(self, p, key, look, lit=False, down=False):
-        """look: 'live', 'untested' (decoded, not yet tried) or 'inert'."""
+        """look: 'live', 'untested' (decoded, not yet tried) or 'inert'. The
+        face draws them alike: a mark on the key read as a lamp the real deck
+        does not have, so the status bar says how sure a control is instead."""
         getattr(self, "_k_" + key.kind)(p, key, lit or down, down)
-        if look == "untested":
-            x0, y0, x1, y1 = key.bounds()
-            p.circle(x1 - 1, y0 + 1, 2.6, fill=(10, 10, 10), outline=UNTESTED,
-                     width=1.1)
 
     def _led_outline(self, p, box, radius, color, lit, width=1.6):
         if lit:
@@ -465,8 +595,62 @@ class Art:
             p.circle(cx, cy, rd, fill=_mix(key.dot, (255, 255, 255), 0.25) if lit
                      else _dim(key.dot, 0.45))
 
+    def _led(self, p, cx, cy, rd, color, lit):
+        """An LED dot in a key's centre."""
+        if lit:
+            p.glow((cx - rd, cy - rd, cx + rd, cy + rd),
+                   lambda d, c: d.ellipse(p.c(cx, cy, rd * 1.5), fill=c), color, rd, 1.0)
+        p.circle(cx, cy, rd, fill=_mix(color, (255, 255, 255), 0.25) if lit
+                 else _mix((10, 10, 11), color, 0.55))
+
+    # Chrome on the small keys is darker and more contrasty than the big
+    # search keys'.
+    DARK_CHROME = (-44, -44, -42)
+
+    def _k_cdome(self, p, key, lit, down):
+        """A chrome dome: spun metal with a smaller spun cap."""
+        cx, cy, r = key.circle
+        p.circle(cx, cy, r + 2.5, fill=(6, 6, 7))
+        p.chrome(cx, cy, r, tint=self.DARK_CHROME, spin=8 if down else 0)
+        p.chrome(cx, cy, r * 0.62, tint=self.DARK_CHROME, lobes=3, spin=30)
+        if key.dot:
+            self._led(p, cx, cy, max(2.5, r * 0.3), key.dot, lit)
+
+    def _k_ring(self, p, key, lit, down, ring=None):
+        """A glossy black dome in a ring: chrome, or `ring` as a colour."""
+        cx, cy, r = key.circle
+        p.circle(cx, cy, r + 3.5, fill=(4, 4, 5))
+        if ring:
+            p.circle(cx, cy, r + 2, fill=ring)
+        else:
+            p.chrome(cx, cy, r + 2, tint=self.DARK_CHROME, spin=20)
+        p.circle(cx, cy, r - 0.5, fill=(3, 3, 4))
+        p.dome(cx, cy, r - 1.5, (6, 6, 7) if down else (14, 14, 15))
+        if key.dot:
+            self._led(p, cx, cy, max(2.5, r * 0.3), key.dot, lit)
+
+    def _k_pale(self, p, key, lit, down):
+        self._k_ring(p, key, lit, down, ring=(196, 198, 202))
+
+    def _k_plate(self, p, key, lit, down):
+        """A chrome key with its name on a small plate, lit in its colour."""
+        cx, cy, r = key.circle
+        p.circle(cx, cy, r + 3, fill=(4, 4, 5))
+        p.chrome(cx, cy, r - 1, spin=8 if down else 0)
+        face = key.color if lit else _mix((40, 40, 42), key.color, 0.55)
+        tw = text_width(key.label, p.n(7), True) / p.k
+        p.rrect((cx - tw / 2 - 4, cy - 6, cx + tw / 2 + 4, cy + 6), 3, fill=face)
+        p.text(cx, cy, key.label, 7, (24, 20, 16), bold=True)
+
     def _k_chrome(self, p, key, lit, down):
         cx, cy, r = key.circle
+        if key.symbol and key.symbol != "eject":
+            # The search keys: a small spun disc in a thick black bezel.
+            p.circle(cx, cy, r + 1, fill=(4, 4, 5))
+            p.circle(cx, cy, r - 1, fill=(18, 18, 19))
+            p.chrome(cx, cy, r - 4, tint=self.DARK_CHROME, spin=8 if down else 0)
+            self._symbol(p, key.symbol, cx, cy, r * 0.3, L.AMBER)
+            return
         p.circle(cx, cy, r + 3, fill=(4, 4, 5))
         if key.name == "master" or lit:
             if lit:
@@ -749,3 +933,117 @@ class Art:
             p.rrect((6, 2 + h / 2, w + 2, 6 + h / 2), 1, fill=(245, 246, 250))
             self._sprites[k] = (p.finish(), None)
         return self._sprites[k][0]
+
+
+# -- every size from one reference render -------------------------------------
+#
+# Drawing is slow -- supersampled shapes, glows, chrome: about 0.7 s for the
+# body and 0.5 s per jog phase at scale 1 -- and a window resize needs every
+# image again. So each image is drawn once, at REF_SCALE, and every smaller
+# size is a LANCZOS downscale of it (~30 ms for the body), which is what the
+# supersampling does anyway. The reference images are kept on disk, keyed by
+# this file's and layout.py's contents, so a later start draws nothing at all.
+
+REF_SCALE = 1.3
+_REFS = {}                               # deck label -> the reference Art
+
+
+def _cache_dir():
+    """Where the reference images live; CDJ_APP_CACHE overrides."""
+    h = hashlib.sha1(f"{REF_SCALE} {SS}".encode())
+    here = os.path.dirname(os.path.abspath(__file__))
+    for name in ("art.py", "layout.py"):
+        with open(os.path.join(here, name), "rb") as fh:
+            h.update(fh.read())
+    base = os.environ.get("CDJ_APP_CACHE") or os.path.join(tempfile.gettempdir(),
+                                                          "cdj-app-art")
+    return os.path.join(base, h.hexdigest()[:12])
+
+
+_CACHE = None
+_LOADED = {}                             # name -> reference image, once read
+
+
+def _stored(name, render):
+    """The reference image `name`: from memory, from disk, or rendered and
+    then stored."""
+    global _CACHE
+    if name in _LOADED:
+        return _LOADED[name]
+    if _CACHE is None:
+        _CACHE = _cache_dir()
+        os.makedirs(_CACHE, exist_ok=True)
+    path = os.path.join(_CACHE, name + ".png")
+    try:
+        with Image.open(path) as img:
+            _LOADED[name] = img.copy()
+            return _LOADED[name]
+    except OSError:
+        pass
+    img = render()
+    try:
+        tmp = f"{path}.{os.getpid()}.tmp"
+        img.save(tmp, "PNG")
+        os.replace(tmp, path)            # atomic: two decks may store at once
+    except OSError:
+        pass                             # a read-only cache just costs time
+    _LOADED[name] = img
+    return img
+
+
+class ScaledArt(Art):
+    """An Art whose images are downscaled from the reference's."""
+
+    def __init__(self, scale, deck_label):
+        super().__init__(scale, deck_label)
+        if deck_label not in _REFS:
+            _REFS[deck_label] = Art(REF_SCALE, deck_label)
+        self.ref = _REFS[deck_label]
+
+    def _fit(self, name, box, render):
+        """(image, pixel position) of the reference's `name` at this scale,
+        placed on `box` (face units) exactly as a Painter would place it."""
+        k = ("fit", name)
+        if k not in self._sprites:
+            img = _stored(name, render)
+            s = self.scale
+            px = (round(box[0] * s), round(box[1] * s))
+            size = (max(1, round(box[2] * s) - px[0]), max(1, round(box[3] * s) - px[1]))
+            self._sprites[k] = (img.resize(size, Image.LANCZOS), px)
+        return self._sprites[k]
+
+    def body(self, keys_rest):
+        looks = hashlib.sha1("".join(look for _, look in keys_rest).encode()).hexdigest()[:8]
+        label = self.deck_label.replace(" ", "_")
+        return self._fit(f"body-{label}-{looks}", (0, 0, L.W, L.H),
+                         lambda: self.ref.body(keys_rest))[0]
+
+    def key_sprite(self, key, lit, down, look):
+        return self._fit(f"key-{key.name}-{int(lit)}{int(down)}-{look}", self.key_box(key),
+                         lambda: self.ref.key_sprite(key, lit, down, look)[0])
+
+    def jog_sprite(self, phase):
+        phase = int(phase) % self.JOG_PHASES
+        return self._fit(f"jog-{phase}", self.jog_box(),
+                         lambda: self.ref.jog_sprite(phase)[0])
+
+    def centre_sprite(self, ring, live):
+        return self._fit(f"centre-{int(ring)}{int(live)}", self.centre_box(),
+                         lambda: self.ref.centre_sprite(ring, live)[0])
+
+    def select_sprite(self, phase, down):
+        phase = int(phase) % self.SELECT_PHASES
+        return self._fit(f"select-{phase}{int(down)}", self.select_box(),
+                         lambda: self.ref.select_sprite(phase, down)[0])
+
+    def slider_cap(self):
+        w, h = self.SLIDER_CAP
+        return self._fit("cap", (0, 0, w + 8, h + 8), self.ref.slider_cap)[0]
+
+
+def make_art(scale, deck_label):
+    """The Art for a face at `scale`: downscaled from the reference when it is
+    smaller than that, drawn directly when larger."""
+    if scale <= REF_SCALE:
+        return ScaledArt(scale, deck_label)
+    return Art(scale, deck_label)

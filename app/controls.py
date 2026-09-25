@@ -44,13 +44,28 @@ def describe_action(action_name):
     return f"{a.name} ({a.status}){note}"
 
 
+# How sure a control is, in the words the status strip uses; a confirmed
+# control says nothing about it.
+_SURENESS = {A.PARTIAL: "partly working", A.DECODED: "not yet tried on a deck",
+             A.GUESS: "a guess", A.UNBOUND: "not connected"}
+
+
 def describe(key):
-    """One line for the status bar: what the control is and how sure we are."""
-    what = key.name.replace("_", " ")
+    """One line for the status strip: the control, its key, and how sure we
+    are when that is less than confirmed."""
+    parts = [key.name.replace("_", " ").capitalize()]
+    if key.keycap:
+        parts.append(f"key {key.keycap}")
     if not key.action:
-        return f"{what}: not modelled here (no report bit is known for it)"
-    host = f"   [keyboard: {key.keycap}]" if key.keycap else ""
-    return f"{what}: {describe_action(key.action)}{host}"
+        parts.append("not modelled yet")
+    else:
+        a = A.resolve(key.action)
+        sure = _SURENESS.get(a.status)
+        # A partial control's note says what it does and does not do; the
+        # others' notes are only the firmware's name for the bit.
+        if sure:
+            parts.append(f"{sure}: {a.note}" if a.note and a.status == A.PARTIAL else sure)
+    return "  ·  ".join(parts)
 
 
 class KeyControl:

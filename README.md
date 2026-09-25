@@ -279,11 +279,12 @@ keys with no known report bit (hot cues, BANK, QUANTIZE, TRACK FILTER, SHORT
 CUT, the vinyl speed knobs, the needle strip) are drawn but do nothing.
 Hovering a control says which is which in the status line.
 
-**The screen, and why it is beside the deck.** The NXS2's 7-inch screen is a
-small part of a tall deck, so a face that fits a monitor shows it at about
-half size. When the monitor has room the app therefore docks each deck's
-screen beside the face at its own 800 x 480 (`--screen dock|face|window|auto`,
-or `CDJ_APP_SCREEN`), and `F3` gives it a window of its own.
+**A bigger screen.** The NXS2's 7-inch screen is a small part of a tall
+deck, so a face that fits a monitor shows it at about half size. `F3` opens
+a deck's screen in a window of its own at any size (`F11` there for full
+screen); `F2` docks it beside the face at its own 800 x 480 instead. The
+default is the decks alone (`--screen face|dock|window|auto`, or
+`CDJ_APP_SCREEN`).
 
 **How it is built.** Python's own tkinter and Pillow, which the rig already
 needs, so nothing new to install on most systems (Debian/Ubuntu: `sudo apt
