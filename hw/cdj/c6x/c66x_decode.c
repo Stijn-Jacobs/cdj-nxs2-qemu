@@ -174,7 +174,7 @@ bool c66x_prev_parallel(c66x_fp_reader rd, void *opaque, uint32_t addr)
 enum { XF_L12, XF_L12U, XF_S12, XF_S12U, XF_S2, XF_S2U, XF_D2, XF_M32U, XF_MCR,
        XF_MCRU, XF_L1, XF_S1, XF_M1 };
 enum { XFLD_SRC1, XFLD_SRC2, XFLD_DST };
-enum { XT_REG, XT_XREG, XT_PAIR, XT_XPAIR, XT_QUAD, XT_SCST5, XT_UCST5, XT_XLONG };
+enum { XT_REG, XT_XREG, XT_PAIR, XT_XPAIR, XT_QUAD, XT_SCST5, XT_UCST5, XT_LONG, XT_XLONG };
 
 typedef struct c66x_ext_op {
     const char *name;
@@ -263,7 +263,7 @@ static int decode_ext(uint32_t w, c66x_insn *d, char *text, unsigned textlen)
             case XT_PAIR: case XT_XPAIR:
                 o->kind = C66X_OPK_PAIR; o->size = 8; o->reg = base + (v & ~1u); o->reg_hi = o->reg + 1;
                 break;
-            case XT_XLONG:
+            case XT_LONG: case XT_XLONG:
                 /* 40-bit long: the low word and the pair's low 8 bits above it */
                 o->kind = C66X_OPK_PAIR; o->size = 5; o->reg = base + (v & ~1u); o->reg_hi = o->reg + 1;
                 break;

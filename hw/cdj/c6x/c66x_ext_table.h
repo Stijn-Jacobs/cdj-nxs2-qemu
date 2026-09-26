@@ -168,4 +168,6 @@ static const c66x_ext_op c66x_ext_table[] = {
     { "cmplt", 'L', XF_L12, 0x54, 0, 3, { { XFLD_SRC1, XT_SCST5 }, { XFLD_SRC2, XT_XLONG }, { XFLD_DST, XT_REG } } },
     { "cmpgtu", 'L', XF_L12, 0x4c, 0, 3, { { XFLD_SRC1, XT_UCST5 }, { XFLD_SRC2, XT_XLONG }, { XFLD_DST, XT_REG } } },
     { "cmpltu", 'L', XF_L12, 0x5c, 0, 3, { { XFLD_SRC1, XT_UCST5 }, { XFLD_SRC2, XT_XLONG }, { XFLD_DST, XT_REG } } },
+    { "shru", 'S', XF_S12, 0x25, 0, 3, { { XFLD_SRC2, XT_XLONG }, { XFLD_SRC1, XT_REG }, { XFLD_DST, XT_LONG } } },
+    { "shru", 'S', XF_S12, 0x24, 0, 3, { { XFLD_SRC2, XT_XLONG }, { XFLD_SRC1, XT_UCST5 }, { XFLD_DST, XT_LONG } } },
 };
