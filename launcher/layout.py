@@ -81,6 +81,7 @@ class Layout:
             self.logs = os.path.join(self.data, "logs")
             self.extract = os.path.join(self.data, "firmware")
             self.jit_cache = os.path.join(self.data, "dsp")
+            self.tools = os.path.join(self.data, "tools")
         else:
             self.runtime = None
             self.root = _checkout_root(self.emu)
@@ -89,6 +90,7 @@ class Layout:
             self.logs = os.path.join(self.emu, "logs")
             self.extract = os.path.join(self.root, "extract")
             self.jit_cache = os.path.join(host.home(), "c14gen")
+            self.tools = os.path.join(self.emu, "tools")
 
     @property
     def usb_image(self):

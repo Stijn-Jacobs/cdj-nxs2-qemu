@@ -79,8 +79,11 @@ skipped when it is already done:
 3. **Firmware** — asks for your `C2KNXS2.UPD`, Pioneer DJ's public update for
    the CDJ-2000NXS2, **version 1.87**, and turns it into the images the
    emulator boots, checking each against a known SHA-256.
-4. **USB stick** — asks for a folder of your own music exported by rekordbox
-   (the folder that holds `PIONEER/`) and builds a disk image of it.
+4. **USB stick** — either a folder of your own music exported by rekordbox
+   (the folder that holds `PIONEER/`), or a plain folder of music files
+   (MP3, FLAC, AAC/M4A, WAV, AIFF, ALAC), which
+   [baken](https://github.com/M-Igashi/baken) analyses instead — no
+   rekordbox needed. Either way, a disk image is built from the result.
 5. **DSP code** — boots one deck without a window and lets it play a track for
    a few minutes while MASTER TEMPO and the tempo fader are swept, so the DSP's
    JIT compiles the program's hot code into its cache (`~/c14gen`) and your
@@ -142,6 +145,7 @@ version), and your own music.
   --keep-recording              keep that build's DSP recording (~10 GB)
   --firmware <file>             the C2KNXS2.UPD to use (re-installs the images)
   --music <folder>              the rekordbox USB export to image
+  --tracks <folder>             a plain folder of music to image instead, analysed by baken
   --decks 1|2   --name <deck name>   --djlink on|off   --audio on|off
   --controller none|<profile>|learn  --relay-port <port>
   --build-dir <dir>             where the two QEMU build trees go
@@ -312,6 +316,28 @@ arrive, not the toolkit. The app talks to the deck three ways:
   same path and the same key table (`midi/cdj_actions.py`) as a MIDI
   controller, which can stay connected alongside.
 
+## 🔧 Service mode
+
+```sh
+./start.sh --service      # or CDJ_SERVICE=1 in cdj.conf; --no-service overrides it
+```
+
+This is the service manual's own diagnostic screen: on real hardware you get
+it by holding **TEMPO RANGE** and **MEMORY** while powering the unit on, until
+the Pioneer logo clears, and this flag does exactly that at boot. The screen
+lists BUTTON, JOG, ENCODER, NEEDLE, SLIDER VOLUME, JOG TOUCH VOLUME and JOG
+RELEASE VOLUME; press or move a control and its own row lights up, so it is a
+live test of every input rather than the player screen.
+
+Both keys release once the logo clears, so nothing stays held down and the
+rest of the deck is otherwise normal.
+
+**Persistence.** By default every run boots from a shared, throwaway flash
+image, so nothing you change in SERVICE MODE (or anywhere else) survives past
+Ctrl-C. With `PERSIST=1` a deck keeps its own flash image between runs
+(`extract/flash-<tag>.bin`), the same as a real unit's memory — a setting
+changed in SERVICE MODE on a persistent deck stays changed.
+
 ## 🎚️ MIDI controllers
 
 **Using one:** plug the controller in before `./setup.sh`. Setup recognises a
@@ -400,7 +426,7 @@ machine: the update file, and anything built from it, is Pioneer's.
 | `patches/` | the changes to QEMU 9.1.0 itself |
 | `scripts/build/` | the QEMU builds (Linux, macOS and MSYS2) and the board installer |
 | `scripts/firmware/` | unpacking and verifying the update file |
-| `scripts/media/` | the USB stick image builder |
+| `scripts/media/` | the USB stick image builder; `collection_xml.py` and `bpm_estimate.py` turn a plain folder of music into the XML [baken](https://github.com/M-Igashi/baken) reads for the other USB step |
 | `scripts/run/` | the run chain behind the launchers, the panel and monitor sockets, the controller relay and the run reports |
 | `scripts/net/` | the Pro DJ Link segment: DHCP server, capture, capture scorer |
 | `midi/` | the MIDI controller bridge, controller profiles, mappings and the learn tool |
@@ -437,7 +463,9 @@ describes the files' licences; it is not legal advice.
 ## 🙏 Credits
 
 [QEMU](https://www.qemu.org/), which this machine plugs into; GNU binutils, for
-the TI C6x opcode tables; [minimp3](https://github.com/lieff/minimp3).
+the TI C6x opcode tables; [minimp3](https://github.com/lieff/minimp3);
+[baken](https://github.com/M-Igashi/baken) (MIT), which writes the USB export
+for the folder-of-music setup step.
 
 ## ✅ Tests
 

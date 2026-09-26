@@ -23,6 +23,9 @@ START_DEFAULTS = {
     # CDJ_APP=1 makes the virtual deck app the default window (--no-app
     # overrides); CDJ_APP_PYTHON is the Python that runs it (tkinter + Pillow).
     "CDJ_APP": "0", "CDJ_APP_PYTHON": "",
+    # CDJ_SERVICE=1 makes start.sh boot into the service manual's SERVICE MODE
+    # by default (--service/--no-service overrides).
+    "CDJ_SERVICE": "0",
 }
 
 

@@ -12,3 +12,6 @@ Pillow>=9.0
 pyfatfs>=1.0
 # pyfatfs imports pkg_resources through fs; see requirements.txt.
 setuptools<81
+# scripts/media/collection_xml.py and bpm_estimate.py; see requirements.txt.
+mutagen>=1.45
+numpy>=1.24

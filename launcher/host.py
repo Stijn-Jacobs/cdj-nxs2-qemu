@@ -35,10 +35,23 @@ def exe_suffix():
 
 
 @functools.lru_cache(maxsize=None)
+def _msys2_root():
+    """The MSYS2 this project's QEMUs are built under (C:\\msys64), if it is
+    actually there. Not whatever cygpath a shell happens to have on PATH:
+    Git for Windows ships its own, and answers for a tree with none of the
+    project's mingw64 runtime in it."""
+    root = r"C:\msys64"
+    return root if os.path.isfile(os.path.join(root, "usr", "bin", "cygpath.exe")) else None
+
+
+@functools.lru_cache(maxsize=None)
 def cygpath_tool():
     """MSYS2's cygpath: there, as in the scripts, paths for a native program
     are converted with it."""
-    return shutil.which("cygpath") if is_windows() else None
+    if not is_windows():
+        return None
+    root = _msys2_root()
+    return os.path.join(root, "usr", "bin", "cygpath.exe") if root else shutil.which("cygpath")
 
 
 @functools.lru_cache(maxsize=None)
@@ -106,6 +119,15 @@ def rig_tmp():
     return tempfile.gettempdir().replace("\\", "/")
 
 
+def qemu_dll_dir():
+    """Where MAIN and GUI's runtime DLLs (SDL2, glib, ...) live: MSYS2's
+    mingw64/bin. The build trees under QEMU_BUILD do not carry copies of
+    them, so a shell whose PATH never had this directory on it (any shell
+    other than MSYS2's own) starts a QEMU that dies before it opens its log."""
+    root = _msys2_root()
+    return os.path.join(root, "mingw64", "bin") if root else None
+
+
 def windows_reserved_ranges(proto):
     """The (start, end) port blocks Windows keeps for Hyper-V and WSL, chosen
     at boot. A bind inside one fails, for QEMU with only "Unknown error"."""
@@ -155,6 +177,26 @@ def pick_udp_port(wanted):
     """`wanted`, or the next one BELOW it: Windows reserves the high ranges."""
     p = _unreserved(wanted, -1, windows_reserved_ranges("udp"))
     return wanted if p == -1 else p
+
+
+def pick_port_block(base, count):
+    """`base`, or the next one where base .. base+count-1 are all free and
+    unreserved: the app's one VNC port per deck."""
+    ranges = windows_reserved_ranges("tcp")
+    for base in range(base, base + 64):
+        if any(in_ranges(base + i, ranges) for i in range(count)):
+            continue
+        socks = [socket.socket() for _ in range(count)]
+        try:
+            for i, s in enumerate(socks):
+                s.bind(("127.0.0.1", base + i))
+            return base
+        except OSError:
+            continue
+        finally:
+            for s in socks:
+                s.close()
+    return base
 
 
 @functools.lru_cache(maxsize=None)

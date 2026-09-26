@@ -39,7 +39,25 @@ SCENARIOS = {
                                               "PERSIST": "1", "OWNMAC": "7", "ICOUNT": "shift=3",
                                               "AUDIODEV": "wav,path=/tmp/%TAG%.wav"}, True),
     "one-deck-app": ("live.sh", 1, {"DJLINK": "0", "GUI_DISPLAY": "vnc", "CDJ_APP_VNC_BASE": "5960"}, False),
+    "one-deck-service": ("live.sh", 1, {"DJLINK": "0", "SERVICE": "1"}, False),
 }
+
+
+@pytest.fixture(autouse=True)
+def _real_media_cache_untouched():
+    """Both chains cache MEDIA_MODE=img's source under the real machine /tmp
+    when nothing names one already (see MEDIA_IMG_SRC above); a test that
+    forgets to set it would overwrite a developer's real USB image with the
+    64-byte throwaway one _tree() makes."""
+    cache = os.path.join(host.rig_tmp(), "usbmedia3.img")
+    before = os.stat(cache) if os.path.exists(cache) else None
+    yield
+    after = os.stat(cache) if os.path.exists(cache) else None
+    if before is None:
+        assert after is None, "test wrote the shared USB image cache at %s" % cache
+    else:
+        assert (after.st_mtime, after.st_size) == (before.st_mtime, before.st_size), \
+            "test overwrote the shared USB image cache at %s" % cache
 
 
 @pytest.fixture(scope="module")
@@ -95,11 +113,18 @@ def _run(tree, script, tag, ndecks, env):
 def test_chain_matches_bash(name, tmp_path, fake_qemu):
     script, ndecks, extra, module = SCENARIOS[name]
     root, home = _tree(tmp_path, module)
-    tag = "zpk" + "abcd"[sorted(SCENARIOS).index(name)]
+    tag = "zpk" + "abcde"[sorted(SCENARIOS).index(name)]
     env = {k: v for k, v in os.environ.items() if not k.startswith(BOARD) and k not in ("MAIN_QEMU", "GUI_QEMU")}
     env.update(CDJ_ROOT=root, HOME=home, MAIN_QEMU=fake_qemu, GUI_QEMU=fake_qemu, PRIO="Normal",
                LAUNCH_STAGGER="0", FRAMES="1", MOTION_MS="1000", AUTOLOAD="0",
-               GROUP="239.77.77.9:44990", RELAY_PORT=str(_free_port()), **extra)
+               GROUP="239.77.77.9:44990", RELAY_PORT=str(_free_port()),
+               # Unset, MEDIA_MODE=img caches its source under the machine's
+               # real /tmp -- shared with whatever a developer is running --
+               # keyed on a name with no tag in it. Naming the source here
+               # (the fake tree's own throwaway image) skips that cache on
+               # both sides, bash and Python, the same way a real caller who
+               # already has the image elsewhere would.
+               MEDIA_IMG_SRC=host.native(os.path.join(root, "extract", "usbmedia3.img")), **extra)
     ref_env = dict(env, FAKE_QEMU_OUT=str(tmp_path / "ref"))
     if extra.get("GUI_DISPLAY") == "vnc":
         # The bash tree drew the app's screen through a GUI_QEMU wrapper.

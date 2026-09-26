@@ -15,8 +15,10 @@
 #                     emulators, the DSP core library (logs in logs/)
 #   3 firmware        your own C2KNXS2.UPD (v1.87) turned into the images the
 #                     emulator boots, each checked against a known SHA-256
-#   4 USB stick       a disk image made from a folder of your own music
-#                     (a rekordbox USB export)
+#   4 USB stick       a disk image made from a folder of your own music: either
+#                     a rekordbox USB export, or a plain folder of music files
+#                     that baken (github.com/M-Igashi/baken, MIT) analyses --
+#                     no rekordbox needed
 #   5 DSP code        one headless deck plays for a few minutes so the DSP JIT
 #                     compiles its hot code into ~/c14gen; with --curated-jit,
 #                     a profile-guided module built from a recording instead
@@ -36,6 +38,7 @@
 #   --reconfigure          ask the step 6 questions again
 #   --firmware <file>      the C2KNXS2.UPD to use (re-installs the images)
 #   --music <folder>       the rekordbox USB export to image (re-makes the stick)
+#   --tracks <folder>      a plain folder of music to image instead, analysed by baken
 #   --decks 1|2            --name <deck name>    --djlink on|off   --audio on|off
 #   --controller none|<profile>|learn            --relay-port <port>
 #   --build-dir <dir>      where the two QEMU build trees go

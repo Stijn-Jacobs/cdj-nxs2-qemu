@@ -13,8 +13,10 @@ already there:
                     emulators, the DSP core library (logs in logs/)
   3 firmware        your own C2KNXS2.UPD (v1.87) turned into the images the
                     emulator boots, each checked against a known SHA-256
-  4 USB stick       a disk image made from a folder of your own music
-                    (a rekordbox USB export)
+  4 USB stick       a disk image made from a folder of your own music: either
+                    a rekordbox USB export, or a plain folder of music files
+                    that baken (github.com/M-Igashi/baken, MIT) analyses --
+                    no rekordbox needed
   5 DSP code        one headless deck plays for a few minutes so the DSP JIT
                     compiles its hot code into ~/c14gen; with --curated-jit,
                     a profile-guided module built from a recording instead
@@ -34,6 +36,7 @@ options:
   --reconfigure          ask the step 6 questions again
   --firmware <file>      the C2KNXS2.UPD to use (re-installs the images)
   --music <folder>       the rekordbox USB export to image (re-makes the stick)
+  --tracks <folder>      a plain folder of music to image instead, analysed by baken
   --decks 1|2            --name <deck name>    --djlink on|off   --audio on|off
   --controller none|<profile>|learn            --relay-port <port>
   --build-dir <dir>      where the two QEMU build trees go
@@ -49,15 +52,17 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
-from . import chain, conf, firmware, host, pythons
+from . import baken, chain, conf, firmware, host, pythons
 from .console import Console, dropped_path, stdin_is_tty
 from .layout import Layout
 
 USAGE = __doc__[__doc__.index("  ./setup.sh  "):__doc__.index("  -h, --help") + len("  -h, --help")] + "\n"
 
 VALUE_OPTS = {"--firmware": ("firmware", "a file"), "--music": ("music", "a folder"),
+              "--tracks": ("tracks", "a folder"),
               "--decks": ("decks", "1 or 2"), "--name": ("name", "a word"),
               "--djlink": ("djlink", "on or off"), "--audio": ("audio", "on or off"),
               "--controller": ("controller", "a name"), "--relay-port": ("relay", "a number"),
@@ -69,7 +74,7 @@ class Options:
         self.dry = self.yes = self.skip_build = self.rebuild = self.reconfigure = False
         self.warm = "auto"
         self.curated = self.keep_recording = False
-        self.firmware = self.music = self.decks = self.name = self.djlink = ""
+        self.firmware = self.music = self.tracks = self.decks = self.name = self.djlink = ""
         self.audio = self.controller = self.relay = self.build_dir = ""
 
 
@@ -287,6 +292,16 @@ class Setup:
                         if self.py_tools:
                             con.good("installed")
 
+        if self.py_tools and pythons.has(self.py_tools, "mutagen"):
+            con.good("mutagen, for a folder-of-music USB step (tags, and BPM tags when present)")
+        else:
+            con.dim("no mutagen yet: same fix as above (-r requirements.txt) -- until then, a")
+            con.dim("folder-of-music USB step reads no tags at all")
+        if shutil.which("ffmpeg") and self.py_tools and pythons.has(self.py_tools, "numpy"):
+            con.good("ffmpeg + numpy for a BPM estimate (a folder-of-music track with no BPM tag)")
+        else:
+            con.dim("no ffmpeg and/or numpy: such a track still loads, just with no beat grid")
+
         self.py_midi = self.py.midi()
         midi_fix = self.py.pip_fix("mido python-rtmidi") or "py -3 -m pip install mido python-rtmidi"
         self.midi_fix = midi_fix
@@ -399,9 +414,9 @@ class Setup:
         if firmware.installed(lay.extract) and not o.dry:
             con.good("six images installed in %s/" % shown)
 
-    def make_image(self, folder):
+    def make_image(self, folder, expect_pioneer=True):
         con, lay = self.con, self.lay
-        if not os.path.isdir(os.path.join(folder, "PIONEER")):
+        if expect_pioneer and not os.path.isdir(os.path.join(folder, "PIONEER")):
             con.warn("no PIONEER/ folder in %s: the deck browses rekordbox's database, so\n"
                      "      loose files will not show up. Export a playlist to a folder with rekordbox (Export\n"
                      "      mode, 'USB') and use that folder." % folder)
@@ -424,29 +439,111 @@ class Setup:
                              "pyfatfs failing on import is usually setuptools>=81: pip install 'setuptools<81'",
                              argv, rel=lay.emu)
 
+    def make_image_from_tracks(self, tracks):
+        """Read tags (and estimate a missing BPM) with collection_xml.py, hand
+        the result to baken's `expressport --generate-analysis` (no rekordbox
+        needed), and image what it writes."""
+        con, o, lay = self.con, self.o, self.lay
+        baken_bin = baken.ensure(con, lay, o)
+        if not baken_bin:
+            if o.dry:
+                baken_bin = "<baken>"
+            else:
+                con.warn("no baken: imaging %s as plain files instead -- the deck will still browse" % tracks)
+                con.warn("and play them (a real NXS2 falls back to a plain folder browse when a stick")
+                con.warn("has no rekordbox database at all), just with no waveform, beat grid or BPM")
+                return self.make_image(tracks, expect_pioneer=False)
+        py = self.py_tools
+        if not py:
+            if not o.dry:
+                con.fail("no Python with pyfatfs (see step 1)")
+                return False
+            py = "<a python with pyfatfs>"
+        shown = os.path.relpath(lay.usb_image, lay.root) if not lay.packaged else lay.usb_image
+        stage = tempfile.mkdtemp(prefix="cdj-baken-")
+        try:
+            xml_path = os.path.join(stage, "collection.xml")
+            argv = (pythons.argv_of(py) if py != sys.executable else host.python_argv()) + [
+                os.path.join(lay.scripts, "media", "collection_xml.py"), tracks, xml_path]
+            log = os.path.join(lay.logs, "collection-xml.log")
+            if not con.run_phase("reading tags and estimating any missing BPM", log,
+                                 "no audio files in that folder, or no mutagen -- the log says which",
+                                 argv, rel=lay.emu):
+                return False
+            if not o.dry:
+                for line in _read(log).splitlines():
+                    if line.startswith("note: "):
+                        con.warn(line[len("note: "):])
+            device = os.path.join(stage, "device")
+            os.makedirs(device, exist_ok=True)
+            argv = [baken_bin, "expressport", "--device", device, "--generate-analysis",
+                    "--no-settings", xml_path]
+            if not con.run_phase("baken: writing the device export from %s"
+                                 % os.path.basename(tracks.rstrip("/\\")),
+                                 os.path.join(lay.logs, "baken-expressport.log"),
+                                 "baken's own log above says which track failed and why", argv, rel=lay.emu):
+                return False
+            if o.dry:
+                con.would("scripts/media/make_usb_image.py %s %s" % (device, shown))
+                return True
+            return self.make_image(device)
+        finally:
+            shutil.rmtree(stage, ignore_errors=True)
+
+    def _choose_usb_source(self):
+        con = self.con
+        con.info("Two ways to fill the stick: a folder already exported by rekordbox, or a")
+        con.info("plain folder of your own music (mp3, FLAC, AAC/M4A, WAV, AIFF, ALAC), which")
+        con.info("baken (github.com/M-Igashi/baken, MIT) analyses instead -- no rekordbox")
+        con.info("needed. Nothing is uploaded anywhere.")
+        which = con.choose("rekordbox export, or a folder of music?", "rekordbox", "rekordbox", "folder")
+        prompt = "folder of music:" if which == "folder" else "folder of your rekordbox USB export:"
+        path = dropped_path(con.ask(prompt, ""), self.platform == host.WINDOWS)
+        return (None, path) if which == "folder" else (path, None)
+
     def step_usb(self):
         con, o, lay = self.con, self.o, self.lay
         con.step(4, "USB stick (your own music)")
         shown = os.path.relpath(lay.usb_image, lay.root) if not lay.packaged else lay.usb_image
-        music = o.music
-        if os.path.isfile(lay.usb_image) and not music:
+        if o.music and o.tracks:
+            con.die("--music and --tracks name two different sources; pass only one")
+        music, tracks = o.music, o.tracks
+
+        if os.path.isfile(lay.usb_image) and not music and not tracks:
             con.good("USB image: %s (%d MB)" % (shown, -(-os.path.getsize(lay.usb_image) // (1 << 20))))
-            if con.interactive and con.ask_yn("make a new one from another folder?", "n"):
-                music = con.ask("folder of your rekordbox USB export:", "")
-        if os.path.isfile(lay.usb_image) and not music:
-            return
-        while not music or not os.path.isdir(music):
+            if not (con.interactive and con.ask_yn("make a new one from another folder?", "n")):
+                return
+            music, tracks = self._choose_usb_source()
+
+        if not music and not tracks:
             if not con.interactive:
                 if o.dry:
                     con.would("scripts/media/make_usb_image.py <your rekordbox export> %s" % shown)
+                    con.would("collection_xml.py <a folder of music> collection.xml, baken expressport "
+                              "--generate-analysis, then make_usb_image.py %s" % shown)
                     return
+                con.die("no USB image: pass --music <a rekordbox export folder>, or --tracks <a folder of music>")
+            music, tracks = self._choose_usb_source()
+
+        os.makedirs(lay.extract, exist_ok=True)
+        if tracks:
+            while not os.path.isdir(tracks):
+                if not con.interactive:
+                    con.die("no such folder: %s" % tracks)
+                con.warn("no such folder: %s" % tracks)
+                tracks = dropped_path(con.ask("folder of music:", ""), self.platform == host.WINDOWS)
+            if not self.make_image_from_tracks(tracks):
+                con.die("no USB image was made")
+            return
+
+        while not music or not os.path.isdir(music):
+            if not con.interactive:
                 con.die("no USB image: pass --music /path/to/your/rekordbox/export")
             con.info("Point me at a folder with your own music exported by rekordbox (the")
             con.info("folder that holds PIONEER/ and the tracks). Nothing is uploaded anywhere.")
             if music:
                 con.warn("no such folder: %s" % music)
             music = dropped_path(con.ask("music folder:", ""), self.platform == host.WINDOWS)
-        os.makedirs(lay.extract, exist_ok=True)
         if not self.make_image(music):
             con.die("no USB image was made")
 

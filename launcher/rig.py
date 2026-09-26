@@ -8,6 +8,7 @@ end of the load; PLAY pauses and resumes. The machine is paced to real time
   env:   DJLINK=1 (Pro DJ Link on; 0 = off)   GROUP=<ip:port> (own segment)
          NDECKS=1 (2 for both DJ-202 sides)   GUI_DISPLAY=gtk|cocoa|none   AUDIODEV=<-audio spec, %TAG% ok>
          RING=3000 PREFILL=150 MAXLAT=450 (ms)   NOSOUND=1   WARM=0 (1 = throwaway warm-up wave first)
+         SERVICE=1 boots into SERVICE MODE instead of playing a track
 """
 
 import os
@@ -141,6 +142,10 @@ def rig_env(env, tag, ndecks, frames):
     # time adds up to 42 ms; the emulated board draws so fast that this was ~3
     # times a second. Count each frame as 43 ms: a repaint every frame. 0 = firmware.
     export_default(env, "CDJ_GUI_CLOCK_DT", "43")
+    # The display firmware draws a frame at most every 15 ms plus a tick; 6
+    # lets the zoomed-in waveform show ~73 pictures a second instead of ~33,
+    # for about a fifth of a core more on the display board. 0 = firmware.
+    export_default(env, "CDJ_GUI_FRAME_MS", "6")
     # Diagnostic re-read and scan of every DMA'd display frame; off.
     export_default(env, "CDJ_GUI_FRAME_SCAN", "0")
     # TOUCH=1 (default): a click/drag in the display window, or a 'touch'/'tap'

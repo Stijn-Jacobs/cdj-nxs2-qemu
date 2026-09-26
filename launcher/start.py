@@ -5,6 +5,9 @@ controller, the bridge. Ctrl-C stops everything.
 
   usage: ./start.sh             start
          ./start.sh --app       start with the virtual deck app as the window
+         ./start.sh --service   boot into the service manual's SERVICE MODE
+                                 screen instead of the player (see "Service
+                                 mode" in README.md)
          ./start.sh stop        stop a running rig from another shell
          ./start.sh --dry-run   show what would be started
   env:   every knob of scripts/run/rig.sh still works (AUDIODEV=, NOSOUND=1,
@@ -70,7 +73,7 @@ def stop(lay):
 
 
 def main(argv):
-    dry, app = False, None
+    dry, app, service = False, None, None
     for a in argv:
         if a == "stop":
             return stop(Layout())
@@ -80,6 +83,10 @@ def main(argv):
             app = True
         elif a == "--no-app":
             app = False
+        elif a == "--service":
+            service = True
+        elif a == "--no-service":
+            service = False
         elif a in ("-h", "--help"):
             sys.stdout.write(__doc__[__doc__.index("  usage:"):])
             return 0
@@ -97,19 +104,37 @@ def main(argv):
         # The packaged program's window is the virtual deck app unless the
         # settings say otherwise.
         app = c["CDJ_APP"] == "1" or (lay.packaged and "CDJ_APP" not in values)
+    if service is None:
+        service = nonempty(os.environ, "SERVICE", "0") == "1" or c["CDJ_SERVICE"] == "1"
     env = dict(os.environ)
+    env["SERVICE"] = "1" if service else "0"
     for k in ("QEMU_BUILD", "QEMU_EB_BUILD"):
         if c[k]:
             env[k] = c[k]
     if lay.packaged:
         env["MAIN_QEMU"], env["GUI_QEMU"] = lay.qemu_binaries()
     env.update(RELAY_PORT=c["CDJ_RELAY_PORT"], DJLINK=c["CDJ_DJLINK"], GROUP=c["CDJ_GROUP"])
+    # setup.sh already steered CDJ_RELAY_PORT clear of a reserved range, but
+    # Windows picks new Hyper-V/WSL ranges on every boot, so the port it chose
+    # then can be inside one now. Check again here, not just at setup time.
+    if host.is_windows():
+        want = int(env["RELAY_PORT"])
+        env["RELAY_PORT"] = str(host.pick_tcp_port(want))
+        if env["RELAY_PORT"] != str(want):
+            say("TCP %s is reserved or in use here; the controller relay uses %s instead" % (
+                want, env["RELAY_PORT"]))
     if c["CDJ_AUDIO"] != "1":
         env["NOSOUND"] = "1"
     # One frame of 24 hours: the rig lives until Ctrl-C and writes nothing per frame.
     for k, v in (("FRAMES", "1"), ("MOTION_MS", "86400000"), ("AUTOLOAD", "0")):
         env[k] = nonempty(env, k, v)
     decks = "2" if c["CDJ_DECKS"] == "2" else "1"
+    # Both decks otherwise boot as PLAYER No. 1, and identical claims deadlock
+    # Pro DJ Link's device-number negotiation forever (see boot_deck.py). A
+    # caller's own PLAYERNO wins; rig.sh/live.sh have no such default, since
+    # they are the developer-facing knobs this one sets for a plain start.
+    if decks == "2" and env["DJLINK"] == "1":
+        env["PLAYERNO"] = nonempty(env, "PLAYERNO", "%N%")
     launch = chain.script_argv("live_linked" if decks == "2" else "live", [c["CDJ_NAME"], decks])
 
     # The boards and patches are compiled into the QEMU binaries, so after a
@@ -161,12 +186,17 @@ def main(argv):
             chain.err("or run without --app (the plain deck windows).")
             return 1
         env["GUI_DISPLAY"] = "vnc"
-        env["CDJ_APP_VNC_BASE"] = nonempty(env, "CDJ_APP_VNC_BASE", "5920")
+        vnc_want = int(nonempty(env, "CDJ_APP_VNC_BASE", "5920"))
+        vnc_base = host.pick_port_block(vnc_want, int(decks)) if host.is_windows() else vnc_want
+        if vnc_base != vnc_want:
+            say("TCP %d+ is reserved or in use here; the deck app's VNC screens use %d+ instead" % (
+                vnc_want, vnc_base))
+        env["CDJ_APP_VNC_BASE"] = str(vnc_base)
         # Both QEMU and a Windows Python want a native path here.
         env["CDJ_APP_FRAME_DIR"] = env.get("CDJ_APP_FRAME_DIR") or (
             host.native(env["TMPDIR"]) if env.get("TMPDIR") else lay.tmp)
         app_cmd = app_py + [os.path.join(lay.emu, "app", "virtual_deck.py"), "--decks", decks,
-                            "--prefix", c["CDJ_NAME"], "--relay", "127.0.0.1:" + c["CDJ_RELAY_PORT"],
+                            "--prefix", c["CDJ_NAME"], "--relay", "127.0.0.1:" + env["RELAY_PORT"],
                             "--vnc-base", env["CDJ_APP_VNC_BASE"], "--frame-dir", env["CDJ_APP_FRAME_DIR"]]
 
     # The bridge runs on the Python setup recorded: on Windows a native one.
@@ -179,15 +209,17 @@ def main(argv):
             say("without it (install them, then ./setup.sh)")
         else:
             bridge = py + ["-u", os.path.join(lay.emu, "midi", "bridge.py"), "--controller", c["CDJ_CONTROLLER"],
-                           "--relay", "127.0.0.1:" + c["CDJ_RELAY_PORT"], "--prefix", c["CDJ_NAME"]]
+                           "--relay", "127.0.0.1:" + env["RELAY_PORT"], "--prefix", c["CDJ_NAME"]]
 
-    say("decks: %s (%s)   Pro DJ Link: %s   sound: %s   controller: %s   window: %s" % (
+    say("decks: %s (%s)   Pro DJ Link: %s   sound: %s   controller: %s   window: %s%s" % (
         decks, c["CDJ_NAME"], "on " + env["GROUP"] if env["DJLINK"] == "1" else "off",
-        "on" if c["CDJ_AUDIO"] == "1" else "off", c["CDJ_CONTROLLER"], "virtual deck app" if app else "QEMU"))
+        "on" if c["CDJ_AUDIO"] == "1" else "off", c["CDJ_CONTROLLER"], "virtual deck app" if app else "QEMU",
+        "   SERVICE MODE" if service else ""))
     if dry:
-        say("would run:  RELAY_PORT=%s DJLINK=%s GROUP=%s%s%s %s" % (
+        say("would run:  RELAY_PORT=%s DJLINK=%s GROUP=%s%s%s%s %s" % (
             env["RELAY_PORT"], env["DJLINK"], env["GROUP"], " NOSOUND=1" if env.get("NOSOUND") == "1" else "",
-            " QEMU_BUILD=" + env["QEMU_BUILD"] if env.get("QEMU_BUILD") else "", _shown(launch)))
+            " QEMU_BUILD=" + env["QEMU_BUILD"] if env.get("QEMU_BUILD") else "",
+            " SERVICE=1" if service else "", _shown(launch)))
         if bridge:
             say("and:        %s > logs/bridge.log" % " ".join(shlex.quote(a) for a in bridge))
         if app_cmd:
@@ -215,7 +247,10 @@ def run(lay, env, launch, bridge, app_cmd):
             with open(os.path.join(lay.logs, "bridge.log"), "wb") as log:
                 helpers.append(subprocess.Popen(bridge, stdout=log, stderr=subprocess.STDOUT))
             say("controller bridge running (log: logs/bridge.log)")
-        say("the first boot takes a minute; then press USB (or LINK) to browse, load a track and play.")
+        if env["SERVICE"] == "1":
+            say("the first boot takes a minute; SERVICE MODE appears once the logo clears.")
+        else:
+            say("the first boot takes a minute; then press USB (or LINK) to browse, load a track and play.")
         if not app_cmd:
             return subprocess.Popen(launch, env=env).wait()
         # With the app, the rig runs behind it and lives as long as its window:

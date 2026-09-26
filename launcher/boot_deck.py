@@ -5,6 +5,9 @@ boards run for [seconds] and are then stopped, MAIN through its monitor so its
 exit counters print.
 
   usage: ./scripts/run/boot_deck.sh <tag> [seconds]
+  env:   SERVICE=1 boots into the service manual's SERVICE MODE screen
+         instead of the player (SERVICE_HOLD_MS overrides how long the entry
+         keys are held, default 20000)
 """
 
 import os
@@ -67,6 +70,14 @@ class Deck:
             host.native(nonempty(env, "QEMU_BUILD", os.path.join(home, "qemu-build"))), sfx)
         self.gui_qemu = env.get("GUI_QEMU") or "%s/qemu-system-sh4eb%s" % (
             host.native(nonempty(env, "QEMU_EB_BUILD", os.path.join(home, "qemu-build-eb"))), sfx)
+        # A checkout's QEMU_BUILD carries no DLLs of its own: MAIN and GUI are
+        # mingw64 builds that resolve SDL2.dll and the rest through PATH. The
+        # shell scripts always ran inside MSYS2, where that is a given; this
+        # launcher can be started from one that never put it there, and QEMU
+        # then dies before it writes a byte to its own log.
+        dll_dir = host.qemu_dll_dir()
+        if dll_dir and dll_dir.lower() not in (p.lower() for p in env.get("PATH", "").split(os.pathsep)):
+            env["PATH"] = dll_dir + os.pathsep + env.get("PATH", "")
         self.main_log = "%s/bridge-main-%s.log" % (nonempty(env, "LOGDIR", tmp), tag)
         self.gui_log = "%s/bridge-gui-%s.log" % (nonempty(env, "LOGDIR", tmp), tag)
         mediadir = host.native(nonempty(env, "MEDIADIR", os.path.join(lay.extract, "usbmedia3")))
@@ -192,7 +203,16 @@ class Deck:
         env["CDJ_PANEL_KEYSOCK"] = "%s/cdj-panel-keys-%s.sock" % (tmp, tag)
         env["CDJ_PANEL_RX"] = "1"
         env["CDJ_PANEL_MAX_IRQ"] = "4000000"
-        env["CDJ_PANEL_PRESS"] = ifset(env, "CDJ_PANEL_PRESS", "0x13:0x04:20000:3000")
+        # SERVICE=1: boot into the service manual's SERVICE MODE instead of
+        # the regular player screen, by holding TEMPO RANGE (report 0x15,
+        # mask 0x08) and MEMORY (0x0c, mask 0x08) from reset. Both keys
+        # release after SERVICE_HOLD_MS so nothing stays stuck down once the
+        # logo clears. A caller's own CDJ_PANEL_PRESS always wins.
+        if nonempty(env, "SERVICE", "0") == "1":
+            hold = nonempty(env, "SERVICE_HOLD_MS", "20000")
+            env["CDJ_PANEL_PRESS"] = ifset(env, "CDJ_PANEL_PRESS", "0x15:0x08:0:%s,0x0c:0x08:0:%s" % (hold, hold))
+        else:
+            env["CDJ_PANEL_PRESS"] = ifset(env, "CDJ_PANEL_PRESS", "0x13:0x04:20000:3000")
         # ICOUNT: MAIN's virtual clock from executed instructions instead of
         # host time, which removes host jitter from the firmware's timing.
         icount = ["-icount", env["ICOUNT"]] if env.get("ICOUNT") else []

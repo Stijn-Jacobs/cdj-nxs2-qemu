@@ -4,6 +4,8 @@ print each run's summary lines.
 
   usage: ./scripts/run/boot_decks.sh <tag-prefix> [n]
   env:   JOBS FILMN MOTION_MS WALK KEYBYTE KEYBITS plus any CDJ_* knob
+         SERVICE=1 boots into SERVICE MODE instead of loading a track
+         (forces AUTOLOAD=0; see scripts/run/boot_deck.sh)
 """
 
 import os
@@ -16,7 +18,7 @@ from .chain import export_default, nonempty
 from .layout import Layout
 
 
-def batch_env(env, lay):
+def batch_env(env, lay, prefix=""):
     """The batch's knobs. Returns (deck duration in s, private media, media dir)."""
     env["CDJ_ATA"] = "1"
     env["CDJ_IIC_CH"] = "both"
@@ -26,6 +28,12 @@ def batch_env(env, lay):
     export_default(env, "CDJ_DSP_REPLY_ID", "0")
     export_default(env, "CDJ_DSP_REPLY_WORDS", "4")
     export_default(env, "CDJ_DSP_TAG", "1")
+    # SERVICE MODE is entered before the firmware ever gets to the browse list,
+    # so a load_track.py driver would just press keys the service screen
+    # doesn't use.
+    if nonempty(env, "SERVICE", "0") == "1" and nonempty(env, "AUTOLOAD", "1") == "1":
+        chain.say("[%s] SERVICE=1: no track load in service mode (AUTOLOAD forced off)" % prefix)
+        env["AUTOLOAD"] = "0"
     # AUTOLOAD=1 (the measurement default): load_track.py loads the first track
     # and presses PLAY, and a deck lives as long as its film. AUTOLOAD=0 boots
     # the decks and leaves them to the user for FILMN x MOTION_MS.
@@ -34,7 +42,10 @@ def batch_env(env, lay):
         dur = 2
     else:
         chain.unset(env, "DRIVER")
-        env["CDJ_PANEL_PRESS"] = ""
+        # SERVICE=1 needs boot_deck.py's own CDJ_PANEL_PRESS default, so only
+        # wipe it here for the plain AUTOLOAD=0 case.
+        if nonempty(env, "SERVICE", "0") != "1":
+            env["CDJ_PANEL_PRESS"] = ""
         dur = int(nonempty(env, "FILMN", "1")) * int(nonempty(env, "MOTION_MS", "1800")) // 1000
     export_default(env, "GUI_DISPLAY", "gtk")
     export_default(env, "FILMN", "5")
@@ -66,7 +77,7 @@ def main(argv):
     lay = Layout()
     env = dict(os.environ)
     jobs = int(nonempty(env, "JOBS", "3"))
-    dur, private, media = batch_env(env, lay)
+    dur, private, media = batch_env(env, lay, prefix)
 
     def launch(tag, seconds):
         os.makedirs(os.path.join(lay.tmp, tag), exist_ok=True)

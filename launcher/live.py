@@ -7,6 +7,7 @@ both live exactly as long as the script; Ctrl-C stops both.
   live_linked.sh adds Pro DJ Link on GROUP (default 239.77.77.1:45000) and
   prints the DHCP leases at the end; SNIFF=1 also captures the segment to
   /tmp/j2-<tag>.pcap. The rig lives FRAMES (default 240) x 5 s = ~20 min.
+  env:   SERVICE=1 boots into SERVICE MODE instead of playing a track (see rig.py)
 """
 
 import os
@@ -24,6 +25,14 @@ def main(argv, linked=False):
     lay = Layout()
     env = dict(os.environ)
     port = nonempty(env, "RELAY_PORT", "7202")
+    # start.py already steers this clear of a reserved range, but live.sh is
+    # also run directly (developers, the equality harness); check here too,
+    # since the range Windows reserves changes on every boot.
+    if host.is_windows():
+        chosen = host.pick_tcp_port(int(port))
+        if str(chosen) != port:
+            chain.say("[%s] TCP %s is reserved or in use here; the relay uses %d instead" % (tag, port, chosen))
+        port = str(chosen)
     tags = ",".join("%s%d" % (tag, i) for i in range(1, n + 1))
     if linked:
         env["GROUP"] = nonempty(env, "GROUP", DEFAULT_GROUP)
