@@ -63,7 +63,7 @@ Plug in a MIDI controller and it plays them.
 **2. Clone and run setup** (the same on every system):
 
 ```sh
-git clone https://github.com/the owner-Jacobs/cdj-nxs2-qemu.git cdj-nxs2
+git clone https://github.com/Stijn-Jacobs/cdj-nxs2-qemu.git cdj-nxs2
 cd cdj-nxs2
 ./setup.sh
 ```
