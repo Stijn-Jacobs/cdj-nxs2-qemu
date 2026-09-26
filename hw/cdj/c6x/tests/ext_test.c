@@ -88,6 +88,25 @@ int main(void)
     /* DINTSPU .L1 A7:A6,A17:A16 (4.95) */
     run("dintspu", L1(0x16, 16, 6), (uint32_t[]){ 0xffffffff, 0x80000000 }, (unsigned[]){ C66X_A(6), C66X_A(7) }, 2,
         (unsigned[]){ C66X_A(17), C66X_A(16) }, (uint32_t[]){ 0x4f000000, 0x4f800000 }, 2, 0);
+    /* CMPEQ .L2X 0,A5:A4,B8 and CMPGT .L2X 0,A5:A4,B0, the firmware's words
+     * (0x04101a1a, 0x0010189a): a 40-bit long read over the cross path, so
+     * A5 bits 31..8 are ignored and B5:B4 (left zero) is not the operand. */
+    const unsigned A4 = C66X_A(4), A5 = C66X_A(5);
+    run("cmpeq xl 0", 0x04101a1au, (uint32_t[]){ 0xffffff00, 0 }, (unsigned[]){ A5, A4 }, 2,
+        (unsigned[]){ C66X_B(8) }, (uint32_t[]){ 1 }, 1, 0);
+    run("cmpeq xl 1", 0x04101a1au, (uint32_t[]){ 0x00000001, 0 }, (unsigned[]){ A5, A4 }, 2,
+        (unsigned[]){ C66X_B(8) }, (uint32_t[]){ 0 }, 1, 0);
+    run("cmpgt xl -", 0x0010189au, (uint32_t[]){ 0x00000080, 0 }, (unsigned[]){ A5, A4 }, 2,
+        (unsigned[]){ C66X_B(0) }, (uint32_t[]){ 1 }, 1, 0);
+    run("cmpgt xl +", 0x0010189au, (uint32_t[]){ 0xffffff7f, 1 }, (unsigned[]){ A5, A4 }, 2,
+        (unsigned[]){ C66X_B(0) }, (uint32_t[]){ 0 }, 1, 0);
+    /* SHRU .S1X B5:B4,A3,A9:A8 and SHRU .S2X A7:A6,19,B5:B4 (0x04107960,
+     * 0x021a7922): 40-bit source over the cross path, 40-bit result. */
+    const unsigned B4 = C66X_B(4), B5 = C66X_B(5);
+    run("shru xl a3", 0x04107960u, (uint32_t[]){ 0xffffff81, 0x00000010, 4 }, (unsigned[]){ B5, B4, C66X_A(3) }, 3,
+        (unsigned[]){ C66X_A(9), C66X_A(8) }, (uint32_t[]){ 0x00000008, 0x10000001 }, 2, 0);
+    run("shru xl 19", 0x021a7922u, (uint32_t[]){ 0x000000ff, 0xfff80000 }, (unsigned[]){ C66X_A(7), C66X_A(6) }, 2,
+        (unsigned[]){ B5, B4 }, (uint32_t[]){ 0x00000000, 0x001fffff }, 2, 0);
     printf("%s: %d failure(s)\n", fails ? "FAIL" : "PASS", fails);
     return fails != 0;
 }
