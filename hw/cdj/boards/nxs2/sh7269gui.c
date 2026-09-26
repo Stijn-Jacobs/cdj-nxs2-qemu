@@ -2245,6 +2245,103 @@ static void lcd_invalidate(void *opaque)
 }
 
 /*
+ * CDJ_GUI_BAND_FPS=<ms>: every <ms> of virtual time, compare the deck
+ * screen's waveform band (x 60-740, y 110-275) of the displayed frame with
+ * the last sample, and print at exit how many times a second it changed.
+ * Sampled inside the board, so unlike monitor screendumps (~45-90 a second)
+ * it can count past the display's frame rate.
+ */
+#define BAND_X0 60
+#define BAND_X1 740
+#define BAND_Y0 110
+#define BAND_Y1 276
+#define BAND_ROW_BYTES ((BAND_X1 - BAND_X0) * 2)
+
+typedef struct {
+    QEMUTimer *timer;
+    int64_t period_ns;
+    uint8_t *last;
+    unsigned changes[300];              /* per 1 s of virtual time */
+    unsigned samples;
+    Notifier exit;
+} GuiBandFps;
+
+static void band_fps_sample(void *opaque)
+{
+    GuiBandFps *b = opaque;
+    uint32_t reg = vdc_scanout_reg();
+    uint32_t base = 0;
+    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    int64_t sec = now / NANOSECONDS_PER_SECOND;
+    bool changed = false;
+    int y;
+
+    /* the frame lcd_update shows: the VDC's buffer, or LCD memory */
+    if (reg) {
+        cpu_physical_memory_read(reg, &base, 4);
+        base = be32_to_cpu(base);
+    }
+    for (y = BAND_Y0; y < BAND_Y1; y++) {
+        uint32_t off = (y * SH7269_LCD_WIDTH + BAND_X0) * 2;
+        uint8_t *copy = b->last + (y - BAND_Y0) * BAND_ROW_BYTES;
+        uint8_t row[BAND_ROW_BYTES];
+
+        if (base) {
+            cpu_physical_memory_read(base + off, row, BAND_ROW_BYTES);
+        } else {
+            memcpy(row, lcd_state->fb + SH7269_LCD_OFFSET + off,
+                   BAND_ROW_BYTES);
+        }
+        if (changed || memcmp(copy, row, BAND_ROW_BYTES)) {
+            memcpy(copy, row, BAND_ROW_BYTES);
+            changed = true;
+        }
+    }
+    if (changed && b->samples && (uint64_t)sec < ARRAY_SIZE(b->changes)) {
+        b->changes[sec]++;
+    }
+    b->samples++;
+    timer_mod(b->timer, now + b->period_ns);
+}
+
+static void band_fps_summary(Notifier *n, void *data)
+{
+    GuiBandFps *b = container_of(n, GuiBandFps, exit);
+    char line[ARRAY_SIZE(b->changes) * 4 + 1];
+    int p = 0;
+    unsigned i, last = 0;
+
+    for (i = 0; i < ARRAY_SIZE(b->changes); i++) {
+        if (b->changes[i]) {
+            last = i + 1;
+        }
+    }
+    for (i = 0; i < last; i++) {
+        p += snprintf(line + p, sizeof(line) - p, "%u ", b->changes[i]);
+    }
+    info_report("lcd: waveform band changes per 1 s (sampled every %" PRId64
+                " us): %s", b->period_ns / 1000, line);
+}
+
+static void band_fps_init(void)
+{
+    const char *e = getenv("CDJ_GUI_BAND_FPS");
+    long ms = e ? strtol(e, NULL, 0) : 0;
+    GuiBandFps *b;
+
+    if (ms <= 0) {
+        return;
+    }
+    b = g_new0(GuiBandFps, 1);
+    b->period_ns = ms * SCALE_MS;
+    b->last = g_malloc0((BAND_Y1 - BAND_Y0) * BAND_ROW_BYTES);
+    b->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, band_fps_sample, b);
+    timer_mod(b->timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + b->period_ns);
+    b->exit.notify = band_fps_summary;
+    qemu_add_exit_notifier(&b->exit);
+}
+
+/*
  * Host keyboard to front panel. This board owns the window, but the panel is
  * on MAIN, so keys are forwarded over the socket in cdj_panelkeys.h. Each
  * window drives its own deck. The report bits are the ones midi/cdj_actions.py
@@ -2629,6 +2726,7 @@ static void lcd_init(MemoryRegion *sysmem, MemoryRegion *sdram)
     s->con = graphic_console_init(NULL, 0, &lcd_ops, s);
     qemu_console_resize(s->con, SH7269_LCD_WIDTH, SH7269_LCD_HEIGHT);
     lcd_state = s;
+    band_fps_init();
     cdj_gui_keys_init();
     gui_touch_init();
 }
@@ -3244,13 +3342,13 @@ static void gui_mpoke_init(void)
  * load becomes `mov #<ms>,rN`. 22 repaints every second frame, 43 every
  * frame. The frame-budget readers of dt keep the measured value.
  */
-typedef struct GuiClockSite {
+typedef struct GuiCodeSite {
     uint32_t pc;
-    uint16_t orig, before, after;   /* the dt load and its two neighbours */
-    uint8_t reg;                    /* destination of the load */
-} GuiClockSite;
+    uint16_t orig, before, after;   /* the instruction and its two neighbours */
+    uint8_t reg;                    /* its destination register */
+} GuiCodeSite;
 
-static const GuiClockSite gui_clock_sites[] = {
+static const GuiCodeSite gui_clock_sites[] = {
     /* mov.l @r11,r13 between mov.l @(pc),r5 and mov #0x2a,r14 */
     { 0x1C002D84, 0x6DB2, 0xD56F, 0xEE2A, 13 },
     /* mov.l @r4,r7 between mov #0x2a,r12 and add r7,r2 */
@@ -3268,6 +3366,20 @@ static uint16_t gui_ld16(uint32_t addr)
     return (uint16_t)(b[0] << 8 | b[1]);        /* the guest is big-endian */
 }
 
+static bool gui_site_matches(const GuiCodeSite *c)
+{
+    return gui_ld16(c->pc) == c->orig && gui_ld16(c->pc - 2) == c->before &&
+           gui_ld16(c->pc + 2) == c->after;
+}
+
+static void gui_site_mov_imm(const GuiCodeSite *c, uint8_t imm)
+{
+    uint16_t insn = 0xE000 | c->reg << 8 | imm;     /* mov #imm,rN */
+    uint8_t b[2] = { insn >> 8, insn & 0xFF };
+
+    cpu_physical_memory_write(c->pc, b, 2);
+}
+
 /* Patch only the exact instruction sequence, so a different image is left
  * alone; re-check periodically in case the firmware reloads its code. */
 static void gui_clock_dt_apply(void *opaque)
@@ -3277,14 +3389,10 @@ static void gui_clock_dt_apply(void *opaque)
     unsigned i;
 
     for (i = 0; i < ARRAY_SIZE(gui_clock_sites); i++) {
-        const GuiClockSite *c = &gui_clock_sites[i];
-        uint16_t insn = 0xE000 | c->reg << 8 | gui_clock_dt_ms;  /* mov #imm */
+        const GuiCodeSite *c = &gui_clock_sites[i];
 
-        if (gui_ld16(c->pc) == c->orig && gui_ld16(c->pc - 2) == c->before &&
-            gui_ld16(c->pc + 2) == c->after) {
-            uint8_t b[2] = { insn >> 8, insn & 0xFF };
-
-            cpu_physical_memory_write(c->pc, b, 2);
+        if (gui_site_matches(c)) {
+            gui_site_mov_imm(c, gui_clock_dt_ms);
             if (!announced[i]) {
                 announced[i] = true;
                 info_report("sh7269gui: clock pacer at 0x%08x counts %u ms "
@@ -3314,6 +3422,52 @@ static void gui_clock_dt_init(void)
     gui_clock_dt_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, gui_clock_dt_apply,
                                       NULL);
     gui_clock_dt_apply(NULL);
+}
+
+/*
+ * CDJ_GUI_FRAME_MS=<ms>: the display firmware's shortest frame, 1-14 ms
+ * (default 0: the firmware's own 15).
+ *
+ * The UI task (0x1C001430) draws a frame and, when that took dt < 15 ms,
+ * sleeps 15 - dt ticks, then one more: `mov #15,r9` at 0x1C00148C is the
+ * compare and `mov #15,r4` at 0x1C0014C8 the sleep. Both become <ms>.
+ * Zoomed fully in, the centre waveform scrolls ~146 px/s but changed only
+ * ~33 times a second; at 6 it changes ~73 times a second, for ~20 % of a
+ * core more. At the default zoom it scrolls ~35 px/s, so there is little
+ * to gain (32 -> 36).
+ * r9 is loaded once, before the loop, so this is patched only here, before
+ * the CPU runs, and only when both sites match: a compare and a sleep that
+ * disagree would sleep ms - dt < 0 ticks.
+ */
+static const GuiCodeSite gui_frame_sites[] = {
+    /* mov #15,r9 between mov.l r8,@r1 and mov.l r14,@r2 */
+    { 0x1C00148C, 0xE90F, 0x2182, 0x22E2, 9 },
+    /* mov #15,r4 between mov.l r6,@r5 and jsr @r13 */
+    { 0x1C0014C8, 0xE40F, 0x2562, 0x4D0B, 4 },
+};
+
+static void gui_frame_ms_init(void)
+{
+    const char *e = getenv("CDJ_GUI_FRAME_MS");
+    long ms = e ? strtol(e, NULL, 0) : 0;
+    unsigned i;
+
+    if (ms <= 0 || ms >= 15) {
+        return;
+    }
+    for (i = 0; i < ARRAY_SIZE(gui_frame_sites); i++) {
+        if (!gui_site_matches(&gui_frame_sites[i])) {
+            warn_report("sh7269gui: CDJ_GUI_FRAME_MS: unexpected code at "
+                        "0x%08x (0x%04x) -- not patched", gui_frame_sites[i].pc,
+                        gui_ld16(gui_frame_sites[i].pc));
+            return;
+        }
+    }
+    for (i = 0; i < ARRAY_SIZE(gui_frame_sites); i++) {
+        gui_site_mov_imm(&gui_frame_sites[i], ms);
+    }
+    info_report("sh7269gui: UI frames at least %ld ms apart instead of 15 "
+                "(CDJ_GUI_FRAME_MS)", ms);
 }
 
 static void sh7269gui_init(MachineState *machine)
@@ -3464,6 +3618,7 @@ static void sh7269gui_init(MachineState *machine)
         exit(1);
     }
     gui_clock_dt_init();
+    gui_frame_ms_init();
 
     /*
      * CDJ_GUI_CS0_FLASH=1: also place the image in CS0 at 0x30000, its flash

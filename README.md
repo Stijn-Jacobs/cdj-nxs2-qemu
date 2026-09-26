@@ -242,6 +242,28 @@ Each window drives its own deck.
 The mouse is the touch screen. A typical start: `U` (or click the source), `↓`
 to a track, `Enter` to load, `Space` to play.
 
+## 🔧 Service mode
+
+```sh
+./start.sh --service
+```
+
+This is the service manual's own diagnostic screen: on real hardware you get
+it by holding **TEMPO RANGE** and **MEMORY** while powering the unit on, until
+the Pioneer logo clears, and this flag does exactly that at boot. The screen
+lists BUTTON, JOG, ENCODER, NEEDLE, SLIDER VOLUME, JOG TOUCH VOLUME and JOG
+RELEASE VOLUME; press or move a control and its own row lights up, so it is a
+live test of every input rather than the player screen.
+
+Both keys release once the logo clears, so nothing stays held down and the
+rest of the deck is otherwise normal.
+
+**Persistence.** By default every run boots from a shared, throwaway flash
+image, so nothing you change in SERVICE MODE (or anywhere else) survives past
+Ctrl-C. With `PERSIST=1` a deck keeps its own flash image between runs
+(`extract/flash-<tag>.bin`), the same as a real unit's memory — a setting
+changed in SERVICE MODE on a persistent deck stays changed.
+
 ## 🎚️ MIDI controllers
 
 **Using one:** plug the controller in before `./setup.sh`. Setup recognises a
