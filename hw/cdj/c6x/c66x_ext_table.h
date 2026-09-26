@@ -163,4 +163,9 @@ static const c66x_ext_op c66x_ext_table[] = {
     { "xor", 'D', XF_D2, 0xf, 0, 3, { { XFLD_SRC1, XT_SCST5 }, { XFLD_SRC2, XT_XREG }, { XFLD_DST, XT_REG } } },
     { "faddsp", 'S', XF_L12, 0x74, 2, 3, { { XFLD_SRC1, XT_REG }, { XFLD_SRC2, XT_XREG }, { XFLD_DST, XT_REG } } },
     { "fsubsp", 'S', XF_L12, 0x76, 2, 3, { { XFLD_SRC1, XT_REG }, { XFLD_SRC2, XT_XREG }, { XFLD_DST, XT_REG } } },
+    { "cmpeq", 'L', XF_L12, 0x50, 0, 3, { { XFLD_SRC1, XT_SCST5 }, { XFLD_SRC2, XT_XLONG }, { XFLD_DST, XT_REG } } },
+    { "cmpgt", 'L', XF_L12, 0x44, 0, 3, { { XFLD_SRC1, XT_SCST5 }, { XFLD_SRC2, XT_XLONG }, { XFLD_DST, XT_REG } } },
+    { "cmplt", 'L', XF_L12, 0x54, 0, 3, { { XFLD_SRC1, XT_SCST5 }, { XFLD_SRC2, XT_XLONG }, { XFLD_DST, XT_REG } } },
+    { "cmpgtu", 'L', XF_L12, 0x4c, 0, 3, { { XFLD_SRC1, XT_UCST5 }, { XFLD_SRC2, XT_XLONG }, { XFLD_DST, XT_REG } } },
+    { "cmpltu", 'L', XF_L12, 0x5c, 0, 3, { { XFLD_SRC1, XT_UCST5 }, { XFLD_SRC2, XT_XLONG }, { XFLD_DST, XT_REG } } },
 };
