@@ -1,5 +1,5 @@
 diff --git a/target/sh4/translate.c b/target/sh4/translate.c
-index 53b0921..4c0c063 100644
+index 53b0921..8897034 100644
 --- a/target/sh4/translate.c
 +++ b/target/sh4/translate.c
 @@ -46,6 +46,19 @@ typedef struct DisasContext {
@@ -873,7 +873,7 @@ index 53b0921..4c0c063 100644
  
  #ifdef CONFIG_USER_ONLY
      if (tbflags & TB_FLAG_GUSA_MASK) {
-@@ -2250,41 +2919,993 @@ static void sh4_tr_insn_start(DisasContextBase *dcbase, CPUState *cs)
+@@ -2250,41 +2919,1046 @@ static void sh4_tr_insn_start(DisasContextBase *dcbase, CPUState *cs)
      tcg_gen_insn_start(ctx->base.pc_next, ctx->envflags);
  }
  
@@ -1774,6 +1774,56 @@ index 53b0921..4c0c063 100644
 +    return true;
 +}
 +
++/*
++ * CDJ_TIMED_ADD=<pc>:<ms>: the `add #imm,Rn` at <pc> adds imm per <ms> of
++ * virtual time instead of imm per execution; see helper_cdj_timed_add(). For
++ * firmware animations that step once per frame, when the frame rate has been
++ * changed. Only an `add #imm` outside a delay slot is hooked.
++ */
++static unsigned cdj_timed_add_ms;
++
++static uint32_t cdj_timed_add_pc(void)
++{
++    static uint32_t pc = 1;             /* 1 = not looked up yet (never a PC) */
++
++    if (unlikely(pc == 1)) {
++        const char *e = getenv("CDJ_TIMED_ADD");
++        unsigned ms = 0;
++
++        pc = 0;
++        if (e && sscanf(e, "%i:%u", (int *)&pc, &ms) == 2 && ms) {
++            cdj_timed_add_ms = ms;
++            info_report("timed add: 0x%08x steps per %u ms, not per run",
++                        pc, ms);
++        } else {
++            pc = 0;
++        }
++    }
++    return pc;
++}
++
++static bool cdj_timed_add(DisasContext *ctx, CPUSH4State *env)
++{
++    uint32_t pc = ctx->base.pc_next;
++    uint16_t op;
++
++    if (likely(pc != cdj_timed_add_pc())
++        || (ctx->envflags & TB_FLAG_DELAY_SLOT_MASK)) {
++        return false;
++    }
++    op = translator_lduw(env, &ctx->base, pc);
++    if ((op & 0xf000) != 0x7000) {
++        return false;
++    }
++    translator_io_start(&ctx->base);
++    gen_helper_cdj_timed_add(REG((op >> 8) & 0xf), tcg_env,
++                             REG((op >> 8) & 0xf),
++                             tcg_constant_i32((int8_t)op),
++                             tcg_constant_i32(cdj_timed_add_ms));
++    ctx->base.pc_next += 2;
++    return true;
++}
++
 +static void sh4_tr_translate_insn(DisasContextBase *dcbase, CPUState *cs)
 +{
 +    CPUSH4State *env = cpu_env(cs);
@@ -1879,6 +1929,9 @@ index 53b0921..4c0c063 100644
 +    /* Emits a conditional halt and falls through: the loop's own instructions
 +     * are still translated below, for the iterations the helper lets run. */
 +    cdj_gui_idle(ctx, env);
++    if (unlikely(cdj_timed_add(ctx, env))) {
++        return;
++    }
 +    ctx->opcode = translator_lduw(env, &ctx->base, ctx->base.pc_next);
 +    if ((ctx->features & SH_FEATURE_SH2A) && decode_sh2a_32(ctx, env)) {
 +        ctx->base.pc_next += 4;
@@ -1895,7 +1948,7 @@ index 53b0921..4c0c063 100644
      DisasContext *ctx = container_of(dcbase, DisasContext, base);
  
      if (ctx->tbflags & TB_FLAG_GUSA_EXCLUSIVE) {
-@@ -2295,8 +3916,32 @@ static void sh4_tr_tb_stop(DisasContextBase *dcbase, CPUState *cs)
+@@ -2295,8 +3969,32 @@ static void sh4_tr_tb_stop(DisasContextBase *dcbase, CPUState *cs)
      switch (ctx->base.is_jmp) {
      case DISAS_STOP:
          gen_save_cpu_state(ctx, true);

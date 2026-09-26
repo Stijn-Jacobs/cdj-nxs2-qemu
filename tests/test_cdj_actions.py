@@ -73,7 +73,6 @@ def test_raw_key_on_a_named_bit_inherits_its_status():
     a = ca.resolve("key_0x10_0x02")
     assert isinstance(a, ca.KeyAction)
     assert (a.off, a.mask, a.status) == (0x10, 0x02, ca.CONFIRMED)
-    assert "'cue'" in a.note
 
 
 def test_raw_key_on_an_unnamed_bit_is_a_guess():
@@ -129,7 +128,7 @@ def test_catalogue_lists_every_named_action_once_and_no_alias():
 
 def test_catalogue_covers_every_bit_of_the_key_bytes_exactly_once():
     covered = {}
-    for name, kind, where, status, _note in ca.catalogue():
+    for name, kind, where, status in ca.catalogue():
         if kind == "key":
             off, mask = (int(x, 16) for x in where.split(":"))
             assert (off, mask) not in covered, (name, covered.get((off, mask)))
@@ -140,7 +139,7 @@ def test_catalogue_covers_every_bit_of_the_key_bytes_exactly_once():
 
 
 def test_catalogue_raw_rows_resolve_to_what_they_say():
-    for name, kind, where, status, _note in ca.catalogue():
+    for name, kind, where, status in ca.catalogue():
         if name.startswith("key_0x"):
             a = ca.resolve(name)
             assert "0x%02x:0x%02x" % (a.off, a.mask) == where

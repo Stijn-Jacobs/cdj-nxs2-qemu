@@ -3117,6 +3117,10 @@ static void sh7269_reset(void *opaque)
     env->mmucr = 0;
 }
 
+/* The code segments the load table placed, for gui_find_code(). */
+static struct { uint32_t dest, size; } gui_code[GUI_LOADTAB_MAX];
+static unsigned gui_code_n;
+
 /*
  * Scatter the image per its load table: twenty 12-byte [dest][src][size]
  * records at 0x10..0x100, code from 0x100. Destinations include 0x1C000000,
@@ -3166,6 +3170,11 @@ static int sh7269_load_image(const uint8_t *img, size_t len)
             info_report("sh7269: zero-fill 0x%08x + 0x%08x", dest, size);
         } else {
             cpu_physical_memory_write(dest, img + src, size);
+            /* on-chip RAM from 0xFFF80000 holds a data copy, not code */
+            if (dest < GUI_ONCHIP_BASE) {
+                gui_code[gui_code_n].dest = dest;
+                gui_code[gui_code_n++].size = size;
+            }
             info_report("sh7269: copy image+0x%06x -> 0x%08x size 0x%08x",
                         src, dest, size);
         }
@@ -3325,15 +3334,70 @@ static void gui_mpoke_init(void)
 }
 
 /*
+ * Firmware patches find their instruction by a signature: the halfwords of
+ * the instruction and its neighbours, searched in the code the load table put
+ * in memory. A patch is made only when the signature occurs exactly once, so
+ * another firmware build is left alone rather than patched in the wrong place.
+ */
+typedef struct GuiCodeSig {
+    const char *what;
+    uint16_t op[8];
+    unsigned n;         /* halfwords in op */
+    unsigned at;        /* index of the instruction to patch */
+} GuiCodeSig;
+
+/* The address of sig->op[at], or 0 (with a warning) unless found exactly once. */
+static uint32_t gui_find_code(const GuiCodeSig *sig)
+{
+    uint32_t found = 0;
+    unsigned hits = 0, c;
+
+    for (c = 0; c < gui_code_n; c++) {
+        g_autofree uint8_t *buf = g_malloc(gui_code[c].size);
+        uint32_t off, k;
+
+        cpu_physical_memory_read(gui_code[c].dest, buf, gui_code[c].size);
+        for (off = 0; off + sig->n * 2 <= gui_code[c].size; off += 2) {
+            for (k = 0; k < sig->n; k++) {
+                if (lduw_be_p(buf + off + k * 2) != sig->op[k]) {
+                    break;
+                }
+            }
+            if (k == sig->n) {
+                found = gui_code[c].dest + off + sig->at * 2;
+                hits++;
+            }
+        }
+    }
+    if (hits != 1) {
+        warn_report("sh7269gui: %s: signature found %u times -- not patched",
+                    sig->what, hits);
+        return 0;
+    }
+    return found;
+}
+
+/* Replace the instruction at pc, whose destination register is kept. */
+static void gui_patch_mov_imm(uint32_t pc, uint8_t imm)
+{
+    uint8_t b[2];
+
+    cpu_physical_memory_read(pc, b, 2);
+    b[0] = 0xE0 | (b[0] & 0x0F);                    /* mov #imm,rN */
+    b[1] = imm;
+    cpu_physical_memory_write(pc, b, 2);
+}
+
+/*
  * CDJ_GUI_CLOCK_DT=<ms>: how often the deck screen's REMAIN/elapsed clock is
  * repainted (default 0: the firmware's own pace).
  *
- * The UI task (0x1C001430) times each frame's drawing, excluding its 15 ms
- * sleep, and stores that dt at 0x1C048024. Two pacers add dt to an
- * accumulator and act only once the sum passes 42 ms:
- *   - while a track plays (*(0x0E5B82A0) == 2), gui_draw_layer_upload
- *     (0x1C002CE6) posts the deck-screen redraw message 0x16 that way;
- *   - otherwise the clock widget (0x1C00849E) repaints the time that way.
+ * The UI task times each frame's drawing, excluding its 15 ms sleep, and
+ * stores that dt. Two pacers add dt to an accumulator and act only once the
+ * sum passes 42 ms:
+ *   - while a track plays, the layer upload posts the deck-screen redraw
+ *     message 0x16 that way;
+ *   - otherwise the clock widget repaints the time that way.
  * On the real board a frame's drawing is slow enough for that to be every
  * frame or two. The emulated board draws in a few ms, so the clock was
  * repainted about three times a second while the waveform ran at ~45.
@@ -3342,132 +3406,104 @@ static void gui_mpoke_init(void)
  * load becomes `mov #<ms>,rN`. 22 repaints every second frame, 43 every
  * frame. The frame-budget readers of dt keep the measured value.
  */
-typedef struct GuiCodeSite {
-    uint32_t pc;
-    uint16_t orig, before, after;   /* the instruction and its two neighbours */
-    uint8_t reg;                    /* its destination register */
-} GuiCodeSite;
-
-static const GuiCodeSite gui_clock_sites[] = {
-    /* mov.l @r11,r13 between mov.l @(pc),r5 and mov #0x2a,r14 */
-    { 0x1C002D84, 0x6DB2, 0xD56F, 0xEE2A, 13 },
-    /* mov.l @r4,r7 between mov #0x2a,r12 and add r7,r2 */
-    { 0x1C0084C6, 0x6742, 0xEC2A, 0x327C, 7 },
+static const GuiCodeSig gui_clock_sigs[] = {
+    /* the play pacer's dt load (v1.81: 0x1C002D84):
+     * mov.l @r11,r13; mov #42,r14; mov.l @r5,r12; add r13,r12 */
+    { "CDJ_GUI_CLOCK_DT play pacer", { 0x6DB2, 0xEE2A, 0x6C52, 0x3CDC }, 4, 0 },
+    /* the clock widget's dt load (v1.81: 0x1C0084C6):
+     * mov.l @r1,r2; mov #42,r12; mov.l @r4,r7; add r7,r2; cmp/hi r12,r2 */
+    { "CDJ_GUI_CLOCK_DT widget pacer",
+      { 0x6212, 0xEC2A, 0x6742, 0x327C, 0x32C6 }, 5, 2 },
 };
-
-static QEMUTimer *gui_clock_dt_timer;
-static uint8_t gui_clock_dt_ms;
-
-static uint16_t gui_ld16(uint32_t addr)
-{
-    uint8_t b[2];
-
-    cpu_physical_memory_read(addr, b, 2);
-    return (uint16_t)(b[0] << 8 | b[1]);        /* the guest is big-endian */
-}
-
-static bool gui_site_matches(const GuiCodeSite *c)
-{
-    return gui_ld16(c->pc) == c->orig && gui_ld16(c->pc - 2) == c->before &&
-           gui_ld16(c->pc + 2) == c->after;
-}
-
-static void gui_site_mov_imm(const GuiCodeSite *c, uint8_t imm)
-{
-    uint16_t insn = 0xE000 | c->reg << 8 | imm;     /* mov #imm,rN */
-    uint8_t b[2] = { insn >> 8, insn & 0xFF };
-
-    cpu_physical_memory_write(c->pc, b, 2);
-}
-
-/* Patch only the exact instruction sequence, so a different image is left
- * alone; re-check periodically in case the firmware reloads its code. */
-static void gui_clock_dt_apply(void *opaque)
-{
-    static bool announced[ARRAY_SIZE(gui_clock_sites)];
-    static bool mismatch[ARRAY_SIZE(gui_clock_sites)];
-    unsigned i;
-
-    for (i = 0; i < ARRAY_SIZE(gui_clock_sites); i++) {
-        const GuiCodeSite *c = &gui_clock_sites[i];
-
-        if (gui_site_matches(c)) {
-            gui_site_mov_imm(c, gui_clock_dt_ms);
-            if (!announced[i]) {
-                announced[i] = true;
-                info_report("sh7269gui: clock pacer at 0x%08x counts %u ms "
-                            "per frame (CDJ_GUI_CLOCK_DT)", c->pc,
-                            gui_clock_dt_ms);
-            }
-        } else if (!announced[i] && !mismatch[i]) {
-            mismatch[i] = true;
-            warn_report("sh7269gui: CDJ_GUI_CLOCK_DT: unexpected code at "
-                        "0x%08x (0x%04x) -- not patched", c->pc,
-                        gui_ld16(c->pc));
-        }
-    }
-    timer_mod(gui_clock_dt_timer,
-              qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 500 * 1000000LL);
-}
 
 static void gui_clock_dt_init(void)
 {
     const char *e = getenv("CDJ_GUI_CLOCK_DT");
     long ms = e ? strtol(e, NULL, 0) : 0;
+    unsigned i;
 
     if (ms <= 0) {
         return;
     }
-    gui_clock_dt_ms = MIN(ms, 127);             /* mov #imm is signed 8-bit */
-    gui_clock_dt_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, gui_clock_dt_apply,
-                                      NULL);
-    gui_clock_dt_apply(NULL);
+    ms = MIN(ms, 127);                          /* mov #imm is signed 8-bit */
+    for (i = 0; i < ARRAY_SIZE(gui_clock_sigs); i++) {
+        uint32_t pc = gui_find_code(&gui_clock_sigs[i]);
+
+        if (pc) {
+            gui_patch_mov_imm(pc, ms);
+            info_report("sh7269gui: clock pacer at 0x%08x counts %ld ms per "
+                        "frame (CDJ_GUI_CLOCK_DT)", pc, ms);
+        }
+    }
 }
 
 /*
  * CDJ_GUI_FRAME_MS=<ms>: the display firmware's shortest frame, 1-14 ms
  * (default 0: the firmware's own 15).
  *
- * The UI task (0x1C001430) draws a frame and, when that took dt < 15 ms,
- * sleeps 15 - dt ticks, then one more: `mov #15,r9` at 0x1C00148C is the
- * compare and `mov #15,r4` at 0x1C0014C8 the sleep. Both become <ms>.
- * Zoomed fully in, the centre waveform scrolls ~146 px/s but changed only
- * ~33 times a second; at 6 it changes ~73 times a second, for ~20 % of a
- * core more. At the default zoom it scrolls ~35 px/s, so there is little
- * to gain (32 -> 36).
+ * The UI task draws a frame and, when that took dt < 15 ms, sleeps 15 - dt
+ * ticks, then one more: a `mov #15,r9` before its loop is the compare and a
+ * `mov #15,r4` after it the sleep. Both become <ms>. Zoomed fully in, the
+ * centre waveform scrolls ~146 px/s but changed only ~33 times a second; at
+ * 6 it changes ~73 times a second, for ~20 % of a core more. At the default
+ * zoom it scrolls ~35 px/s, so there is little to gain (32 -> 36).
  * r9 is loaded once, before the loop, so this is patched only here, before
- * the CPU runs, and only when both sites match: a compare and a sleep that
+ * the CPU runs, and only when both are found: a compare and a sleep that
  * disagree would sleep ms - dt < 0 ticks.
+ *
+ * Animations step once per frame, so they would speed up too. The BROWSE
+ * list's long-title marquee moves its text 3 px a frame; with this knob it
+ * moves 3 px per native frame of time instead, through CDJ_TIMED_ADD in
+ * target/sh4.
  */
-static const GuiCodeSite gui_frame_sites[] = {
-    /* mov #15,r9 between mov.l r8,@r1 and mov.l r14,@r2 */
-    { 0x1C00148C, 0xE90F, 0x2182, 0x22E2, 9 },
-    /* mov #15,r4 between mov.l r6,@r5 and jsr @r13 */
-    { 0x1C0014C8, 0xE40F, 0x2562, 0x4D0B, 4 },
+static const GuiCodeSig gui_frame_sigs[] = {
+    /* the compare's limit (v1.81: 0x1C00148C):
+     * mov.l r8,@r1; mov #15,r9; mov.l r14,@r2 */
+    { "CDJ_GUI_FRAME_MS compare", { 0x2182, 0xE90F, 0x22E2 }, 3, 1 },
+    /* the sleep (v1.81: 0x1C0014C8): cmp/hs r9,r6; bt/s; mov.l r6,@r5;
+     * mov #15,r4; jsr @r13; sub r6,r4; mov #1,r4 */
+    { "CDJ_GUI_FRAME_MS sleep",
+      { 0x3692, 0x8D03, 0x2562, 0xE40F, 0x4D0B, 0x3468, 0xE401 }, 7, 3 },
 };
+
+/* the marquee step (v1.81: 0x0E51FF6E), the offset at widget+0x50:
+ * mov #0x50,r0; mov #0,r2; mov.l @(r0,r14),r1; add #-3,r1; mov.l r1,@(r0,r14) */
+static const GuiCodeSig gui_marquee_sig = {
+    "CDJ_GUI_FRAME_MS marquee", { 0xE050, 0xE200, 0x01EE, 0x71FD, 0x0E16 }, 5, 3
+};
+
+/* With the firmware's floor the marquee moved 77-82 px/s (3 px a frame),
+ * so an emulated UI frame is ~38 ms apart. */
+#define GUI_NATIVE_FRAME_MS 38
 
 static void gui_frame_ms_init(void)
 {
     const char *e = getenv("CDJ_GUI_FRAME_MS");
     long ms = e ? strtol(e, NULL, 0) : 0;
+    uint32_t pc[ARRAY_SIZE(gui_frame_sigs)], marquee;
     unsigned i;
 
     if (ms <= 0 || ms >= 15) {
         return;
     }
-    for (i = 0; i < ARRAY_SIZE(gui_frame_sites); i++) {
-        if (!gui_site_matches(&gui_frame_sites[i])) {
-            warn_report("sh7269gui: CDJ_GUI_FRAME_MS: unexpected code at "
-                        "0x%08x (0x%04x) -- not patched", gui_frame_sites[i].pc,
-                        gui_ld16(gui_frame_sites[i].pc));
+    for (i = 0; i < ARRAY_SIZE(gui_frame_sigs); i++) {
+        pc[i] = gui_find_code(&gui_frame_sigs[i]);
+        if (!pc[i]) {
             return;
         }
     }
-    for (i = 0; i < ARRAY_SIZE(gui_frame_sites); i++) {
-        gui_site_mov_imm(&gui_frame_sites[i], ms);
+    for (i = 0; i < ARRAY_SIZE(gui_frame_sigs); i++) {
+        gui_patch_mov_imm(pc[i], ms);
     }
     info_report("sh7269gui: UI frames at least %ld ms apart instead of 15 "
-                "(CDJ_GUI_FRAME_MS)", ms);
+                "(CDJ_GUI_FRAME_MS, 0x%08x/0x%08x)", ms, pc[0], pc[1]);
+    marquee = gui_find_code(&gui_marquee_sig);
+    if (marquee && !getenv("CDJ_TIMED_ADD")) {
+        g_autofree char *spec = g_strdup_printf("0x%08x:%u", marquee,
+                                                GUI_NATIVE_FRAME_MS);
+
+        g_setenv("CDJ_TIMED_ADD", spec, true);
+    }
 }
 
 static void sh7269gui_init(MachineState *machine)

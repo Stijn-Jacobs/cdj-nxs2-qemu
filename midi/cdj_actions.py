@@ -46,10 +46,9 @@ DECODED = "decoded"
 class Action:
     """One thing a deck can be told to do, and how sure we are it works."""
 
-    def __init__(self, name, status, note=""):
+    def __init__(self, name, status):
         self.name = name
         self.status = status
-        self.note = note
 
     @property
     def sendable(self):
@@ -63,8 +62,8 @@ class Action:
 class KeyAction(Action):
     """A report bit held for dur_ms -- an ordinary front panel button."""
 
-    def __init__(self, name, off, mask, status, note=""):
-        super().__init__(name, status, note)
+    def __init__(self, name, off, mask, status):
+        super().__init__(name, status)
         self.off = off
         self.mask = mask
 
@@ -84,8 +83,8 @@ class KeyAction(Action):
 class RotaryAction(Action):
     """A persistent counter -- the select knob. `value` is the detent delta."""
 
-    def __init__(self, name, off, status, note=""):
-        super().__init__(name, status, note)
+    def __init__(self, name, off, status):
+        super().__init__(name, status)
         self.off = off
 
     def datagram(self, value=1, dur_ms=0):
@@ -121,8 +120,8 @@ class JogAction(Action):
     ROUND_FWD = 0x40
     MOV = 0x80
 
-    def __init__(self, name, status, note="", min_interval_ms=40):
-        super().__init__(name, status, note)
+    def __init__(self, name, status, min_interval_ms=40):
+        super().__init__(name, status)
         self.min_interval_ms = min_interval_ms
 
     def datagram(self, value=1, dur_ms=150):
@@ -203,8 +202,8 @@ class LevelAction(Action):
     a value.
     """
 
-    def __init__(self, name, off, status, note="", full_scale=254):
-        super().__init__(name, status, note)
+    def __init__(self, name, off, status, full_scale=254):
+        super().__init__(name, status)
         self.off = off
         self.full_scale = full_scale
 
@@ -223,8 +222,8 @@ class TouchTapAction(Action):
     {"action": "touch_tap", "x": 400, "y": 240}.
     """
 
-    def __init__(self, name, status, note="", x=400, y=240):
-        super().__init__(name, status, note)
+    def __init__(self, name, status, x=400, y=240):
+        super().__init__(name, status)
         self.x = max(0, min(799, int(x)))
         self.y = max(0, min(479, int(y)))
 
@@ -235,8 +234,8 @@ class TouchTapAction(Action):
 class UnboundAction(Action):
     """A DJ-202 control with no known CDJ target. Kept so the map is honest."""
 
-    def __init__(self, name, note):
-        super().__init__(name, UNBOUND, note)
+    def __init__(self, name):
+        super().__init__(name, UNBOUND)
 
 
 # Key bits and names come from the firmware: the service console's key table
@@ -244,114 +243,85 @@ class UnboundAction(Action):
 # 0x0844D400. The names are the firmware's, not the panel silkscreen's; e.g.
 # 0x12:0x10 is ScanRev and the real Cue is 0x10:0x02.
 ACTIONS = {a.name: a for a in [
-    RotaryAction("select_turn", 0x0E, CONFIRMED,
-                 "one row per detent, two boots, against an idle control"),
+    RotaryAction("select_turn", 0x0E, CONFIRMED),
 
-    KeyAction("play_pause", 0x10, 0x01, PARTIAL,
-              "PAUSES but does not RESUME: one press stops a playing deck "
-              "within 5 s, a second press leaves it stopped. Playback starts "
-              "from the load, not from this key. Do not test this with your "
-              "hand on the jog: jog_touch freezes the position by itself"),
-    KeyAction("cue", 0x10, 0x02, CONFIRMED, "the real Cue"),
-    KeyAction("reloop_exit", 0x10, 0x04, CONFIRMED, ""),
-    KeyAction("loop_out", 0x10, 0x08, CONFIRMED, ""),
-    KeyAction("loop_in", 0x10, 0x10, CONFIRMED, ""),
+    KeyAction("play_pause", 0x10, 0x01, PARTIAL),
+    KeyAction("cue", 0x10, 0x02, CONFIRMED),
+    KeyAction("reloop_exit", 0x10, 0x04, CONFIRMED),
+    KeyAction("loop_out", 0x10, 0x08, CONFIRMED),
+    KeyAction("loop_in", 0x10, 0x10, CONFIRMED),
 
-    KeyAction("rotary_push", 0x11, 0x01, CONFIRMED,
-              "enters a browse row; this is what loading a track needs"),
-    KeyAction("slip_mode", 0x11, 0x02, CONFIRMED, ""),
-    KeyAction("direction_rev", 0x11, 0x04, CONFIRMED, ""),
-    KeyAction("slip_reverse", 0x11, 0x08, CONFIRMED, ""),
+    KeyAction("rotary_push", 0x11, 0x01, CONFIRMED),
+    KeyAction("slip_mode", 0x11, 0x02, CONFIRMED),
+    KeyAction("direction_rev", 0x11, 0x04, CONFIRMED),
+    KeyAction("slip_reverse", 0x11, 0x08, CONFIRMED),
 
-    KeyAction("track_rev", 0x12, 0x04, CONFIRMED, ""),
-    KeyAction("track_fwd", 0x12, 0x08, CONFIRMED, ""),
-    KeyAction("scan_rev", 0x12, 0x10, CONFIRMED,
-              "search backwards; holding it moves and releasing reverts"),
-    KeyAction("scan_fwd", 0x12, 0x20, CONFIRMED, ""),
+    KeyAction("track_rev", 0x12, 0x04, CONFIRMED),
+    KeyAction("track_fwd", 0x12, 0x08, CONFIRMED),
+    KeyAction("scan_rev", 0x12, 0x10, CONFIRMED),
+    KeyAction("scan_fwd", 0x12, 0x20, CONFIRMED),
 
-    KeyAction("dev_usb", 0x13, 0x04, CONFIRMED, ""),
+    KeyAction("dev_usb", 0x13, 0x04, CONFIRMED),
 
-    KeyAction("browse", 0x14, 0x01, CONFIRMED, ""),
-    KeyAction("taglist", 0x14, 0x02, CONFIRMED, ""),
-    KeyAction("information", 0x14, 0x04, CONFIRMED, ""),
-    KeyAction("menu_utility", 0x14, 0x08, CONFIRMED, ""),
-    KeyAction("back", 0x14, 0x10, CONFIRMED, ""),
-    KeyAction("tagtrack", 0x14, 0x20, CONFIRMED, ""),
+    KeyAction("browse", 0x14, 0x01, CONFIRMED),
+    KeyAction("taglist", 0x14, 0x02, CONFIRMED),
+    KeyAction("information", 0x14, 0x04, CONFIRMED),
+    KeyAction("menu_utility", 0x14, 0x08, CONFIRMED),
+    KeyAction("back", 0x14, 0x10, CONFIRMED),
+    KeyAction("tagtrack", 0x14, 0x20, CONFIRMED),
 
-    KeyAction("sync", 0x15, 0x02, CONFIRMED, ""),
-    KeyAction("tempo_range", 0x15, 0x08, CONFIRMED, ""),
-    KeyAction("master_tempo", 0x15, 0x10, CONFIRMED, ""),
+    KeyAction("sync", 0x15, 0x02, CONFIRMED),
+    KeyAction("tempo_range", 0x15, 0x08, CONFIRMED),
+    KeyAction("master_tempo", 0x15, 0x10, CONFIRMED),
     # Jog mode (VINYL/CDJ): report 0x15 bit 0x01, read at 0x0844D968 into the
     # setter 0x084E16E0 (JogModeVinyl). Only in VINYL mode does a touched
     # platter hold/scratch; in CDJ mode the top bends like the rim.
-    KeyAction("jog_mode", 0x15, 0x01, PARTIAL,
-              "the decoder site and setter are read off the firmware; the "
-              "toggle itself is not yet seen on the glass"),
+    KeyAction("jog_mode", 0x15, 0x01, PARTIAL),
 
-    KeyAction("memory", 0x0C, 0x08, CONFIRMED, ""),
+    KeyAction("memory", 0x0C, 0x08, CONFIRMED),
 
     # The jog, as its three separate bits, for anything that wants them raw.
-    KeyAction("jog_touch", 0x0F, 0x20, CONFIRMED, ""),
-    KeyAction("jog_round_fwd", 0x0F, 0x40, CONFIRMED, ""),
-    KeyAction("jog_mov", 0x0F, 0x80, CONFIRMED, ""),
+    KeyAction("jog_touch", 0x0F, 0x20, CONFIRMED),
+    KeyAction("jog_round_fwd", 0x0F, 0x40, CONFIRMED),
+    KeyAction("jog_mov", 0x0F, 0x80, CONFIRMED),
 
     # ...and as one thing a platter can be bound to.
-    JogAction("jog", CONFIRMED,
-              "bits are firmware-table facts; whether a stopped deck reacts "
-              "to a platter is a separate question"),
+    JogAction("jog", CONFIRMED),
 
     # The two analogue pots, from the decoder's value-read sites. The tempo
     # slider field moves a real word (setter TempoSliderMax), but the tempo
     # readout has not been seen to follow it. The tempo keys do work:
     # TempoRange 0x15:0x08 cycles the range badge, MasterTempo 0x15:0x10
     # lights the MT badge.
-    LevelAction("tempo", 0x04, PARTIAL,
-                "moves the firmware's word at 0x0B54CAE8 (+deck*716) as "
-                "byte<<8, measured with MWATCH -- but the TEMPO readout does "
-                "not follow it, on a deck with a track loaded"),
-    LevelAction("release_start", 0x02, PARTIAL,
-                "the other analogue pot, ReleaseStartMax (0x084E1654); same "
-                "standing as tempo"),
+    LevelAction("tempo", 0x04, PARTIAL),
+    LevelAction("release_start", 0x02, PARTIAL),
 
     # The rest of the panel decoder (0x0844D400), named after the firmware's
-    # key table. Decoded, not verified on a running deck. "(2000 only)" is the
-    # firmware's own label: the NXS2 decodes those keys anyway.
-    KeyAction("sd_door_open", 0x10, 0x40, DECODED,
-              "firmware name 'SDdoorOpen( 2000 only )'"),
-    KeyAction("rec_mode", 0x12, 0x02, DECODED, "firmware name 'RecMode'"),
-    KeyAction("dev_rekordbox", 0x13, 0x01, DECODED, "firmware name 'DevRekordbox'"),
-    KeyAction("dev_link", 0x13, 0x02, DECODED, "firmware name 'DevLink'"),
-    KeyAction("dev_sd", 0x13, 0x08, DECODED, "firmware name 'DevSD( 2000 only )'"),
-    KeyAction("dev_disc", 0x13, 0x10, DECODED, "firmware name 'DevDisc'"),
-    KeyAction("time_a_cue", 0x13, 0x20, DECODED, "firmware name 'TimeAcue'"),
-    KeyAction("master", 0x15, 0x04, DECODED, "firmware name 'Master'"),
-    KeyAction("tempo_reset", 0x15, 0x20, DECODED,
-              "firmware name 'TempoReset( 2000 only )'"),
-    KeyAction("call_rev", 0x0C, 0x01, DECODED,
-              "firmware name 'Call_Rev'; the decoder hands the same bit to "
-              "LoopCut on another branch"),
-    KeyAction("call_fwd", 0x0C, 0x02, DECODED,
-              "firmware name 'Call_Fwd'; the decoder hands the same bit to "
-              "LoopDouble on another branch"),
-    KeyAction("delete", 0x0C, 0x04, DECODED, "firmware name 'Delete'"),
-    KeyAction("eject", 0x0C, 0x10, DECODED, "firmware name 'Eject'"),
-    KeyAction("four_beat_loop", 0x1A, 0x80, DECODED,
-              "firmware name 'fourBeatLoop( 2000 only )'"),
+    # key table. Decoded, not verified on a running deck. The NXS2 decodes
+    # keys the firmware itself marks "(2000 only)" anyway.
+    KeyAction("sd_door_open", 0x10, 0x40, DECODED),
+    KeyAction("rec_mode", 0x12, 0x02, DECODED),
+    KeyAction("dev_rekordbox", 0x13, 0x01, DECODED),
+    KeyAction("dev_link", 0x13, 0x02, DECODED),
+    KeyAction("dev_sd", 0x13, 0x08, DECODED),
+    KeyAction("dev_disc", 0x13, 0x10, DECODED),
+    KeyAction("time_a_cue", 0x13, 0x20, DECODED),
+    KeyAction("master", 0x15, 0x04, DECODED),
+    KeyAction("tempo_reset", 0x15, 0x20, DECODED),
+    # The decoder hands this same bit to LoopCut on another branch.
+    KeyAction("call_rev", 0x0C, 0x01, DECODED),
+    # The decoder hands this same bit to LoopDouble on another branch.
+    KeyAction("call_fwd", 0x0C, 0x02, DECODED),
+    KeyAction("delete", 0x0C, 0x04, DECODED),
+    KeyAction("eject", 0x0C, 0x10, DECODED),
+    KeyAction("four_beat_loop", 0x1A, 0x80, DECODED),
 
     # The touch screen, one pixel per binding (see TouchTapAction).
-    TouchTapAction("touch_tap", PARTIAL,
-                   "the touch path reaches the firmware's own UI handler; "
-                   "driving it from a controller is untested"),
+    TouchTapAction("touch_tap", PARTIAL),
 
     # Named by the firmware, with no known report field.
-    UnboundAction("needle_search",
-                  "the firmware names NeedleTouch and NeedlePositionRev/Fwd, "
-                  "but its panel decoder reads no report byte for them; the "
-                  "needle strip is not modelled"),
-    UnboundAction("hot_cue",
-                  "the decoder hands report byte 0x1A to the HotCueA..H "
-                  "setter, but which bit is which cue is not established -- "
-                  "bind key_0x1a_0x01 .. key_0x1a_0x40 raw to find out"),
+    UnboundAction("needle_search"),
+    UnboundAction("hot_cue"),
 ]}
 
 # The bytes the panel decoder tests bit by bit. Every bit of these is listed
@@ -387,7 +357,7 @@ def resolve(name, spec=None):
     spec = spec or {}
     if name == "touch_tap":
         base = ACTIONS[name]
-        return TouchTapAction(name, base.status, base.note,
+        return TouchTapAction(name, base.status,
                               spec.get("x", 400), spec.get("y", 240))
     if name in ACTIONS:
         return ACTIONS[name]
@@ -395,24 +365,20 @@ def resolve(name, spec=None):
     if m:
         off, mask = int(m.group(1), 16), int(m.group(2), 16)
         known = named_bit(off, mask)
-        note = (f"the same bit as '{known.name}'" if known
-                else "raw report bit, no name yet: unverified")
-        return KeyAction(name, off, mask, known.status if known else GUESS, note)
+        return KeyAction(name, off, mask, known.status if known else GUESS)
     m = _LEVEL.match(name)
     if m:
-        return LevelAction(name, int(m.group(1), 16), GUESS,
-                           "raw analogue byte, unverified")
+        return LevelAction(name, int(m.group(1), 16), GUESS)
     m = _ROT.match(name)
     if m:
-        return RotaryAction(name, int(m.group(1), 16), GUESS,
-                            "raw counter byte, unverified")
+        return RotaryAction(name, int(m.group(1), 16), GUESS)
     raise KeyError(
         f"unknown action {name!r}; known: {', '.join(sorted(ACTIONS))}, "
         "or key_0xOFF_0xMASK / level_0xOFF / rot_0xOFF for a raw field")
 
 
 def catalogue():
-    """Every mappable action: [(name, kind, where, status, note)].
+    """Every mappable action: [(name, kind, where, status)].
 
     The named ones first, then a key_0xOFF_0xMASK for every bit of KEY_BYTES
     that no named action covers.
@@ -433,14 +399,13 @@ def catalogue():
         else:
             where = "-"
         rows.append((name, type(a).__name__.replace("Action", "").lower(),
-                     where, a.status, a.note))
+                     where, a.status))
     for off in KEY_BYTES:
         for bit in range(8):
             mask = 1 << bit
             if (off, mask) not in taken:
                 rows.append((f"key_0x{off:02x}_0x{mask:02x}", "key",
-                             f"0x{off:02x}:0x{mask:02x}", GUESS,
-                             "no name yet; bind it to find out what it does"))
+                             f"0x{off:02x}:0x{mask:02x}", GUESS))
     return rows
 
 
@@ -450,5 +415,4 @@ def raw_action(off, mask, dur_ms=150):
     Marked `guess` on purpose -- a raw binding is by definition unverified,
     and the bridge should say so every time it fires one.
     """
-    return KeyAction(f"raw_0x{off:02x}_0x{mask:02x}", off, mask, GUESS,
-                     "raw report bit from the map file, unverified")
+    return KeyAction(f"raw_0x{off:02x}_0x{mask:02x}", off, mask, GUESS)
