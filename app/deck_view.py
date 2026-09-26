@@ -1,8 +1,11 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """One deck on screen: the drawn face, the live LCD, the mouse on its controls.
 
-A Tk canvas holds the face (art.py) as one image, with sprites on top for
-whatever changes. Input takes two routes, one per kind of thing:
+The face (art.py) is one image with sprites on top for whatever changes,
+composed into a surface of the deck's own at the display's pixel density: a
+face laid out in points is drawn with ratio pixels to the point (2 on a Retina
+screen), so it is as sharp as the display. Input takes two routes, one per kind
+of thing:
 
   * the LCD and the keyboard go over VNC (rfb.py) to the display board, whose
     touch handler and key map (sh7269gui.c) forward them to MAIN, exactly as
@@ -18,31 +21,30 @@ display.
 
 import math
 import time
-import tkinter as tk
 
-from PIL import Image, ImageDraw, ImageTk
+import pygame
 
 import art as ART
 import controls as C
+import gfx
 import layout as L
 
 LCD_SIZE = (800, 480)
-# Right-click (Button-2 on macOS) on the screen opens it in its own window.
-POPUP_BUTTONS = ("<Button-3>", "<Button-2>")
+BG = (5, 5, 5)
+POINTER_RED = (255, 42, 32)
 
 
 class DeckView:
-    """One deck: canvas, sprites and the controls behind them."""
+    """One deck: its surface, sprites and the controls behind them. Positions
+    handed in (the mouse) are in points relative to the face's top left."""
 
-    def __init__(self, master, number, tag, relay, screen, scale, on_hover,
-                 on_popup=None):
+    def __init__(self, number, tag, relay, screen, on_hover, on_popup=None):
         self.number = number
         self.tag = tag
         self.relay = relay
         self.screen = screen
         self.on_hover = on_hover
-        self.canvas = tk.Canvas(master, highlightthickness=0, bd=0, bg="#050505",
-                                cursor="arrow")
+        self.on_popup = on_popup
         self.keys = {k.name: k for k in L.KEYS}
         self.controls = {k.name: C.KeyControl(k.action, self.send) for k in L.KEYS}
         self.jog = C.Jog(self.send)
@@ -51,50 +53,52 @@ class DeckView:
         self.slider = C.TempoSlider(self.send)
         self.grab = None                # what the mouse button is holding
         self.lit = {}                   # key name -> (lit, down) now drawn
-        self.photos = {}                # sprite key -> PhotoImage, kept alive
-        self.items = {}
-        self.item_imgs = {}             # canvas item -> the PIL image it shows
+        self.surfaces = {}              # sprite key -> Surface, made once a scale
+        self.layers = {}                # layer name -> (Surface, (x, y) pixels)
+        self.key_order = []             # key layers, in the order first drawn
+        self.pointer = None             # (gap polygon, marks) or None, pixels
         self.frames_shown = []
         self.sinks = {}                 # name -> ScreenSlot showing this screen too
         self.face_shown = 0.0
-        self.on_popup = on_popup
         self.lcd_size = None
-        self._bind()
-        self.rescale(scale)
+        self.scale = self.ratio = None
+        self.surf = None
+        self.dirty = []                 # pixel rects of self.surf to redraw
 
     def send(self, datagram):
         """One panel datagram to this deck, through the relay."""
         self.relay.send(self.tag, datagram)
 
+    @property
+    def size(self):
+        """The face's size in points."""
+        return round(L.W * self.scale), round(L.H * self.scale)
+
     # -- drawing --------------------------------------------------------------
 
-    def rescale(self, scale):
-        self.scale = scale
-        self.art = ART.make_art(scale, f"DECK {self.number}")
-        self.photos.clear()
+    def rescale(self, scale, ratio):
+        """Lay the face out at `scale` points a face unit, drawn at `ratio`
+        pixels a point."""
+        self.scale, self.ratio = scale, ratio
+        self.art = ART.make_art(scale * ratio, f"DECK {self.number}")
+        self.surf = pygame.Surface(self.art.size)
+        self.surfaces.clear()
         self.lit.clear()
-        self.canvas.delete("all")
-        self.items = {}
-        w, h = self.art.size
-        self.canvas.config(width=w, height=h)
+        self.layers = {}
+        self.key_order = []
+        self.pointer = None
         body = self.art.body([(k, self.controls[k.name].look) for k in L.KEYS])
-        self.items["body"] = self.canvas.create_image(0, 0, anchor="nw",
-                                                      image=self._photo("body", body))
-        self.item_imgs = {self.items["body"]: body}
-        x0, y0, x1, y1 = [round(v * scale) for v in L.LCD]
+        self.layers["body"] = (self._surface("body", body), (0, 0))
+        x0, y0, x1, y1 = [round(v * self.px) for v in L.LCD]
         self.lcd_size = (x1 - x0, y1 - y0)
+        self.layers["lcd"] = (pygame.Surface(self.lcd_size), (x0, y0))
         self.views_changed()
-        self.lcd_photo = ImageTk.PhotoImage(Image.new("RGB", self.lcd_size))
-        self.items["lcd"] = self.canvas.create_image(x0, y0, anchor="nw",
-                                                     image=self.lcd_photo)
         self._sprite("jog", *self.art.jog_sprite(0))
         self._sprite("select", *self.art.select_sprite(0, False))
         self.centre_state = None
+        self.pointer_step = None
         self._draw_centre()
-        cap = self.art.slider_cap()
-        self.items["cap"] = self.canvas.create_image(0, 0, anchor="nw",
-                                                     image=self._photo("cap", cap))
-        self.item_imgs[self.items["cap"]] = cap
+        self._sprite("cap", self.art.slider_cap(), (0, 0), key="cap")
         self._place_cap()
         # Draw the lamps' lit looks ahead, a few per tick, so the first blink
         # of a lamp does not stall the screen while its sprite is made.
@@ -102,20 +106,63 @@ class DeckView:
                      for lit, down in ((True, False), (False, True), (True, True))]
         # And the jog's rotation phases, drawn the first time it turns otherwise.
         self.warm += [("jog", phase) for phase in range(1, self.art.JOG_PHASES)]
+        self.dirty = [self.surf.get_rect()]
 
-    def _photo(self, key, img):
-        if key not in self.photos:
-            self.photos[key] = ImageTk.PhotoImage(img)
-        return self.photos[key]
+    @property
+    def px(self):
+        """Pixels a face unit."""
+        return self.scale * self.ratio
+
+    def _surface(self, key, img):
+        if key not in self.surfaces:
+            self.surfaces[key] = gfx.surface(img, self.surf)
+        return self.surfaces[key]
+
+    def _layer_rect(self, name):
+        surf, pos = self.layers[name]
+        return pygame.Rect(pos, surf.get_size())
 
     def _sprite(self, name, img, pos, key=None):
-        photo = self._photo(key or (name, id(img)), img)
-        if name in self.items:
-            self.canvas.itemconfig(self.items[name], image=photo)
-        else:
-            self.items[name] = self.canvas.create_image(pos[0], pos[1], anchor="nw",
-                                                        image=photo)
-        self.item_imgs[self.items[name]] = img
+        surf = self._surface(key or (name, id(img)), img)
+        if name in self.layers:
+            self.dirty.append(self._layer_rect(name))
+        elif name.startswith("key:"):
+            self.key_order.append(name)
+        self.layers[name] = (surf, tuple(pos))
+        self.dirty.append(self._layer_rect(name))
+
+    def _order(self):
+        """Bottom to top: the keys over the jog, the selector over the keys
+        around it, the centre display over the jog."""
+        return ["body", "lcd", "jog", "cap"] + self.key_order + ["select", "centre"]
+
+    def _redraw(self, rect):
+        s = self.surf
+        s.set_clip(rect)
+        for name in self._order():
+            if name in self.layers:
+                surf, pos = self.layers[name]
+                if rect.colliderect(pygame.Rect(pos, surf.get_size())):
+                    s.blit(surf, pos)
+        if self.pointer:
+            gap, marks = self.pointer
+            pygame.draw.polygon(s, (0, 0, 0), gap)
+            width = max(1, round(1.6 * self.px))
+            for line in marks:
+                pygame.draw.line(s, POINTER_RED, line[0], line[1], width)
+        s.set_clip(None)
+
+    def compose(self):
+        """Bring the surface up to date; the pixel rects that changed."""
+        if not self.dirty:
+            return []
+        bounds = self.surf.get_rect()
+        rects = [r.clip(bounds) for r in self.dirty]
+        rects = [r for r in rects if r.w and r.h]
+        self.dirty = []
+        for r in rects:
+            self._redraw(r)
+        return rects
 
     def _draw_key(self, name, lit, down):
         if self.lit.get(name, (False, False)) == (lit, down):
@@ -124,17 +171,21 @@ class DeckView:
         key = self.keys[name]
         img, pos = self.art.key_sprite(key, lit, down, self.controls[name].look)
         self._sprite("key:" + name, img, pos, key=("key", name, lit, down))
-        # The selector sits over the keys around it.
-        if "select" in self.items:
-            self.canvas.tag_raise(self.items["select"])
 
     def _draw_jog(self):
         img, pos = self.art.jog_sprite(self.jog.angle % self.art.JOG_PHASES)
         self._sprite("jog", img, pos)
-        for name in ("centre", "gap"):
-            self.canvas.tag_raise(self.items[name])
-        for item in self.items["marks"]:
-            self.canvas.tag_raise(item)
+
+    def _pointer_rect(self):
+        if not self.pointer:
+            return None
+        gap, marks = self.pointer
+        pts = gap + [p for line in marks for p in line]
+        xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+        pad = max(2, round(2 * self.px))
+        return pygame.Rect(math.floor(min(xs)) - pad, math.floor(min(ys)) - pad,
+                           math.ceil(max(xs) - min(xs)) + 2 * pad,
+                           math.ceil(max(ys) - min(ys)) + 2 * pad)
 
     def _draw_centre(self):
         st = self.relay.state(self.tag)
@@ -143,35 +194,29 @@ class DeckView:
             self.centre_state = look
             img, pos = self.art.centre_sprite(*look)
             self._sprite("centre", img, pos, key=("centre",) + look)
-            if "gap" not in self.items:
-                self.items["gap"] = self.canvas.create_polygon(0, 0, 0, 0, fill="#000000",
-                                                               outline="")
-                self.items["marks"] = [self.canvas.create_line(0, 0, 0, 0, fill="#ff2a20",
-                                                               width=max(1, round(1.6 * self.scale)))
-                                       for _ in range(2)]
-            for item in [self.items["gap"]] + self.items["marks"]:
-                self.canvas.tag_raise(item)
-            self.pointer_step = -1
+            self.pointer_step = None
         turns = st.pointer_turns()
         step = -1 if turns is None else round(turns * 135)
         if step == self.pointer_step:
             return
         self.pointer_step = step
-        state = "hidden" if step < 0 else "normal"
-        for item in [self.items["gap"]] + self.items["marks"]:
-            self.canvas.itemconfig(item, state=state)
-        if step >= 0:
-            gap, marks = self.art.centre_pointer(step / 135)
-            self.canvas.coords(self.items["gap"], *[v for pt in gap for v in pt])
-            for item, line in zip(self.items["marks"], marks):
-                self.canvas.coords(item, *[v for pt in line for v in pt])
+        old = self._pointer_rect()
+        if old:
+            self.dirty.append(old)
+        self.pointer = self.art.centre_pointer(step / 135) if step >= 0 else None
+        new = self._pointer_rect()
+        if new:
+            self.dirty.append(new)
 
     def _place_cap(self):
         x, top, bottom = L.SLIDER
         w, h = self.art.SLIDER_CAP
         y = top + (bottom - top) * self.slider.pos
-        self.canvas.coords(self.items["cap"], round((x - w / 2 - 4) * self.scale),
-                           round((y - h / 2 - 4) * self.scale))
+        surf, _ = self.layers["cap"]
+        self.dirty.append(self._layer_rect("cap"))
+        self.layers["cap"] = (surf, (round((x - w / 2 - 4) * self.px),
+                                     round((y - h / 2 - 4) * self.px)))
+        self.dirty.append(self._layer_rect("cap"))
 
     def add_sink(self, name, view):
         """Show this deck's screen in `view` (a ScreenSlot) as well."""
@@ -183,11 +228,11 @@ class DeckView:
         self.views_changed()
 
     def views_changed(self):
-        """Tell the frame source every size the screen is now shown at."""
+        """Tell the frame source every size, in pixels, the screen is now shown at."""
         if self.lcd_size is None:
             return
         sizes = {"face": self.lcd_size}
-        sizes.update({n: v.size for n, v in self.sinks.items() if v.size})
+        sizes.update({n: v.px_size for n, v in self.sinks.items() if v.px_size})
         self.screen.set_views(sizes)
 
     # With the screen shown larger elsewhere, the face's small copy of it is
@@ -202,29 +247,16 @@ class DeckView:
             else:
                 self.face_shown = now
         if face is not None and face.size == self.lcd_size:
-            self.lcd_photo.paste(face)
-            self.item_imgs[self.items["lcd"]] = face
+            _, pos = self.layers["lcd"]
+            self.layers["lcd"] = (gfx.surface(face, self.surf), pos)
+            self.dirty.append(self._layer_rect("lcd"))
         for name, view in self.sinks.items():
             view.show(views.get(name))
 
     def snapshot(self):
-        """What the canvas shows, as one image, composed from its layers."""
-        out = Image.new("RGBA", self.art.size, (5, 5, 5, 255))
-        draw = ImageDraw.Draw(out)
-        for item in self.canvas.find_all():
-            if self.canvas.itemcget(item, "state") == "hidden":
-                continue
-            kind = self.canvas.type(item)
-            xy = self.canvas.coords(item)
-            if kind == "image" and item in self.item_imgs:
-                out.alpha_composite(self.item_imgs[item].convert("RGBA"),
-                                    (max(0, round(xy[0])), max(0, round(xy[1]))))
-            elif kind == "polygon":
-                draw.polygon(xy, fill=self.canvas.itemcget(item, "fill"))
-            elif kind == "line":
-                draw.line(xy, fill=self.canvas.itemcget(item, "fill"),
-                          width=round(float(self.canvas.itemcget(item, "width"))))
-        return out.convert("RGB")
+        """What the face shows now, as a PIL image at the drawn pixel size."""
+        self.compose()
+        return gfx.image(self.surf)
 
     # -- the periodic update ------------------------------------------------------
 
@@ -236,7 +268,7 @@ class DeckView:
                 return
             key, lit, down = job
             img, _ = self.art.key_sprite(key, lit, down, self.controls[key.name].look)
-            self._photo(("key", key.name, lit, down), img)
+            self._surface(("key", key.name, lit, down), img)
 
     def tick(self, now):
         frame = self.screen.take_frame()
@@ -277,22 +309,10 @@ class DeckView:
         lamps = "lamps live" if st.live else "no lamps yet"
         return f"deck {self.number} ({self.tag}): {screen}, {lamps}"
 
-    # -- the mouse ------------------------------------------------------------
+    # -- the mouse, in points from the face's top left ------------------------------
 
-    def _bind(self):
-        c = self.canvas
-        c.bind("<ButtonPress-1>", self._down)
-        c.bind("<B1-Motion>", self._drag)
-        c.bind("<ButtonRelease-1>", self._up)
-        c.bind("<Motion>", self._hover)
-        c.bind("<MouseWheel>", self._wheel)
-        c.bind("<Button-4>", lambda e: self._wheel(e, 1))
-        c.bind("<Button-5>", lambda e: self._wheel(e, -1))
-        for b in POPUP_BUTTONS:
-            c.bind(b, self._popup)
-
-    def units(self, e):
-        return e.x / self.scale, e.y / self.scale
+    def units(self, pos):
+        return pos[0] / self.scale, pos[1] / self.scale
 
     def _in_lcd(self, x, y):
         x0, y0, x1, y1 = L.LCD
@@ -307,8 +327,8 @@ class DeckView:
         cx, cy = centre[0], centre[1]
         return math.hypot(x - cx, y - cy), math.degrees(math.atan2(y - cy, x - cx))
 
-    def _down(self, e):
-        x, y = self.units(e)
+    def down(self, pos):
+        x, y = self.units(pos)
         r_jog, a_jog = self._polar(x, y, L.JOG)
         r_sel, a_sel = self._polar(x, y, L.SELECT)
         sx0, sy0, sx1, sy1 = L.SLIDER_FRAME
@@ -333,10 +353,10 @@ class DeckView:
                 self.grab = ("key", key.name)
                 self._draw_key(key.name, False, True)
 
-    def _drag(self, e):
+    def drag(self, pos):
         if not self.grab:
             return
-        x, y = self.units(e)
+        x, y = self.units(pos)
         kind = self.grab[0]
         if kind == "lcd":
             self.screen.pointer(*self._lcd_pixel(x, y), down=True)
@@ -357,13 +377,13 @@ class DeckView:
         elif kind == "slider":
             self._slide(y)
 
-    def _up(self, e):
+    def up(self, pos):
         grab, self.grab = self.grab, None
         if not grab:
             return
         kind = grab[0]
         if kind == "lcd":
-            x, y = self.units(e)
+            x, y = self.units(pos)
             self.screen.pointer(*self._lcd_pixel(x, y), down=False)
         elif kind == "push":
             self.selector.push.release()
@@ -384,10 +404,9 @@ class DeckView:
         self.selector.turn(n)
         self._sprite("select", *self.art.select_sprite(self.selector.detents, False))
 
-    def _wheel(self, e, sign=None):
-        if sign is None:
-            sign = 1 if e.delta > 0 else -1
-        x, y = self.units(e)
+    def wheel(self, pos, sign):
+        """One wheel notch at pos: +1 up (away from the user), -1 down."""
+        x, y = self.units(pos)
         r_jog, _ = self._polar(x, y, L.JOG)
         if r_jog <= L.JOG[2] and not self._in_lcd(x, y):
             # A wheel notch nudges the platter a few degrees.
@@ -397,8 +416,8 @@ class DeckView:
             # Wheel up moves up the list, as the Up arrow does.
             self._turn_select(-sign)
 
-    def _hover(self, e):
-        x, y = self.units(e)
+    def hover(self, pos):
+        x, y = self.units(pos)
         if self._in_lcd(x, y):
             text = "screen: click to touch; right-click (or F3) opens it in a window"
         elif self._polar(x, y, L.SELECT)[0] <= L.SELECT[2] + 8:
@@ -414,7 +433,8 @@ class DeckView:
             text = C.describe(key) if key else ""
         self.on_hover(self, text)
 
-    def _popup(self, e):
-        x, y = self.units(e)
+    def popup(self, pos):
+        x, y = self.units(pos)
         if self._in_lcd(x, y) and self.on_popup:
             self.on_popup(self)
+

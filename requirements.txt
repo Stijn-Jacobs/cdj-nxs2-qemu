@@ -22,6 +22,12 @@
 # Uses Image.open/convert/getpixel only.
 Pillow>=9.0
 
+# The virtual deck app (./start.sh --app, app/virtual_deck.py) draws its window
+# with pygame-ce (SDL), which gives it the display's real pixels: sharp on a
+# Retina or scaled Windows display. Pillow draws the art. The community edition, not `pygame`: its Window API has the
+# high-DPI option. Tested with 2.5.8.
+pygame-ce>=2.5
+
 # USB-stick image builder, run once: scripts/media/make_usb_image.py (PyFat.mkfs, and
 # PyFatFS with preserve_case). Tested with 1.1.0; the 1.0 lower bound is
 # UNVERIFIED.

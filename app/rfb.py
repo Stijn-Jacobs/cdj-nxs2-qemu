@@ -106,7 +106,7 @@ class RfbClient(FrameSource):
         self._send(struct.pack(">BBHH", 5, 1 if down else 0, x, y))
 
     def key(self, keysym, down):
-        """An X11 keysym (Tk's keysym_num is one on every platform)."""
+        """An X11 keysym (gfx.keysym maps the window's keys to one)."""
         self._send(struct.pack(">BBxxI", 4, 1 if down else 0, keysym))
 
     # -- the connection thread -------------------------------------------------

@@ -15,3 +15,5 @@ setuptools<81
 # scripts/media/collection_xml.py and bpm_estimate.py; see requirements.txt.
 mutagen>=1.45
 numpy>=1.24
+# app/ (the virtual deck), rendered off screen by tests/test_app.py.
+pygame-ce>=2.5

@@ -322,22 +322,22 @@ stops the decks.
 <details>
 <summary><b>How it is built</b></summary>
 
-Python's own tkinter and Pillow, which the rig already needs, so nothing new
-to install on most systems (Debian/Ubuntu: `sudo apt install python3-tk
-python3-pil.imagetk`; MSYS2: `pacman -S mingw-w64-x86_64-tk`; on macOS
-Homebrew's `python-tk`). The face is drawn once per window size with
-anti-aliasing and every lamp is a small pre-drawn image, so a lamp or the jog
-costs almost nothing per frame and the time goes to the screen. pygame or
-PySide6 would add a dependency for no gain: Tk puts an 800 x 480 frame on
-screen in about 3.5 ms, so the limit is how fast the frames arrive, not the
-toolkit. The app talks to the deck three ways:
+Pillow draws the face and pygame-ce (SDL) puts it on screen; both are in
+`requirements.txt`, which `./setup.sh` installs into `.venv/`. The window is
+laid out in points and drawn in the display's own pixels, so on a Retina Mac
+or a scaled Windows display the face is drawn at 2x (or whatever the
+display's density is) rather than stretched. The face is drawn once per
+window size with anti-aliasing and every lamp is a small pre-drawn image, so
+a lamp or the jog costs almost nothing per frame and the time goes to the
+screen: about 4 ms for an 800 x 480 frame at 2x on an Apple-silicon Mac, with
+the window shown at the display's refresh rate (120 Hz there). The app talks
+to the deck three ways:
 
 - **the screen** comes from a frame file the display board writes whenever
   its picture changes (`CDJ_GUI_FRAME_FILE`, checked up to 120 times a
-  second), so every frame the firmware draws is shown. On a 16-thread Windows
-  desktop the app keeps up with **about 110 frames a second** (one deck or
-  two, measured against a 120 Hz test source); today the emulated display
-  processor itself draws about 18-20 frames a second while a track plays, so
+  second), so every frame the firmware draws is shown; today the emulated
+  display processor itself draws about 18-20 frames a second while a track
+  plays, so
   that is what you see until it draws faster. QEMU's VNC server, the portable
   alternative, stops at 33 updates a second and is kept only as the fallback
   for an older build;

@@ -21,7 +21,7 @@ START_DEFAULTS = {
     "CDJ_GROUP": "239.77.77.1:45000", "CDJ_MIDI_PYTHON": "",
     "QEMU_BUILD": "", "QEMU_EB_BUILD": "",
     # CDJ_APP=1 makes the virtual deck app the default window (--no-app
-    # overrides); CDJ_APP_PYTHON is the Python that runs it (tkinter + Pillow).
+    # overrides); CDJ_APP_PYTHON is the Python that runs it (pygame-ce + Pillow).
     "CDJ_APP": "0", "CDJ_APP_PYTHON": "",
     # CDJ_SERVICE=1 makes start.sh boot into the service manual's SERVICE MODE
     # by default (--service/--no-service overrides).

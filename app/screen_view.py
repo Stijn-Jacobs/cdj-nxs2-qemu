@@ -3,21 +3,24 @@
 
 The NXS2's 7-inch screen is a small part of a tall deck, so a face that fits
 a monitor shows it small. A ScreenSlot shows one deck's screen at any size
-(keeping its 5:3) at a place on a canvas, and it is a touch screen like the
-one on the face. The dock (DockView) holds a slot per deck in a panel drawn
-like the deck, beside the faces; a ScreenWindow holds one in a window of its
-own.
+(keeping its 5:3) at a place in a view, and it is a touch screen like the one
+on the face. The dock (DockView) holds a slot per deck in a panel drawn like
+the deck, beside the faces; a ScreenWindow holds one in a window of its own.
+
+Sizes and places are in points, as the window lays itself out; each is drawn
+at the display's pixel density (ratio pixels a point), so a docked screen at
+its own 800 x 480 points is 1600 x 960 pixels on a Retina display: every deck
+pixel exactly two by two.
 """
 
-import tkinter as tk
-
-from PIL import Image, ImageTk
+import pygame
 
 import art as ART
+import gfx
 import layout as L
 
 LCD_W, LCD_H = 800, 480
-BG = "#050505"
+BG = (5, 5, 5)
 
 
 def fit(w, h):
@@ -27,56 +30,55 @@ def fit(w, h):
 
 
 class ScreenSlot:
-    """One deck's screen as an image on a canvas, at `origin`, `size` big.
+    """One deck's screen at `origin`, `size` big (points) in a view drawn at
+    `ratio` pixels a point.
 
     It is a sink of the deck (DeckView.add_sink): the deck hands it frames at
-    its size through show()."""
+    px_size through show()."""
 
-    def __init__(self, canvas, deck, origin, size):
-        self.canvas = canvas
+    def __init__(self, deck, origin, size, ratio):
         self.deck = deck
-        self.origin = None
-        self.size = None
-        self.photo = None
-        self.last = None
-        self.item = canvas.create_image(0, 0, anchor="nw")
-        canvas.tag_bind(self.item, "<ButtonPress-1>", lambda e: self._touch(e, True))
-        canvas.tag_bind(self.item, "<B1-Motion>", lambda e: self._touch(e, True))
-        canvas.tag_bind(self.item, "<ButtonRelease-1>", lambda e: self._touch(e, False))
-        canvas.tag_bind(self.item, "<Enter>", lambda e: deck.on_hover(
-            deck, f"deck {deck.number} screen: click to touch"))
-        self.place(origin, size)
+        self.origin = self.size = self.px_size = None
+        self.ratio = ratio
+        self.surf = None
+        self.changed = False
+        self.place(origin, size, ratio)
 
-    def place(self, origin, size):
-        size = tuple(size)
+    def place(self, origin, size, ratio):
         self.origin = tuple(origin)
-        self.canvas.coords(self.item, *self.origin)
-        if size != self.size:
-            self.size = size
-            self.photo = ImageTk.PhotoImage(Image.new("RGB", size))
-            self.canvas.itemconfig(self.item, image=self.photo)
-            self.last = None
+        size = tuple(size)
+        px_size = (max(1, round(size[0] * ratio)), max(1, round(size[1] * ratio)))
+        self.size, self.ratio = size, ratio
+        if px_size != self.px_size:
+            self.px_size = px_size
+            self.surf = pygame.Surface(px_size)
+            self.surf.fill((0, 0, 0))
+            self.changed = True
             self.deck.views_changed()
 
+    @property
+    def px_origin(self):
+        return round(self.origin[0] * self.ratio), round(self.origin[1] * self.ratio)
+
     def show(self, img):
-        if img is not None and img.size == self.size:
-            self.photo.paste(img)
-            self.last = img
+        if img is not None and img.size == self.px_size:
+            self.surf = gfx.surface(img, self.surf)
+            self.changed = True
 
-    def paste_into(self, img):
-        """Draw what this slot shows onto `img` (a snapshot of its canvas)."""
-        if self.last is not None:
-            img.paste(self.last, self.origin)
+    def contains(self, pos):
+        x, y = pos[0] - self.origin[0], pos[1] - self.origin[1]
+        return 0 <= x < self.size[0] and 0 <= y < self.size[1]
 
-    def destroy(self):
-        self.canvas.delete(self.item)
-
-    def _touch(self, e, down):
-        x = (e.x - self.origin[0]) * LCD_W / self.size[0]
-        y = (e.y - self.origin[1]) * LCD_H / self.size[1]
+    def touch(self, pos, down):
+        """The mouse at pos (points in the slot's view): a touch on the screen."""
+        x = (pos[0] - self.origin[0]) * LCD_W / self.size[0]
+        y = (pos[1] - self.origin[1]) * LCD_H / self.size[1]
         if down and not (0 <= x < LCD_W and 0 <= y < LCD_H):
             return
         self.deck.screen.pointer(x, y, down)
+
+    def hover(self):
+        self.deck.on_hover(self.deck, f"deck {self.deck.number} screen: click to touch")
 
 
 class DockView:
@@ -84,13 +86,14 @@ class DockView:
     gunmetal, each screen in a gloss bezel under its deck's name. The panel is
     only as tall as its screens and sits level with the faces' tops."""
 
-    def __init__(self, master):
-        self.canvas = tk.Canvas(master, highlightthickness=0, bd=0, bg=BG)
-        self.bg_item = self.canvas.create_image(0, 0, anchor="nw")
-        self.bg_photo = None
-        self.bg_img = None
+    def __init__(self):
+        self.surf = None
+        self.bg = None
         self.drawn = None               # what the background was drawn for
         self.slots = {}                 # deck number -> ScreenSlot
+        self.size = (0, 0)              # points
+        self.full = True                # redraw the background too
+        self.grab = None
 
     @staticmethod
     def overhead():
@@ -99,9 +102,9 @@ class DockView:
         B, pad = L.DOCK_BEZEL, L.DOCK_PAD
         return 2 * (pad + B), L.DOCK_HEADER + 2 * B + 5, pad
 
-    def place(self, decks, z, s):
-        """Lay out every deck's screen at z (pixels per LCD pixel) in a panel
-        drawn at face scale s. Returns the panel's width."""
+    def place(self, decks, z, s, ratio):
+        """Lay out every deck's screen at z (points per LCD pixel) in a panel
+        drawn at face scale s. Returns the panel's width in points."""
         B, pad = L.DOCK_BEZEL, L.DOCK_PAD
         gw, gh = round(LCD_W * z), round(LCD_H * z)
         width = round(gw + 2 * (pad + B) * s)
@@ -113,66 +116,144 @@ class DockView:
             boxes.append((d, (x0, y, x0 + gw / s, y + gh / s)))
             y += gh / s + B + 5
         height = round((y + pad) * s)
-        key = (width, height, round(s, 4), gw, tuple(d.number for d in decks))
+        self.size = (width, height)
+        key = (width, height, round(s, 4), gw, ratio, tuple(d.number for d in decks))
         if key != self.drawn:
             self.drawn = key
-            self.canvas.config(width=width, height=height)
-            self.bg_img = ART.dock((width / s, height / s), s,
-                                   [(f"DECK {d.number}", box) for d, box in boxes])
-            self.bg_photo = ImageTk.PhotoImage(self.bg_img)
-            self.canvas.itemconfig(self.bg_item, image=self.bg_photo)
+            img = ART.dock((width / s, height / s), s * ratio,
+                           [(f"DECK {d.number}", box) for d, box in boxes])
+            self.surf = pygame.Surface((round(width * ratio), round(height * ratio)))
+            self.bg = gfx.surface(img, self.surf)
+            self.full = True
         for d, (x0, y0, _, _) in boxes:
             origin = (round(x0 * s), round(y0 * s))
             slot = self.slots.get(d.number)
             if slot is None:
-                slot = self.slots[d.number] = ScreenSlot(self.canvas, d, origin, (gw, gh))
+                slot = self.slots[d.number] = ScreenSlot(d, origin, (gw, gh), ratio)
                 d.add_sink("dock", slot)
             else:
-                slot.place(origin, (gw, gh))
+                slot.place(origin, (gw, gh), ratio)
         return width
 
     def clear(self, decks):
         for d in decks:
-            slot = self.slots.pop(d.number, None)
-            if slot:
+            if self.slots.pop(d.number, None):
                 d.drop_sink("dock")
-                slot.destroy()
+        self.grab = None
+
+    def compose(self):
+        """Bring the surface up to date; the pixel rects that changed."""
+        rects = []
+        if self.full:
+            self.full = False
+            self.surf.blit(self.bg, (0, 0))
+            for slot in self.slots.values():
+                slot.changed = True
+            rects.append(self.surf.get_rect())
+        for slot in self.slots.values():
+            if slot.changed:
+                slot.changed = False
+                self.surf.blit(slot.surf, slot.px_origin)
+                rects.append(pygame.Rect(slot.px_origin, slot.px_size))
+        return rects
 
     def snapshot(self):
-        img = self.bg_img.copy() if self.bg_img else Image.new("RGB", (1, 1))
-        for slot in self.slots.values():
-            slot.paste_into(img)
-        return img
+        self.compose()
+        return gfx.image(self.surf)
+
+    # -- the mouse, in points from the panel's top left --------------------------
+
+    def _slot_at(self, pos):
+        return next((s for s in self.slots.values() if s.contains(pos)), None)
+
+    def down(self, pos):
+        self.grab = self._slot_at(pos)
+        if self.grab:
+            self.grab.touch(pos, True)
+
+    def drag(self, pos):
+        if self.grab:
+            self.grab.touch(pos, True)
+
+    def up(self, pos):
+        grab, self.grab = self.grab, None
+        if grab:
+            grab.touch(pos, False)
+
+    def hover(self, pos):
+        slot = self._slot_at(pos)
+        if slot:
+            slot.hover()
+
+    def wheel(self, pos, sign):
+        pass
+
+    def popup(self, pos):
+        pass
 
 
 class ScreenWindow:
-    """A deck's screen in a window of its own, resizable, touchable."""
+    """A deck's screen in a window of its own, resizable, touchable; F11 there
+    for full screen."""
 
-    def __init__(self, master, deck, on_close):
+    def __init__(self, deck, on_close):
         self.deck = deck
         self.on_close = on_close
-        self.win = tk.Toplevel(master)
-        self.win.title(f"Deck {deck.number} screen")
-        self.win.configure(bg=BG)
-        self.win.minsize(200, 120)
-        self.canvas = tk.Canvas(self.win, highlightthickness=0, bd=0, bg=BG,
-                                width=LCD_W, height=LCD_H)
-        self.canvas.pack(expand=True)
-        self.view = ScreenSlot(self.canvas, deck, (0, 0), (LCD_W, LCD_H))
-        self.win.protocol("WM_DELETE_WINDOW", self.close)
-        self.win.bind("<Configure>", self._resized)
-        self.win.bind("<F11>", self._fullscreen)
+        self.win = pygame.Window(f"Deck {deck.number} screen", (LCD_W, LCD_H),
+                                 allow_high_dpi=True, resizable=True)
+        self.win.minimum_size = (200, 120)
+        self.view = ScreenSlot(deck, (0, 0), (LCD_W, LCD_H), self._ratio())
         self.full = False
+        self.redraw = True
+        self.grab = False
 
-    def _resized(self, e):
-        if e.widget is self.win:
-            size = fit(e.width, e.height)
-            self.canvas.config(width=size[0], height=size[1])
-            self.view.place((0, 0), size)
+    @property
+    def id(self):
+        return self.win.id
 
-    def _fullscreen(self, e=None):
+    def _ratio(self):
+        return self.win.get_surface().get_width() / max(1, self.win.size[0])
+
+    def resized(self):
+        w, h = self.win.size
+        size = fit(w, h)
+        self.view.place(((w - size[0]) // 2, (h - size[1]) // 2), size, self._ratio())
+        self.redraw = True
+
+    def fullscreen(self):
         self.full = not self.full
-        self.win.attributes("-fullscreen", self.full)
+        if self.full:
+            self.win.set_fullscreen(desktop=True)
+        else:
+            self.win.set_windowed()
+
+    def present(self):
+        if not (self.redraw or self.view.changed):
+            return
+        surf = self.win.get_surface()
+        if self.redraw:
+            surf.fill(BG)
+            self.redraw = False
+        self.view.changed = False
+        surf.blit(self.view.surf, self.view.px_origin)
+        self.win.flip()
+
+    def down(self, pos):
+        self.grab = self.view.contains(pos)
+        if self.grab:
+            self.view.touch(pos, True)
+
+    def drag(self, pos):
+        if self.grab:
+            self.view.touch(pos, True)
+
+    def up(self, pos):
+        if self.grab:
+            self.grab = False
+            self.view.touch(pos, False)
+
+    def hover(self, pos):
+        self.view.hover()
 
     def close(self):
         self.win.destroy()

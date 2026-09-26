@@ -94,6 +94,12 @@ class FrameSource:
             return self.frame.copy()
         if size[0] % w == 0 and size[1] % h == 0:
             return self.frame.resize(size, Image.NEAREST)   # whole pixels stay sharp
+        if size[0] > w and size[1] > h:
+            # Enlarging by a fraction: whole pixels up to the next whole multiple,
+            # then down to size, so edges blur by at most a pixel instead of
+            # smearing across two.
+            k = max(-(-size[0] // w), -(-size[1] // h))
+            return self.frame.resize((w * k, h * k), Image.NEAREST).resize(size, Image.BILINEAR)
         return self.frame.resize(size, Image.BILINEAR)
 
     def _publish(self):

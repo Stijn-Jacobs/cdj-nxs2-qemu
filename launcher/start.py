@@ -186,17 +186,15 @@ def main(argv):
     # frame file, and the app draws the player around it.
     app_cmd = []
     if app:
-        # setup installs Pillow into .venv/, so the app runs there when it
-        # exists; this interpreter is for setups without one (MSYS2's Pillow).
+        # setup installs Pillow and pygame into .venv/, so the app runs there
+        # when it exists; this interpreter is for setups without one.
         venv = os.path.join(lay.emu, ".venv", "bin", "python")
         app_py = _python_cmd(c["CDJ_APP_PYTHON"],
                              [venv] if os.access(venv, os.X_OK) else host.python_argv())
-        if not lay.packaged and subprocess.run(app_py + ["-c", "import tkinter, PIL.ImageTk"],
+        if not lay.packaged and subprocess.run(app_py + ["-c", "import pygame, PIL"],
                                                capture_output=True).returncode:
-            chain.err("the virtual deck app needs tkinter and Pillow's ImageTk in %s:" % " ".join(app_py))
-            chain.err("  MSYS2:  pacman -S --needed mingw-w64-x86_64-tk mingw-w64-x86_64-python-pillow")
-            chain.err("  Debian/Ubuntu:  sudo apt install python3-tk python3-pil.imagetk")
-            chain.err("  macOS (Homebrew):  brew install python-tk   (Pillow in .venv/)")
+            chain.err("the virtual deck app needs pygame-ce and Pillow in %s:" % " ".join(app_py))
+            chain.err("  %s -m pip install -r requirements.txt   (or: pygame-ce Pillow)" % " ".join(app_py))
             chain.err("or run without --app (the plain deck windows).")
             return 1
         env["GUI_DISPLAY"] = "vnc"

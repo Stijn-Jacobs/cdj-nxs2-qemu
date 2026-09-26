@@ -12,17 +12,29 @@ up yet: the window shows them as they arrive.
 Keys typed into the window go to the deck under the mouse (the last one it
 was over), through the same key map as the QEMU window: Space play/pause,
 arrows browse, Enter load, - = nudge ... (emulator/README.md, "Keyboard").
+
+The window is pygame's (SDL's). It is laid out in points, as the desktop
+measures windows, and drawn in the display's own pixels -- two a point on a
+Retina screen -- so the face is as sharp as the display.
 """
 
 import argparse
 import os
 import sys
 import time
-import tkinter as tk
+
+# Before pygame loads SDL: Windows then reports sizes in points too, and
+# gives the window the display's real pixels instead of stretching it.
+os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
+os.environ.setdefault("SDL_WINDOWS_DPI_AWARENESS", "permonitorv2")
+os.environ.setdefault("SDL_WINDOWS_DPI_SCALING", "1")
+
+import pygame  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
+import gfx  # noqa: E402
 import layout as L  # noqa: E402
 from deck_view import DeckView  # noqa: E402
 from frames import FrameFile, Screen  # noqa: E402
@@ -31,36 +43,37 @@ from relay_link import RelayLink  # noqa: E402
 from rfb import RfbClient  # noqa: E402
 from status_bar import StatusBar  # noqa: E402
 
-# A new frame is on screen within one tick. On Windows Tk's timer runs at the
+# A new frame is on screen within one tick. On Windows the sleep runs at the
 # system tick (15.6 ms) unless the process asks for 1 ms (fine_timer below).
 TICK_MS = 4
-BG = "#050505"
-BG_RGB = (5, 5, 5)
-STATUS_MS = 500
+BG = (5, 5, 5)
+STATUS_S = 0.5
 # A resize redraws once the window has held still this long. Redrawing is a
 # downscale of cached images (art.py, ~50 ms), so this can be short.
-RESCALE_MS = 60
+RESCALE_S = 0.06
 # What the window's frame takes, for the first layout.
 TITLE_BAR = 32
-# The key release Tk reports for host auto-repeat comes a moment before the
-# next press; a release only goes out if no press follows within this.
-RELEASE_GRACE_MS = 40
+TITLE = "NXS2 Virtual Deck"
 
 
-def work_area(root):
-    """(x, y, w, h): the part of the screen a window may use, without the
-    taskbar where the system says where it is."""
+def work_area():
+    """(x, y, w, h) in points: the part of the screen a window may use,
+    without the taskbar where the system says where it is."""
     if sys.platform == "win32":
         try:
             import ctypes
             from ctypes import wintypes
             r = wintypes.RECT()
             if ctypes.windll.user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(r), 0):
-                return r.left, r.top, r.right - r.left, r.bottom - r.top
+                # In pixels; SDL's window sizes are in points (the DPI scaling hint).
+                scale = ctypes.windll.user32.GetDpiForSystem() / 96.0
+                return (round(r.left / scale), round(r.top / scale),
+                        round((r.right - r.left) / scale), round((r.bottom - r.top) / scale))
         except (OSError, AttributeError):
             pass
-    # Elsewhere Tk cannot see the menu bar or the dock; leave room for them.
-    return 0, 0, root.winfo_screenwidth(), root.winfo_screenheight() - 90
+    # Elsewhere SDL cannot see the menu bar or the dock; leave room for them.
+    w, h = pygame.display.get_desktop_sizes()[0]
+    return 0, 0, w, h - 90
 
 
 def fine_timer():
@@ -75,67 +88,65 @@ def fine_timer():
 
 
 class App:
-    GAP = 6                             # pixels between faces and screens
+    GAP = 6                             # points between faces and screens
 
     def __init__(self, args):
         fine_timer()
+        pygame.display.init()
         self.args = args
-        self.root = tk.Tk()
-        self.root.title("NXS2 Virtual Deck")
-        self.root.configure(bg=BG)
+        self.window = pygame.Window(TITLE, (640, 480), allow_high_dpi=True,
+                                    resizable=True, hidden=True)
         host, _, port = args.relay.partition(":")
         self.relay = RelayLink(host, int(port))
         self.decks = []
         self.focus = None
         self.hover_text = ""
-        self.pending_release = {}
         self.windows = {}               # deck number -> ScreenWindow
         self.stats_next = time.monotonic() + args.stats if args.stats else None
+        self.running = True
+        self.grab = None                # the view holding the mouse button
+        self.mouse = (0, 0)             # the last mouse position, points
+        self.wheel_acc = 0.0
+        self.rescale_at = None
+        self.set_size = None            # the size this code last gave the window
+        self.redraw = True
 
-        self.row = tk.Frame(self.root, bg=BG)
-        self.row.pack(side="top")
-        self.dock = DockView(self.row)
+        self.dock = DockView()
         for n in range(1, args.decks + 1):
             tag = f"{args.prefix}{n}"
             frames = (FrameFile(os.path.join(args.frame_dir, f"cdj-lcd-{tag}.bin"))
                       if args.frame_dir else None)
             screen = Screen(RfbClient(args.vnc_host, args.vnc_base + n, f"deck{n}"),
                             frames)
-            deck = DeckView(self.row, n, tag, self.relay, screen, 0.5, self._hover,
-                            self.toggle_window)
-            deck.canvas.bind("<Enter>", lambda e, d=deck: self._set_focus(d), add="+")
-            self.decks.append(deck)
+            self.decks.append(DeckView(n, tag, self.relay, screen, self._hover,
+                                       self.toggle_window))
         self.focus = self.decks[0]
-        self.status = StatusBar(self.root)
-        self.status.canvas.pack(side="bottom", fill="x")
+        self.status = StatusBar()
+        self.views = []                 # (view, origin in points), left to right
 
         # The first size: most of the work area, the frame and status included.
-        wx, wy, ww, wh = work_area(self.root)
+        wx, wy, ww, wh = work_area()
         self.room = (int(ww * 0.94), int(wh * 0.94) - TITLE_BAR - StatusBar.H)
         self.mode = args.screen
         if self.mode == "auto":
             self.mode = "dock" if self._dock_fits(*self.room) else "face"
+        self.ratio = self._ratio()
         self.arrange()
-        self.root.update_idletasks()
-        self.root.geometry(f"+{wx + max(0, (ww - self.root.winfo_reqwidth()) // 2)}"
-                           f"+{wy + max(0, (wh - TITLE_BAR - self.root.winfo_reqheight()) // 2)}")
+        w, h = self.content_size
+        self._resize_window((w, h + StatusBar.H))
+        self.window.position = (wx + max(0, (ww - w) // 2),
+                                wy + max(0, (wh - TITLE_BAR - h - StatusBar.H) // 2))
+        if not args.hidden:
+            self.window.show()
+        # Keys are keys here, not text: no input method, no accent pop-up.
+        pygame.key.stop_text_input()
         if args.screen == "window":
             for d in self.decks:
                 self.toggle_window(d)
 
-        # bind_all: a screen's own window types into its deck too.
-        self.root.bind_all("<KeyPress>", self._key_down)
-        self.root.bind_all("<KeyRelease>", self._key_up)
-        self.root.bind("<Configure>", self._resized)
-        self.root.protocol("WM_DELETE_WINDOW", self.close)
-        self.size = None
-        self.rescale_job = None
-
         self.relay.start()
         for d in self.decks:
             d.screen.start()
-        self.root.after(TICK_MS, self._tick)
-        self.root.after(STATUS_MS, self._status)
 
     # -- layout ---------------------------------------------------------------
     #
@@ -144,8 +155,8 @@ class App:
     # the faces as well, as large as the height allows; "face" is the faces
     # alone; either way a screen can also have a window of its own (F3).
 
-    # The docked screen at its own 800 x 480 at most: a pixel for a pixel is
-    # both the sharpest and the cheapest (no scaling per frame).
+    # The docked screen at its own 800 x 480 points at most: sharp (each deck
+    # pixel is whole display pixels) and no larger than the deck means it.
     SCREEN_MAX = 1.0
     FACE_MIN = 0.42                     # below this the face's print is unreadable
 
@@ -178,29 +189,44 @@ class App:
         self.mode = mode
         return z >= 0.8 and s >= self.FACE_MIN
 
+    def _ratio(self):
+        """Display pixels a point: 2 on a Retina screen, 1 on most others."""
+        return self.window.get_surface().get_width() / max(1, self.window.size[0])
+
     def arrange(self, room=None):
-        """Lay the faces (and the dock) out to fill `room` (w, h)."""
+        """Lay the faces (and the dock) out to fill `room` (w, h points)."""
         w, h = room or self.room
         s, z = self._scales(w, h)
-        for widget in self.row.winfo_children():
-            widget.pack_forget()
-        faces = [d.canvas for d in self.decks]
+        for d in self.decks:
+            if d.surf is None or abs(d.scale - s) > 0.005 or d.ratio != self.ratio:
+                d.rescale(s, self.ratio)
         if self.mode == "dock":
-            self.dock.place(self.decks, z, s)
+            self.dock.place(self.decks, z, s, self.ratio)
             # One deck: face | screen. Two: face | screens | face.
-            order = [faces[0], self.dock.canvas] + faces[1:]
+            order = [self.decks[0], self.dock] + self.decks[1:]
         else:
             self.dock.clear(self.decks)
-            order = faces
-        for i, widget in enumerate(order):
-            widget.pack(side="left", anchor="n", padx=(0 if i == 0 else self.GAP, 0))
-        for d in self.decks:
-            if abs(d.scale - s) > 0.005:
-                d.rescale(s)
+            order = self.decks
+        self.views, x = [], 0
+        for i, view in enumerate(order):
+            if i:
+                x += self.GAP
+            self.views.append((view, (x, 0)))
+            x += view.size[0]
+        self.content_size = (x, max(v.size[1] for v, _ in self.views))
+        self.redraw = True
+
+    def _resize_window(self, size):
+        self.set_size = tuple(size)
+        self.window.size = size
 
     def toggle_mode(self):
+        """Dock or undock the screens, the window growing or shrinking to the
+        new layout: laid out for the room the first window had."""
         self.mode = "face" if self.mode == "dock" else "dock"
-        self.arrange(self._content())
+        self.arrange(self.room)
+        w, h = self.content_size
+        self._resize_window((w, h + StatusBar.H))
 
     def toggle_window(self, deck):
         """Open this deck's screen in a window of its own, or close it."""
@@ -208,7 +234,7 @@ class App:
         if win:
             win.close()
             return
-        win = ScreenWindow(self.root, deck, self._window_closed)
+        win = ScreenWindow(deck, self._window_closed)
         self.windows[deck.number] = win
         deck.add_sink("window", win.view)
 
@@ -217,105 +243,228 @@ class App:
         win.deck.drop_sink("window")
 
     def _content(self):
-        return (self.root.winfo_width(),
-                self.root.winfo_height() - self.status.canvas.winfo_height())
+        w, h = self.window.size
+        return w, h - StatusBar.H
 
-    def _resized(self, e):
-        if e.widget is not self.root:
-            return
-        size = (e.width, e.height)
-        if self.size is None:
-            self.size = size
-            return
-        if size == self.size:
-            return
-        self.size = size
-        if self.rescale_job:
-            self.root.after_cancel(self.rescale_job)
-        self.rescale_job = self.root.after(RESCALE_MS, self._rescale)
+    def _left(self):
+        """Where the row of views starts: centred in the window."""
+        return max(0, (self.window.size[0] - self.content_size[0]) // 2)
 
-    def _rescale(self):
-        self.rescale_job = None
-        self.arrange(self._content())
+    # -- drawing ------------------------------------------------------------------
+
+    def _present(self, status_due=False):
+        """Put what changed on screen: the views' changed parts, and the status
+        strip when it is due (every STATUS_S) and says something new."""
+        surf = self.window.get_surface()
+        r = self.ratio
+        left = self._left()
+        full, self.redraw = self.redraw, False
+        flip = full
+        if full:
+            surf.fill(BG)
+        for view, (x, y) in self.views:
+            ox, oy = round((left + x) * r), round(y * r)
+            rects = view.compose()
+            if full:
+                surf.blit(view.surf, (ox, oy))
+            for rect in [] if full else rects:
+                surf.blit(view.surf, rect.move(ox, oy), area=rect)
+                flip = True
+        if status_due or full:
+            w, h = self.window.size
+            new = self.status.show(w, r, [d.health() for d in self.decks], self.hover_text)
+            if (new or full) and self.status.surf is not None:
+                surf.blit(self.status.surf, (0, round((h - StatusBar.H) * r)))
+                flip = True
+        if flip:
+            self.window.flip()
 
     # -- the loop ---------------------------------------------------------------
 
-    def _tick(self):
-        now = time.monotonic()
-        for d in self.decks:
-            d.tick(now)
-        if self.stats_next and now >= self.stats_next:
-            self.stats_next = now + self.args.stats
-            print(" | ".join(d.status() for d in self.decks), flush=True)
-        self.root.after(TICK_MS, self._tick)
+    def run(self):
+        status_next = 0.0
+        while self.running:
+            for e in pygame.event.get():
+                self._event(e)
+            if not self.running:
+                break
+            now = time.monotonic()
+            if self.rescale_at and now >= self.rescale_at:
+                self.rescale_at = None
+                self.arrange(self._content())
+            ratio = self._ratio()
+            if ratio != self.ratio:     # moved to a display of another density
+                self.ratio = ratio
+                self.arrange(self._content())
+            for d in self.decks:
+                d.tick(now)
+            if self.stats_next and now >= self.stats_next:
+                self.stats_next = now + self.args.stats
+                print(" | ".join(d.status() for d in self.decks), flush=True)
+            status_due = now >= status_next
+            if status_due:
+                status_next = now + STATUS_S
+            self._present(status_due)
+            for win in list(self.windows.values()):
+                win.present()
+            pygame.time.wait(TICK_MS)
+        self.close()
 
-    def _status(self):
-        self.status.show([d.health() for d in self.decks], self.hover_text)
-        self.root.after(STATUS_MS, self._status)
+    # -- events -------------------------------------------------------------------
+
+    def _screen_window(self, e):
+        wid = getattr(getattr(e, "window", None), "id", None)
+        return next((w for w in self.windows.values() if w.id == wid), None)
+
+    def _is_main(self, e):
+        win = getattr(e, "window", None)
+        return win is None or win.id == self.window.id
+
+    def _view_at(self, pos):
+        """(view, pos relative to it) under pos (window points), or (None, None)."""
+        left = self._left()
+        for view, (x, y) in self.views:
+            vx, vy = pos[0] - left - x, pos[1] - y
+            if 0 <= vx < view.size[0] and 0 <= vy < view.size[1]:
+                return view, (vx, vy)
+        return None, None
+
+    def _local(self, view, pos):
+        left = self._left()
+        for v, (x, y) in self.views:
+            if v is view:
+                return pos[0] - left - x, pos[1] - y
+        return pos
+
+    def _event(self, e):
+        t = e.type
+        if t == pygame.QUIT:
+            self.running = False
+        elif t == pygame.WINDOWCLOSE:
+            win = self._screen_window(e)
+            if win:
+                win.close()
+            elif self._is_main(e):
+                self.running = False
+        elif t in (pygame.WINDOWSIZECHANGED, pygame.WINDOWRESIZED):
+            win = self._screen_window(e)
+            if win:
+                win.resized()
+            elif self._is_main(e):
+                self.redraw = True
+                if tuple(self.window.size) != self.set_size:
+                    self.set_size = None
+                    self.rescale_at = time.monotonic() + RESCALE_S
+        elif t in (pygame.WINDOWEXPOSED, pygame.WINDOWDISPLAYCHANGED):
+            win = self._screen_window(e)
+            if win:
+                win.resized()
+            else:
+                self.redraw = True
+        elif t in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP, pygame.MOUSEMOTION):
+            self._mouse(e)
+        elif t == pygame.MOUSEWHEEL:
+            self._wheel(e)
+        elif t in (pygame.KEYDOWN, pygame.KEYUP):
+            self._key(e, t == pygame.KEYDOWN)
+
+    def _mouse(self, e):
+        win = self._screen_window(e)
+        if win:
+            self.focus = win.deck
+            if e.type == pygame.MOUSEBUTTONDOWN and e.button == 1:
+                win.down(e.pos)
+            elif e.type == pygame.MOUSEBUTTONUP and e.button == 1:
+                win.up(e.pos)
+            elif e.type == pygame.MOUSEMOTION:
+                if e.buttons[0]:
+                    win.drag(e.pos)
+                else:
+                    win.hover(e.pos)
+            return
+        if not self._is_main(e):
+            return
+        self.mouse = e.pos
+        if e.type == pygame.MOUSEBUTTONDOWN:
+            view, pos = self._view_at(e.pos)
+            if view is None:
+                return
+            if e.button == 1:
+                self.grab = view
+                view.down(pos)
+            elif e.button in (2, 3):
+                view.popup(pos)
+        elif e.type == pygame.MOUSEBUTTONUP:
+            if e.button == 1 and self.grab:
+                grab, self.grab = self.grab, None
+                grab.up(self._local(grab, e.pos))
+        elif self.grab:
+            self.grab.drag(self._local(self.grab, e.pos))
+        else:
+            view, pos = self._view_at(e.pos)
+            if view is not None:
+                view.hover(pos)
+            elif self.hover_text:
+                self.hover_text = ""
+
+    def _wheel(self, e):
+        # A mouse wheel gives whole notches; a trackpad gives fractions of one,
+        # which add up to a notch as they come.
+        self.wheel_acc += getattr(e, "precise_y", e.y) or e.y
+        steps = int(self.wheel_acc)
+        if not steps:
+            return
+        self.wheel_acc -= steps
+        if getattr(e, "flipped", False):
+            steps = -steps
+        view, pos = self._view_at(self.mouse)
+        if view is None:
+            return
+        sign = 1 if steps > 0 else -1
+        for _ in range(abs(steps)):
+            view.wheel(pos, sign)
 
     def _hover(self, deck, text):
-        self._set_focus(deck)
-        self.hover_text = text
-
-    def _set_focus(self, deck):
         self.focus = deck
+        self.hover_text = text
 
     # -- the keyboard, over VNC to the focused deck ------------------------------
 
     # The app's own keys; everything else goes to the deck.
-    APP_KEYS = {"F2": "toggle_mode", "F3": "window_for_focus"}
+    APP_KEYS = {pygame.K_F2: "toggle_mode", pygame.K_F3: "window_for_focus"}
 
     def window_for_focus(self):
         self.toggle_window(self.focus)
 
-    def _key_down(self, e):
-        if e.keysym in self.APP_KEYS:
-            getattr(self, self.APP_KEYS[e.keysym])()
+    def _key(self, e, down):
+        win = self._screen_window(e)
+        if win and e.key == pygame.K_F11:
+            if down:
+                win.fullscreen()
             return
-        job = self.pending_release.pop(e.keysym_num, None)
-        if job:
-            self.root.after_cancel(job)
-            return                      # auto-repeat: the key never went up
-        self.focus.screen.key(e.keysym_num, True)
-
-    def _key_up(self, e):
-        if e.keysym in self.APP_KEYS:
+        if e.key in self.APP_KEYS:
+            if down:
+                getattr(self, self.APP_KEYS[e.key])()
             return
-        deck, sym = self.focus, e.keysym_num
-
-        def send():
-            self.pending_release.pop(sym, None)
-            deck.screen.key(sym, False)
-        self.pending_release[sym] = self.root.after(RELEASE_GRACE_MS, send)
+        sym = gfx.keysym(e.key)
+        if sym is not None:
+            self.focus.screen.key(sym, down)
 
     def snapshot(self):
-        """The window's faces (and docked screens) side by side, composed from
-        their layers rather than grabbed off the desktop."""
-        from PIL import Image
-        parts = []
-        for widget in self.row.pack_slaves():
-            deck = next((d for d in self.decks if d.canvas is widget), None)
-            if deck:
-                parts.append(deck.snapshot())
-            elif widget is self.dock.canvas:
-                parts.append(self.dock.snapshot())
-        w = sum(p.width for p in parts) + self.GAP * (len(parts) - 1)
-        out = Image.new("RGB", (w, max(p.height for p in parts)), BG_RGB)
-        x = 0
-        for p in parts:
-            out.paste(p, (x, 0))
-            x += p.width + self.GAP
-        return out
+        """The window as it is drawn, faces, docked screens and status strip,
+        at the display's pixels."""
+        self.redraw = True
+        self._present()
+        return gfx.image(self.window.get_surface())
 
     def close(self):
         for d in self.decks:
             d.jog.stop()
             d.screen.close()
         self.relay.close()
-        self.root.destroy()
-
-    def run(self):
-        self.root.mainloop()
+        for win in list(self.windows.values()):
+            win.close()
+        pygame.quit()
 
 
 def parse_args(argv=None):
@@ -345,9 +494,12 @@ def parse_args(argv=None):
                          "dock when the monitor has room (env CDJ_APP_SCREEN; F2 "
                          "and F3 switch while running)")
     ap.add_argument("--scale", type=float, default=0,
-                    help="face scale, 1.0 = 972 x 1252 px a deck (default: fit)")
+                    help="face scale in points a face unit, 1.0 = 972 x 1252 points "
+                         "a deck (default: fit)")
     ap.add_argument("--stats", type=float, default=0, metavar="S",
                     help="print each deck's frame rate every S seconds")
+    # Draw without showing the window: tests render it and read snapshot().
+    ap.add_argument("--hidden", action="store_true", help=argparse.SUPPRESS)
     return ap.parse_args(argv)
 
 

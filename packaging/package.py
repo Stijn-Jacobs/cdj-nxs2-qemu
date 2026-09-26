@@ -54,7 +54,7 @@ PBS_TAG, PYTHON_VERSION = "20260924", "3.12.14"
 PBS_URL = "https://github.com/astral-sh/python-build-standalone/releases/download/%s/%s"
 ZIG_VERSION = "0.16.0"
 ZIG_INDEX = "https://ziglang.org/download/index.json"
-PY_PACKAGES = ["Pillow", "pyfatfs", "setuptools<81", "mido", "python-rtmidi"]
+PY_PACKAGES = ["Pillow", "pyfatfs", "setuptools<81", "mido", "python-rtmidi", "pygame-ce"]
 # The parts of emulator/ the program runs. hw/cdj/c6x contributes only the
 # code generator and the headers generated modules include. models/ is the
 # firmware profiles firmware.py reads by name.

@@ -3,7 +3,7 @@
 
 Nothing is loaded from disk except a system font. Shapes are drawn with
 Pillow at SS times the target size and scaled down, which gives the curves
-their anti-aliasing (Tk's own canvas draws aliased circles). The materials
+their anti-aliasing. The materials
 follow the NXS2: a gloss-black display panel, matte gunmetal side columns,
 brushed dark metal around the jog, chrome search keys, translucent orange
 loop keys, keys outlined by their LED, and a jog with a dimpled rubber rim
@@ -12,7 +12,7 @@ between two chrome rings.
 The face is a static body plus small sprites for whatever changes: a key's
 lit and pressed looks, the jog at a few rotation phases, the jog's centre
 display, the rotary selector and the tempo slider's cap. The view
-(deck_view.py) stacks them on a Tk canvas and swaps a sprite only when its
+(deck_view.py) stacks them on the face and redraws a sprite only when its
 state changes.
 """
 
