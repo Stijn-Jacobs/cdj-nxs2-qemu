@@ -250,20 +250,22 @@ to a track, `Enter` to load, `Space` to play.
 
 ## 🎛️ The virtual deck app
 
-<img src="docs/img/app-deck.gif" alt="The virtual deck app playing a track: the colour waveform scrolling, the time counting down, PLAY lit" width="500">
+<img src="docs/img/app-deck.png" alt="The virtual deck app: a drawn NXS2-style player, a track loaded and playing, PLAY and CUE lit, a loop active" width="480">
 
-```sh
-./start.sh --app          # or CDJ_APP=1 in cdj.conf; --no-app for the plain window
-```
+<img src="docs/img/app-screen.gif" alt="The deck's screen close up: the colour waveform scrolling and the time counting down while the track plays" width="480">
 
 A full player drawn around the emulated screen instead of a bare window:
 source and browse keys, the rotary selector, hot cue pads, the loop section,
 CUE and PLAY, a jog with its centre display, the tempo fader. Everything on
 it is drawn by the app itself; no photo, logo or artwork of the real unit is
-used. With two decks (`CDJ_DECKS=2`) both stand side by side in one window,
-find each other over the emulated Pro DJ Link, and MASTER and SYNC light up
-between them, same as the real players. Closing the window, or Ctrl-C, stops
-the decks.
+used.
+
+```sh
+./start.sh --app          # or CDJ_APP=1 in cdj.conf; --no-app for the plain window
+```
+
+<details>
+<summary><b>Mouse and keyboard</b></summary>
 
 | you do | the deck gets |
 |---|---|
@@ -277,6 +279,11 @@ the decks.
 | `F2` | the screen beside the face at full size, on/off |
 | `F3`, or right-click the screen | the screen in a window of its own (resizable, `F11` full screen) |
 
+</details>
+
+<details>
+<summary><b>Lamps</b></summary>
+
 The lamps are the deck's own: PLAY, CUE, SLIP, MASTER TEMPO and the jog ring
 light and blink from MAIN's panel-lamp frame, and the jog's centre display
 turns with the firmware's own pointer. Keys whose report bit is decoded from
@@ -285,22 +292,41 @@ keys with no known report bit (hot cues, BANK, QUANTIZE, TRACK FILTER, SHORT
 CUT, the vinyl speed knobs, the needle strip) are drawn but do nothing.
 Hovering a control says which is which in the status line.
 
-**A bigger screen.** The NXS2's 7-inch screen is a small part of a tall
-deck, so a face that fits a monitor shows it at about half size. `F3` opens
-a deck's screen in a window of its own at any size (`F11` there for full
-screen); `F2` docks it beside the face at its own 800 x 480 instead. The
-default is the decks alone (`--screen face|dock|window|auto`, or
-`CDJ_APP_SCREEN`).
+</details>
 
-**How it is built.** Python's own tkinter and Pillow, which the rig already
-needs, so nothing new to install on most systems (Debian/Ubuntu: `sudo apt
-install python3-tk python3-pil.imagetk`; MSYS2: `pacman -S
-mingw-w64-x86_64-tk`; on macOS Homebrew's `python-tk`). The face is drawn once
-per window size with anti-aliasing and every lamp is a small pre-drawn image,
-so a lamp or the jog costs almost nothing per frame and the time goes to the
-screen. pygame or PySide6 would add a dependency for no gain: Tk puts an
-800 x 480 frame on screen in about 3.5 ms, so the limit is how fast the frames
-arrive, not the toolkit. The app talks to the deck three ways:
+<details>
+<summary><b>A bigger screen</b></summary>
+
+The NXS2's 7-inch screen is a small part of a tall deck, so a face that fits
+a monitor shows it at about half size. `F3` opens a deck's screen in a
+window of its own at any size (`F11` there for full screen); `F2` docks it
+beside the face at its own 800 x 480 instead. The default is the decks
+alone (`--screen face|dock|window|auto`, or `CDJ_APP_SCREEN`).
+
+</details>
+
+<details>
+<summary><b>Two decks</b></summary>
+
+With two decks (`CDJ_DECKS=2`) both stand side by side in one window, find
+each other over the emulated Pro DJ Link, and MASTER and SYNC light up
+between them, same as the real players. Closing the window, or Ctrl-C,
+stops the decks.
+
+</details>
+
+<details>
+<summary><b>How it is built</b></summary>
+
+Python's own tkinter and Pillow, which the rig already needs, so nothing new
+to install on most systems (Debian/Ubuntu: `sudo apt install python3-tk
+python3-pil.imagetk`; MSYS2: `pacman -S mingw-w64-x86_64-tk`; on macOS
+Homebrew's `python-tk`). The face is drawn once per window size with
+anti-aliasing and every lamp is a small pre-drawn image, so a lamp or the jog
+costs almost nothing per frame and the time goes to the screen. pygame or
+PySide6 would add a dependency for no gain: Tk puts an 800 x 480 frame on
+screen in about 3.5 ms, so the limit is how fast the frames arrive, not the
+toolkit. The app talks to the deck three ways:
 
 - **the screen** comes from a frame file the display board writes whenever
   its picture changes (`CDJ_GUI_FRAME_FILE`, checked up to 120 times a
@@ -317,6 +343,8 @@ arrive, not the toolkit. The app talks to the deck three ways:
 - **the drawn controls and the lamps** go through the controller relay, the
   same path and the same key table (`midi/cdj_actions.py`) as a MIDI
   controller, which can stay connected alongside.
+
+</details>
 
 ## 🔧 Service mode
 
