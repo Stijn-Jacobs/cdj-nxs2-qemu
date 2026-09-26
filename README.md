@@ -250,9 +250,10 @@ to a track, `Enter` to load, `Space` to play.
 
 ## 🎛️ The virtual deck app
 
-<img src="docs/img/app-deck.png" alt="The virtual deck app: a drawn NXS2-style player, a track loaded and playing, PLAY and CUE lit, a loop active" width="480">
-
-<img src="docs/img/app-screen.gif" alt="The deck's screen close up: the colour waveform scrolling and the time counting down while the track plays" width="480">
+<p align="center">
+<img src="docs/img/app-deck.png" alt="The virtual deck app: a drawn NXS2-style player, a track loaded and playing, PLAY and CUE lit, a loop active" height="360">
+<img src="docs/img/app-screen.gif" alt="The deck's screen close up: the colour waveform scrolling and the time counting down while the track plays" height="360">
+</p>
 
 A full player drawn around the emulated screen instead of a bare window:
 source and browse keys, the rotary selector, hot cue pads, the loop section,
