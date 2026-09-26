@@ -29,6 +29,7 @@ cdj_model_load() {
           MODEL_GUI_SECTION MODEL_MAIN_LZSS MODEL_FW_STEPS MODEL_EXPECTED
     # A checkout with core.autocrlf can give the profile CRLF endings; a
     # value ending in a carriage return would name no machine.
+    # shellcheck source=/dev/null
     . <(tr -d '\r' < "$f")
     MODEL_ID="$id"
     local v
