@@ -19,6 +19,10 @@ player's own DSP program on an emulated DSP. Start two and they find each other
 on an emulated Pro DJ Link network, where MASTER and SYNC work between them.
 Plug in a MIDI controller and it plays them.
 
+<p align="center">
+<img src="docs/img/app-screen.gif" alt="The player's own screen, emulated: the colour waveform scrolling and the time counting down while a track plays" width="720">
+</p>
+
 ## ✨ Features
 
 | | |
@@ -251,8 +255,7 @@ to a track, `Enter` to load, `Space` to play.
 ## 🎛️ The virtual deck app
 
 <p align="center">
-<img src="docs/img/app-deck.png" alt="The virtual deck app: a drawn NXS2-style player, a track loaded and playing, PLAY and CUE lit, a loop active" height="360">
-<img src="docs/img/app-screen.gif" alt="The deck's screen close up: the colour waveform scrolling and the time counting down while the track plays" height="360">
+<img src="docs/img/app-deck.png" alt="The virtual deck app: a drawn NXS2-style player, a track loaded and playing, PLAY and CUE lit, a loop active" height="480">
 </p>
 
 A full player drawn around the emulated screen instead of a bare window:
