@@ -115,8 +115,12 @@ def main(argv):
     chain.say("--- DSP (c6x exit lines)")
     chain.bash_report("report_dsp.sh", [prefix, n], env)
     chain.say("--- minimap playhead")
+    # The scorer needs Pillow, which setup installs into .venv/, not into the
+    # python3 running this; the packaged program's own interpreter has it.
+    venv = os.path.join(lay.emu, ".venv", "bin", "python")
+    score_py = [venv] if not lay.packaged and os.access(venv, os.X_OK) else host.python_argv()
     for i in range(1, n + 1):
-        r = subprocess.run(host.python_argv() + [os.path.join(lay.run, "score_playhead.py"), "%s%d" % (prefix, i)],
+        r = subprocess.run(score_py + [os.path.join(lay.run, "score_playhead.py"), "%s%d" % (prefix, i)],
                            env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
         for line in r.stdout.splitlines()[-2:]:
             chain.say(line)
