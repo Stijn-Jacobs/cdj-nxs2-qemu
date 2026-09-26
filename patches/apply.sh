@@ -37,6 +37,13 @@ for p in "$HERE"/*.patch; do
         echo "applied  $name"
     elif git -C "$SRC" apply --check --reverse --ignore-whitespace "$p" 2>/dev/null; then
         echo "already  $name"
+    elif git -C "$SRC" apply --numstat "$p" | cut -f3 |
+             while IFS= read -r f; do git -C "$SRC" checkout -q HEAD -- "$f" || exit 1; done &&
+         git -C "$SRC" apply --check --ignore-whitespace "$p" 2>/dev/null; then
+        # An older version of this patch was applied: its files went back to
+        # QEMU's own version above, and the current one goes on top.
+        git -C "$SRC" apply --ignore-whitespace "$p"
+        echo "updated  $name"
     else
         echo "FAILED   $name -- apply by hand" >&2
     fi
