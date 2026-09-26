@@ -292,6 +292,19 @@ class Setup:
                         if self.py_tools:
                             con.good("installed")
 
+        # A Python set up before mutagen joined requirements.txt has pyfatfs, so
+        # the offer above never ran for it: make the same offer here.
+        if self.py_tools and not pythons.has(self.py_tools, "mutagen"):
+            fix = self.py.pip_fix("-r requirements.txt")
+            if fix:
+                con.warn("no mutagen in %s -- a folder-of-music USB step needs it" % host.posix(self.py_tools))
+                con.info("fix:  %s%s%s" % (con.B, fix, con.N))
+                if o.dry:
+                    con.would(fix)
+                elif con.ask_yn("run that now?", "y") and _run_fix(fix, self.lay.emu):
+                    # The fix installs into .venv, which may not be py_tools.
+                    self.py.prefer_venv()
+                    self.py_tools = self.py.first_with("pyfatfs", "mutagen") or self.py_tools
         if self.py_tools and pythons.has(self.py_tools, "mutagen"):
             con.good("mutagen, for a folder-of-music USB step (tags, and BPM tags when present)")
         else:
