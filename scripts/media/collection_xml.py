@@ -98,12 +98,35 @@ def read_tags(path):
     return tags, audio
 
 
+OCTAVE_TOLERANCE = 0.06   # how near 2x or 1/2 the estimate must sit to the tag
+
+
+def tag_octave(path, bpm, notes):
+    """The tag's BPM, doubled or halved when the audio says it is an octave
+    off. Taggers often write half time for fast tracks (103 for a 206 BPM
+    hardstyle edit), and the deck would then show and grid it at half speed.
+    The tag stays the source of the value -- it is usually exact where the
+    estimate is only good to a BPM or two -- and the estimate only picks the
+    octave. Without ffmpeg/numpy, or with no clear beat, the tag is kept."""
+    if not bpm_estimate.available():
+        return bpm
+    estimated = bpm_estimate.estimate(path)
+    if not estimated:
+        return bpm
+    for factor in (2.0, 0.5):
+        if abs(estimated[0] / (bpm * factor) - 1.0) <= OCTAVE_TOLERANCE:
+            notes.append("%s: BPM tag %g is an octave off the audio (~%.0f); using %g"
+                         % (os.path.basename(path), bpm, estimated[0], bpm * factor))
+            return bpm * factor
+    return bpm
+
+
 def track_xml(track_id, path, tags, audio, notes):
     ext = os.path.splitext(path)[1].lower()
     name = tags["title"] or os.path.splitext(os.path.basename(path))[0]
     tempo = None
     if tags["bpm"] > 0:
-        tempo = (tags["bpm"], 0.0)
+        tempo = (tag_octave(path, tags["bpm"], notes), 0.0)
     elif bpm_estimate.available():
         estimated = bpm_estimate.estimate(path)
         if estimated:
