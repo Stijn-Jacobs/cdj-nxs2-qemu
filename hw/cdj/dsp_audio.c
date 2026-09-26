@@ -45,6 +45,7 @@ static struct {
 #define CDJ_DSPAU_ASRC_MAX  2621
 
 #define CDJ_DSPAU_HIST 16384            /* power of two, > the loop length */
+#define CDJ_DSPAU_REPLAY 8820           /* the pause's first pass, see below */
 
 static struct {
     uint32_t period, run, miss, pos;
@@ -248,6 +249,10 @@ void cdj_dspau_arm(void)
  * keeps sending it, so the same buffer repeats. Decoded music never repeats bit
  * for bit across a whole buffer, so a non-silent stream that matches itself one
  * buffer back for 10 ms is muted until it stops matching.
+ * The loop does not start at once: after ~20 ms of silence the DSP first sends
+ * the buffer it played 8820 frames (200 ms) earlier, sample for sample, and
+ * that pass cannot match one buffer back. Compared at the buffer length alone,
+ * 173 ms of stale audio reached the speakers at every stop.
  * CDJ_C6X_AUDIO_LOOP=<frames> sets the buffer length (default 7644), 0 disables.
  */
 
@@ -261,6 +266,8 @@ static bool cdj_dspau_loop_frame(int16_t l, int16_t r)
         return false;
     }
     same = cdj_dspau_loop.hist[(cdj_dspau_loop.pos - p) &
+                               (CDJ_DSPAU_HIST - 1)] == f ||
+           cdj_dspau_loop.hist[(cdj_dspau_loop.pos - CDJ_DSPAU_REPLAY) &
                                (CDJ_DSPAU_HIST - 1)] == f;
     cdj_dspau_loop.hist[cdj_dspau_loop.pos++ & (CDJ_DSPAU_HIST - 1)] = f;
     /* Digital silence occurs inside the looped buffer too, so a zero frame
