@@ -122,6 +122,13 @@ run env MODULE=none AUTOJIT=0 PLAY_S="$PLAY_S" \
 if [ "$DRY" = 0 ]; then
     [ -s "$REC" ] || die "no recording at $REC (the deck log is /tmp/bridge-main-rec1.log)"
     [ -s "$PROF/profile.txt" ] || die "no profile in $PROF: the deck did not shut down cleanly"
+    # A deck whose auto-load missed sits on the browse list: the recording is
+    # then the idle DSP, and a module built from it leaves all of playback to
+    # the interpreter -- it replays EXACT and runs no faster than no module.
+    pcm="$(grep -a 'nonzero PCM words' /tmp/bridge-main-rec1.log 2>/dev/null | tail -1 |
+           sed -n 's/.*nonzero PCM words \([0-9]*\).*/\1/p')"
+    [ "${pcm:-0}" -gt 0 ] ||
+        die "the deck never played the track (no PCM in /tmp/bridge-main-rec1.log; see /tmp/run-rec1.txt); run it again"
     echo "recorded $(( $(wc -c < "$REC") >> 20 )) MB"
 fi
 

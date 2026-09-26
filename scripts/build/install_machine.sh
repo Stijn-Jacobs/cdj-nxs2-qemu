@@ -123,18 +123,36 @@ rm -f "$SH4_MESON"
 
 # --- Kconfig --------------------------------------------------------------
 # sh_serial.c is built by CONFIG_SH_SCI; there is no SH_SERIAL symbol.
-if grep -q CDJ2000NXS2 "$Q/hw/sh4/Kconfig"; then
+# The same entries as patches/hw_sh4_Kconfig.patch, for a tree the patches were
+# not applied to. A tree with the older single-board entry needs the patches.
+if grep -q '^config CDJ_COMMON' "$Q/hw/sh4/Kconfig"; then
     echo "Kconfig already patched"
+elif grep -q '^config CDJ2000NXS2' "$Q/hw/sh4/Kconfig"; then
+    echo "error: hw/sh4/Kconfig has the old single-board entry; run ./build.sh patches" >&2
+    exit 1
 else
     cat >> "$Q/hw/sh4/Kconfig" <<'EOF'
+
+# What every CDJ MAIN board shares (hw/cdj/common/).
+config CDJ_COMMON
+    bool
+    select SH_SCI
+    select SH_TIMER
+    select UNIMP
+    select PFLASH_CFI02
 
 config CDJ2000NXS2
     bool
     default y
     depends on SH4
-    select SH_SCI
-    select UNIMP
-    select PFLASH_CFI02
+    select CDJ_COMMON
+
+# The CDJ-2000 and CDJ-2000NXS (SH7763), machines cdj2000 and cdj2000nxs.
+config CDJ2000
+    bool
+    default y
+    depends on SH4
+    select CDJ_COMMON
 EOF
     echo "patched hw/sh4/Kconfig"
 fi

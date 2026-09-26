@@ -63,7 +63,7 @@ Plug in a MIDI controller and it plays them.
 **2. Clone and run setup** (the same on every system):
 
 ```sh
-git clone <this repository> cdj-nxs2
+git clone https://github.com/Stijn-Jacobs/cdj-nxs2-qemu.git cdj-nxs2
 cd cdj-nxs2
 ./setup.sh
 ```
@@ -173,7 +173,7 @@ A CDJ-2000NXS2 is three computers in one box, and all three run here:
 | chip | job in the player | here |
 |---|---|---|
 | Renesas SH7724 (SH-4A) | **MAIN**: transport, file system, rekordbox database, Pro DJ Link, the front panel | QEMU's SH-4 with a board model written for this project (`hw/cdj/`) |
-| Renesas SH7269 (SH-2A) | the **display processor**: draws the 7-inch screen from what MAIN sends it | a second, big-endian QEMU with its own board model (`hw/cdj/sh7269gui.c`) and a window on your desktop |
+| Renesas SH7269 (SH-2A) | the **display processor**: draws the 7-inch screen from what MAIN sends it | a second, big-endian QEMU with its own board model (`hw/cdj/boards/nxs2/sh7269gui.c`) and a window on your desktop |
 | TI TMS320C6655 (C66x) | the **DSP**: decodes the track, time-stretches it, produces the audio | a C66x core written for this project (`hw/cdj/c6x/`), running the program MAIN uploads to it at boot |
 
 ```mermaid
@@ -389,8 +389,13 @@ machine: the update file, and anything built from it, is Pioneer's.
 | path | what it is |
 |---|---|
 | `setup.sh`, `start.sh` | the guided setup and the everyday start |
+| `launcher/` | what `setup.sh`, `start.sh` and the scripts in `scripts/run/` do (`python -m launcher`), and what the portable program runs |
+| `packaging/` | the portable program: `package.py` builds it for this OS, `release.sh` builds everything and then packages; a GitHub release runs that for Windows, macOS and Linux |
 | `build.sh` | the build step underneath setup (`./build.sh main`, `display`, …) |
-| `hw/cdj/` | the MAIN board, one file per device, and the display board (`sh7269gui.c`); `diag/` holds the diagnostic hooks, `standin/` historical models that are off by default |
+| `hw/cdj/common/` | what every board shares: the boot (DRAM, NOR flash, image, reset vector), the SH-4 core blocks and the board descriptor (`cdj_common.h`) |
+| `hw/cdj/boards/nxs2/` | the CDJ-2000NXS2: its MAIN board, one file per device, and the display board (`sh7269gui.c`); `diag/` holds the diagnostic hooks, `standin/` historical models that are off by default |
+| `hw/cdj/boards/cdj2000/` | the CDJ-2000 and CDJ-2000NXS MAIN board (Renesas SH7763), in bring-up |
+| `models/` | one profile per player, read by the firmware and launch scripts (see `models/README.md`) |
 | `hw/cdj/c6x/` | the C66x DSP core, its SoC peripherals, the JIT generator (`tools/`) and unit tests |
 | `patches/` | the changes to QEMU 9.1.0 itself |
 | `scripts/build/` | the QEMU builds (Linux, macOS and MSYS2) and the board installer |
@@ -421,7 +426,7 @@ full text is in [`LICENSE`](LICENSE), and each file carries an
   GNU binutils and licensed **GPL-3.0-or-later**. They are compiled into the
   MAIN emulator, so a binary built from this tree is distributed under
   GPL-3.0-or-later terms.
-- `hw/cdj/standin/minimp3.h` is minimp3, released into the public domain (CC0).
+- `hw/cdj/boards/nxs2/standin/minimp3.h` is minimp3, released into the public domain (CC0).
 
 QEMU itself is GPL-2.0-or-later overall, with a few GPL-2.0-only files; if you
 distribute a binary, check how those parts combine with GPL-3.0. This note

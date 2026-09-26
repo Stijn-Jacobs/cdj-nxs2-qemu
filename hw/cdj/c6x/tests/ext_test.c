@@ -15,6 +15,7 @@ static int fails;
 #define S12U(op, dst, s2, s1) ((1u << 28) | (dst) << 23 | (s2) << 18 | (s1) << 13 | (op) << 6 | (0x8u << 2))
 #define L12U(op, dst, s2, s1) ((1u << 28) | (dst) << 23 | (s2) << 18 | (s1) << 13 | (op) << 5 | (0x6u << 2))
 #define MCRU(op, dst, s2, s1) ((1u << 28) | (dst) << 23 | (s2) << 18 | (s1) << 13 | (op) << 6 | (0xcu << 2))
+#define L1(op, dst, s2) ((dst) << 23 | (s2) << 18 | (op) << 13 | (0xd6u << 2))
 #define NOP(n) (((n) - 1u) << 13)
 #define IDLE 0x0001E000u
 
@@ -71,6 +72,34 @@ int main(void)
         run("dccmpyr1", MCRU(0x0e, 14, 0, 2), ex[i],
             (unsigned[]){ C66X_A(3), C66X_A(2), C66X_A(1), C66X_A(0) }, 4,
             (unsigned[]){ C66X_A(15), C66X_A(14) }, &ex[i][4], 2, ex[i][6]);
+    /* DINTHSP .L1 A2,A1:A0 -- SPRUGH7 4.92's two examples */
+    run("dinthsp", L1(0x12, 0, 2), (uint32_t[]){ 0x19651127 }, (unsigned[]){ C66X_A(2) }, 1,
+        (unsigned[]){ C66X_A(1), C66X_A(0) }, (uint32_t[]){ 0x45cb2800, 0x45893800 }, 2, 0);
+    run("dinthsp -", L1(0x12, 0, 2), (uint32_t[]){ 0xffffffde }, (unsigned[]){ C66X_A(2) }, 1,
+        (unsigned[]){ C66X_A(1), C66X_A(0) }, (uint32_t[]){ 0xbf800000, 0xc2080000 }, 2, 0);
+    /* DINTSP .L1 A7:A6,A17:A16, the firmware's own word (0x081ae358): its
+     * phase wrap rounds a pair with DSPINT and converts it back with this. The
+     * manual prints the section under the heading DINTHSP; read as that, A17
+     * would be the top half of A6 (-1.0) instead of A7. */
+    run("dintsp", 0x081ae358u, (uint32_t[]){ 0xfffffffd, 100000 }, (unsigned[]){ C66X_A(6), C66X_A(7) }, 2,
+        (unsigned[]){ C66X_A(17), C66X_A(16) }, (uint32_t[]){ 0x47c35000, 0xc0400000 }, 2, 0);
+    run("dintsp big", L1(0x17, 16, 6), (uint32_t[]){ 0x80000000, 0x7fffffff }, (unsigned[]){ C66X_A(6), C66X_A(7) }, 2,
+        (unsigned[]){ C66X_A(17), C66X_A(16) }, (uint32_t[]){ 0x4f000000, 0xcf000000 }, 2, 0);
+    /* DINTSPU .L1 A7:A6,A17:A16 (4.95) */
+    run("dintspu", L1(0x16, 16, 6), (uint32_t[]){ 0xffffffff, 0x80000000 }, (unsigned[]){ C66X_A(6), C66X_A(7) }, 2,
+        (unsigned[]){ C66X_A(17), C66X_A(16) }, (uint32_t[]){ 0x4f000000, 0x4f800000 }, 2, 0);
+    /* CMPEQ .L2X 0,A5:A4,B8 and CMPGT .L2X 0,A5:A4,B0, the firmware's words
+     * (0x04101a1a, 0x0010189a): a 40-bit long read over the cross path, so
+     * A5 bits 31..8 are ignored and B5:B4 (left zero) is not the operand. */
+    const unsigned A4 = C66X_A(4), A5 = C66X_A(5);
+    run("cmpeq xl 0", 0x04101a1au, (uint32_t[]){ 0xffffff00, 0 }, (unsigned[]){ A5, A4 }, 2,
+        (unsigned[]){ C66X_B(8) }, (uint32_t[]){ 1 }, 1, 0);
+    run("cmpeq xl 1", 0x04101a1au, (uint32_t[]){ 0x00000001, 0 }, (unsigned[]){ A5, A4 }, 2,
+        (unsigned[]){ C66X_B(8) }, (uint32_t[]){ 0 }, 1, 0);
+    run("cmpgt xl -", 0x0010189au, (uint32_t[]){ 0x00000080, 0 }, (unsigned[]){ A5, A4 }, 2,
+        (unsigned[]){ C66X_B(0) }, (uint32_t[]){ 1 }, 1, 0);
+    run("cmpgt xl +", 0x0010189au, (uint32_t[]){ 0xffffff7f, 1 }, (unsigned[]){ A5, A4 }, 2,
+        (unsigned[]){ C66X_B(0) }, (uint32_t[]){ 0 }, 1, 0);
     printf("%s: %d failure(s)\n", fails ? "FAIL" : "PASS", fails);
     return fails != 0;
 }

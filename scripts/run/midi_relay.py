@@ -12,7 +12,7 @@ the controller; midi/bridge.py holds the mapping. One line in, one datagram out:
 
 `tag` selects the machine: each binds its own key socket named after its tag
 (/tmp/cdj-panel-keys-show1.sock). The rest of the line is passed through to
-the panel key parser in hw/cdj/cdj_panelkeys.h. It can be driven by hand:
+the panel key parser in hw/cdj/common/cdj_panelkeys.h. It can be driven by hand:
 
     printf 'show1 0x12:16:150:or
 ' | nc 127.0.0.1 7202

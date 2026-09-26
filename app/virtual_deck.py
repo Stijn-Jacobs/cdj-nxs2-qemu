@@ -335,7 +335,7 @@ def parse_args(argv=None):
                          "(env CDJ_APP_VNC_BASE)")
     ap.add_argument("--frame-dir", default=os.environ.get("CDJ_APP_FRAME_DIR", ""),
                     help="where the display boards write cdj-lcd-<tag>.bin "
-                         "(app/gui_vnc.sh; env CDJ_APP_FRAME_DIR); without it "
+                         "(GUI_DISPLAY=vnc; env CDJ_APP_FRAME_DIR); without it "
                          "the screen comes over VNC, at up to 33 frames a second")
     ap.add_argument("--screen", default=os.environ.get("CDJ_APP_SCREEN", "face"),
                     choices=("face", "dock", "window", "auto"),

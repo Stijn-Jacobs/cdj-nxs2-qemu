@@ -48,6 +48,7 @@ MAX_KNOWN = 4          # registers with a compile-time value carried in the stat
 KNOWN_AGE = 3          # ... for this many commits after the write that made it known
 CHAIN_DEPTH = 24       # a region hands over to another root only this many cycles in
 CAP_MAX = 16           # C66X_JIT_CAP
+WIDE_MEM = False      # opt-in paired RAM accesses; preserve the default output
 
 # c->jit_exit[] slots, printed by the core
 (EXIT_STUB, EXIT_DYNPC, EXIT_UNCOMPILABLE, EXIT_QUEUE, EXIT_NODES, EXIT_BUDGET, EXIT_GEN, EXIT_IRQ,
@@ -688,7 +689,9 @@ class RegionGen:
                 push(0, WK_REG, b, wv)
                 if wb == 2:
                     body.append("ea = base;")
-            if dw:
+            if dw and WIDE_MEM:
+                body.append("jit_store64(c, ea, v, c->reg[%d]);" % s.reg_hi)
+            elif dw:
                 body.append("uint32_t hi = c->reg[%d]; jit_store(c, ea, v, 4); jit_store(c, ea + 4, hi, 4);" % s.reg_hi)
             else:
                 body.append("jit_store(c, ea, v, %d);" % n)
@@ -847,7 +850,9 @@ class RegionGen:
                     rd = {0: "(uint64_t)jit_load(c, %s, 4)", 1: "(uint64_t)(uint32_t)(int8_t)jit_load(c, %s, 1)",
                           2: "(uint64_t)jit_load(c, %s, 1)", 3: "(uint64_t)(uint32_t)(int16_t)jit_load(c, %s, 2)",
                           4: "(uint64_t)jit_load(c, %s, 2)"}[sub] % ea
-                if sub == 5:
+                if sub == 5 and WIDE_MEM:
+                    e("    " + guarded(flag, "%s = jit_load64(c, %s);" % (val, ea)))
+                elif sub == 5:
                     e("    " + guarded(flag, "{ uint32_t ea_ = %s; %s = (uint64_t)jit_load(c, ea_, 4); %s |= (uint64_t)jit_load(c, ea_ + 4, 4) << 32; }"
                                       % (ea, val, val)))
                 else:
@@ -862,7 +867,9 @@ class RegionGen:
                     "(c->reg[%d] & 0xff)" % src.reg_hi if src.size == 5 else "c->reg[%d]" % src.reg_hi, src.reg)
                       if src.kind == OPK_PAIR else "(uint64_t)c->reg[%d]" % src.reg)
                 sub = ins.sub
-                if sub == 5:
+                if sub == 5 and WIDE_MEM:
+                    body = "{ uint64_t v_ = %s; jit_store64(c, %s, (uint32_t)v_, (uint32_t)(v_ >> 32)); }" % (sv, ea)
+                elif sub == 5:
                     body = "{ uint64_t v_ = %s; uint32_t ea_ = %s; jit_store(c, ea_, (uint32_t)v_, 4); jit_store(c, ea_ + 4, (uint32_t)(v_ >> 32), 4); }" % (sv, ea)
                 else:
                     sz = 1 if sub == 1 else 2 if sub == 3 else 4
@@ -941,8 +948,10 @@ class RegionGen:
 # States are keyed the same way whichever root reaches them, so code shared by
 # many roots is compiled once. After exploration the states are cut, in the
 # order they were found, into functions of FN_NODES states (gcc's time grows
-# faster than a function's size); a jump into another function becomes a tail
-# call that hands over the target state's pending values in c->jit_xs.
+# faster than a function's size); a jump into another function hands the target
+# back to jit_run, which enters it, with the target state's pending values in
+# c->jit_xs. Calling it directly instead would look like a tail call but is not
+# compiled as one -- see jit_run for what that cost.
 
 FN_NODES = 1500
 COLD = 20000                          # profile count below which a packet's states are left to the interpreter
@@ -1107,7 +1116,8 @@ class ModuleGen(RegionGen):
                             cross[fn_of(tgt)].add(tgt)
                             saves = " ".join("c->jit_xs.%s[%d] = %s;" % ("f" if fl else "v", slot, var)
                                              for var, slot, fl in self.xs_vars(self.pos_of[tgt]))
-                            line = pre + "{ %s jit_fn%d(c, end, %d, gen); return; }" % (saves, fn_of(tgt), tgt) + post
+                            line = pre + "{ %s jit_hop_fn = %d; jit_hop_entry = %d; return; }" % (
+                                saves, fn_of(tgt), tgt) + post
                     body.append(line)
             cold = [line for l in labs for line in self.cold_of[l]]
             out.append((labs, body, cold))
@@ -1738,11 +1748,46 @@ class LoopGen(KernelGen):
         return "\n".join(decl + self.body + self.cold + ["}"]), len(self.labels)
 
 
+# One generated function per FN_NODES states, and the compiled control flow
+# crosses between them freely: the DSP's hot code is a loop whose body spans two
+# of them, so a run hops back and forth for as long as the cycle budget lasts.
+# Each jit_fn reserves kilobytes of frame for its spilled state, so letting them
+# call one another -- even in tail position, which no compiler here turns into a
+# jump at these sizes -- grows the stack by about 16 KB per hop. QEMU runs the
+# DSP on a thread of its own, and macOS gives that 512 KB: some 30 hops in, the
+# stack hits its guard page, and the fault leaves the DSP's run_lock held, which
+# takes the BQL and the whole deck down with it. c6xreplay never saw it because
+# it steps the core from main(), on an 8 MB stack.
+#
+# So a hop is not a call. The function records where to go and returns, and
+# jit_run enters the next one from the entry wrapper's frame, leaving exactly
+# one jit_fn frame on the stack however far the compiled code travels.
+HOP_RUN = r'''_Thread_local int jit_hop_fn = -1;
+_Thread_local unsigned jit_hop_entry;
+
+static void jit_run(c66x_core *c, uint64_t end, int fn, unsigned entry, uint64_t gen)
+{
+    for (;;) {
+        jit_hop_fn = -1;
+        jit_fns[fn](c, end, entry, gen);
+        if (jit_hop_fn < 0)
+            return;
+        fn = jit_hop_fn;
+        entry = jit_hop_entry;
+    }
+}'''
+
 PRELUDE = r'''/* Generated by qemu/c6x/tools/c14_jitgen.py -- do not edit. */
 #include <fenv.h>
 #include <stdlib.h>
 #include <string.h>
 #include "c66x_core_int.h"
+
+/* A jump from one generated function into another leaves the target here and
+ * returns, for jit_run to enter; jit_hop_fn is -1 when the function is done.
+ * The generated functions are far too large to call one another directly. */
+extern _Thread_local int jit_hop_fn;
+extern _Thread_local unsigned jit_hop_entry;
 
 static const int jit_fe_mode[4] = { FE_TONEAREST, FE_TOWARDZERO, FE_UPWARD, FE_DOWNWARD };
 
@@ -1821,6 +1866,57 @@ static void jit_fatal(c66x_core *c, uint32_t addr, unsigned got, unsigned want)
 '''
 
 
+WIDE_PRELUDE = r'''
+/* Both words must hit the same cached RAM region. Keep MMIO, idle tracking,
+ * deferred stores, watch callbacks and code invalidation on the word path.
+ * memcpy permits unaligned host accesses without aliasing violations. */
+static __attribute__((noinline)) uint64_t jit_load64_slow(c66x_core *c, uint32_t ea)
+{
+    uint32_t lo = jit_load(c, ea, 4);
+    uint32_t hi = jit_load(c, ea + 4, 4);
+    return ((uint64_t)hi << 32) | lo;
+}
+
+static __attribute__((noinline)) void jit_store64_slow(c66x_core *c, uint32_t ea, uint32_t lo, uint32_t hi)
+{
+    jit_store(c, ea, lo, 4);
+    jit_store(c, ea + 4, hi, 4);
+}
+
+static inline uint64_t jit_load64(c66x_core *c, uint32_t ea)
+{
+    const ramreg *rr = &c->ram[c->last_ram];
+    if ((!c->idle_armed || c->isr_depth || c->idle_fx)
+        && rr->size >= 8 && ea - rr->base <= rr->size - 8) {
+        uint64_t v;
+        memcpy(&v, rr->host + (ea - rr->base), 8);
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+        v = __builtin_bswap64(v);
+#endif
+        return v;
+    }
+    return jit_load64_slow(c, ea);
+}
+
+static inline void jit_store64(c66x_core *c, uint32_t ea, uint32_t lo, uint32_t hi)
+{
+    ramreg *rr = &c->ram[c->last_ram];
+    if (c->store_now && !c->watch_fn && (!c->idle_armed || c->idle_fx)
+        && rr->size >= 8 && ea - rr->base <= rr->size - 8
+        && !rr->codepage[(ea - rr->base) >> FP_PAGE_SHIFT]
+        && !rr->codepage[(ea + 7 - rr->base) >> FP_PAGE_SHIFT]) {
+        uint64_t v = ((uint64_t)hi << 32) | lo;
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+        v = __builtin_bswap64(v);
+#endif
+        memcpy(rr->host + (ea - rr->base), &v, 8);
+        return;
+    }
+    jit_store64_slow(c, ea, lo, hi);
+}
+'''
+
+
 REFRESH = r'''
 /* The captured instructions' decoded forms, for this core and code generation. */
 static void jit_refresh(c66x_core *c)
@@ -1853,6 +1949,7 @@ __attribute__((destructor)) static void jit_sites_dump(void)
 
 
 def main():
+    global WIDE_MEM
     ap = argparse.ArgumentParser()
     ap.add_argument("prof")
     ap.add_argument("out")
@@ -1866,6 +1963,8 @@ def main():
                     help="--only for every address in this file (one per line); a curated "
                          "module's roots plus a new workload's, without re-ranking either")
     ap.add_argument("--no-cc", action="store_true")
+    ap.add_argument("--wide-mem", action="store_true",
+                    help="combine paired RAM loads/stores (experimental; verify with an EXACT replay)")
     # 16-17 gcc at once (~0.8 GB each) beside a running deck hung the WSL VM (c16)
     ap.add_argument("--jobs", type=int, default=min(6, os.cpu_count() or 4), help="parallel gcc processes")
     ap.add_argument("--opt", default="2", help="gcc optimisation level")
@@ -1907,6 +2006,8 @@ def main():
     ap.add_argument("--idle-head", dest="idle_head", type=lambda x: int(x, 0), default=None,
                     help="the busy-wait head regions stop at (the machine's CDJ_C6X_IDLE, 0x80076F00)")
     a = ap.parse_args()
+    WIDE_MEM = a.wide_mem
+    prelude = PRELUDE + (WIDE_PRELUDE if WIDE_MEM else "")
     for path in a.only_file or []:
         a.only = (a.only or []) + [int(x, 0) for x in open(path).read().split()]
     if a.only:
@@ -2023,6 +2124,9 @@ def main():
     codes += fsrcs
     extern.append("\n".join("void jit_fn%d(c66x_core *c, uint64_t end, unsigned entry, uint64_t gen);" % f
                             for f in range(nfn)))
+    extern.append("static void (*const jit_fns[])(c66x_core *, uint64_t, unsigned, uint64_t) = { %s };"
+                  % (", ".join("jit_fn%d" % f for f in range(nfn)) or "0"))
+    extern.append(HOP_RUN)
     extern.append("\n".join("extern const uint32_t jit_da%d[]; extern const uint8_t jit_db%d[]; "
                             "extern c66x_jit_verified jit_vf%d;" % (f, f, f) for f in range(nfn)))
     extern.append("c66x_insn *jit_ins[%d];" % max(len(mg.captured), 1))
@@ -2034,7 +2138,7 @@ def main():
         lab = mg.entries[pc]
         f = lab // mg.fn_nodes
         name = "root_%08x" % pc
-        extern.append("static void %s(c66x_core *c, uint64_t end) { jit_refresh(c); jit_fn%d(c, end, %d, c->code_gen); }"
+        extern.append("static void %s(c66x_core *c, uint64_t end) { jit_refresh(c); jit_run(c, end, %d, %d, c->code_gen); }"
                       % (name, f, lab))
         table.append("    { %s, %s, %s, %d, jit_da%d, jit_db%d, &jit_vf%d }," % (
             u32(pc), u32(dec.idle_head), name, len(mg.fn_deps[f]), f, f, f))
@@ -2042,7 +2146,7 @@ def main():
     for pc, lab in sorted(mg.clean_entries.items()):
         f = lab // mg.fn_nodes
         name = "clean_%08x" % pc
-        extern.append("static void %s(c66x_core *c, uint64_t end) { jit_refresh(c); jit_fn%d(c, end, %d, c->code_gen); }"
+        extern.append("static void %s(c66x_core *c, uint64_t end) { jit_refresh(c); jit_run(c, end, %d, %d, c->code_gen); }"
                       % (name, f, lab))
         table0.append("    { %s, %s, %s, %d, jit_da%d, jit_db%d, &jit_vf%d }," % (
             u32(pc), u32(dec.idle_head), name, len(mg.fn_deps[f]), f, f, f))
@@ -2050,7 +2154,7 @@ def main():
     for pc, (lab, rem, target) in sorted(mg.qentries.items()):
         f = lab // mg.fn_nodes
         name = "qroot_%08x" % pc
-        extern.append("static void %s(c66x_core *c, uint64_t end) { jit_refresh(c); jit_fn%d(c, end, %d, c->code_gen); }"
+        extern.append("static void %s(c66x_core *c, uint64_t end) { jit_refresh(c); jit_run(c, end, %d, %d, c->code_gen); }"
                       % (name, f, lab))
         qtable.append("    { { %s, %s, %s, %d, jit_da%d, jit_db%d, &jit_vf%d }, %d, %s }," % (
             u32(pc), u32(dec.idle_head), name, len(mg.fn_deps[f]), f, f, f, rem, u32(target)))
@@ -2127,10 +2231,10 @@ def main():
     srcs = []
     for i, ch in enumerate(chunks):
         path = "%s.part%d.c" % (a.out, i)
-        open(path, "w").write(PRELUDE + "\nextern uint64_t jit_site_n[%d];\nextern c66x_insn *jit_ins[];\n" % nsites
+        open(path, "w").write(prelude + "\nextern uint64_t jit_site_n[%d];\nextern c66x_insn *jit_ins[];\n" % nsites
                               + extern[0] + "\n\n" + "\n\n".join(ch) + "\n")
         srcs.append(path)
-    main_parts = [PRELUDE, "uint64_t jit_site_n[%d];" % nsites] + extern
+    main_parts = [prelude, "uint64_t jit_site_n[%d];" % nsites] + extern
     main_parts.append("static const c66x_jit_region regions[] = {\n%s\n};" % "\n".join(table or ["    { 0 }"]))
     main_parts.append("static const c66x_jit_kernel kernels[] = {\n%s\n};" % "\n".join(ktable or ["    { 0 }"]))
     main_parts.append("static const c66x_jit_region regions0[] = {\n%s\n};" % "\n".join(table0 or ["    { 0 }"]))

@@ -21,11 +21,22 @@ cdj_build_dirs() {
     esac
 }
 
-# One cksum process over every file: a process per file takes a minute on
-# Windows. Paths are relative, so the stamp does not depend on the checkout.
+# One cksum process over every source file: a process per file takes a minute
+# on Windows. Paths are relative, so the stamp does not depend on the checkout.
+# In a git checkout only tracked files count (their working copies, so local
+# edits still do): untracked strays such as macOS's .DS_Store would otherwise
+# change the stamp after every build and ask for a rebuild forever.
+cdj_source_files() {
+    if git -C "$1" rev-parse --is-inside-work-tree > /dev/null 2>&1; then
+        git -C "$1" ls-files -z -- hw/cdj patches
+    else
+        ( cd "$1" && find hw/cdj patches -type f ! -path '*/__pycache__/*' ! -name '*.pyc' \
+            ! -name '.DS_Store' -print0 )
+    fi
+}
+
 cdj_source_stamp() {
-    ( cd "$1" && find hw/cdj patches -type f ! -path '*/__pycache__/*' ! -name '*.pyc' -print0 |
-        LC_ALL=C sort -z | xargs -0 cksum | cksum | cut -d' ' -f1 )
+    ( cd "$1" && cdj_source_files "$1" | LC_ALL=C sort -z | xargs -0 cksum | cksum | cut -d' ' -f1 )
 }
 
 CDJ_STAMP_NAME="cdj-source.stamp"

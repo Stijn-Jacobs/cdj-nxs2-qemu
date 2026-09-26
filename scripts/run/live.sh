@@ -7,14 +7,7 @@
 #
 #   usage: bash scripts/run/live.sh [prefix=show] [decks=2]
 #   The rig lives as long as play_real_dsp.sh films: FRAMES (default 240) x 5 s = ~20 min.
-set -uo pipefail
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TAG="${1:-show}"
-N="${2:-2}"
-RELAY_PORT="${RELAY_PORT:-7202}"
-TAGS=$(seq -s, -f "${TAG}%g" 1 "$N")
-
-python3 "$HERE/midi_relay.py" --tags "$TAGS" --port "$RELAY_PORT" &
-RELAY=$!
-trap 'kill $RELAY 2>/dev/null' EXIT
-NDECKS="$N" bash "$HERE/rig.sh" "$TAG" "${FRAMES:-240}"
+#
+# The work is done by launcher/live.py.
+. "$(dirname "${BASH_SOURCE[0]}")/../cdj_python.sh"
+cdj_launcher_script live "$@"

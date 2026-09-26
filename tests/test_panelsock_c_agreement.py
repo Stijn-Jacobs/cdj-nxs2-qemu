@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """The panel socket port must be computed identically by QEMU
-(cdj_panelsock_port() in hw/cdj/cdj_panelkeys.h) and by the host tools
+(cdj_panelsock_port() in hw/cdj/common/cdj_panelkeys.h) and by the host tools
 (port_for() in scripts/run/cdj_panelsock.py): the two processes only meet on
 that number. The C function is cut out of the header and compiled on its own,
 so no QEMU tree is needed; the test skips when there is no C compiler."""
@@ -31,7 +31,7 @@ NAMES = [
 
 
 def c_function():
-    with open(path("hw", "cdj", "cdj_panelkeys.h"), encoding="utf-8") as fh:
+    with open(path("hw", "cdj", "common", "cdj_panelkeys.h"), encoding="utf-8") as fh:
         src = fh.read()
     start = src.index("static inline uint16_t cdj_panelsock_port(")
     depth, i = 0, src.index("{", start)

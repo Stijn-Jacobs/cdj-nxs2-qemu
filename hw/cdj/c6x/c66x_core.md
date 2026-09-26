@@ -36,6 +36,13 @@ image, which is built from your own firmware).
   inferred entries, opfields 0x74/0x76 = fast `.S` addsp/subsp; see the comment
   in `gen_ext.py`. Across the image: 1,696 decodes
   in code context, with fsubsp/faddsp/dadd/dmpysp/dmv/fmpydp/qmpysp on top.
+- **SPRUGH7 4.93 is DINTSP, not DINTHSP.** The manual prints it under the
+  heading DINTHSP, but its title and Execution block convert the two 32-bit
+  words of a register pair. Decoded as DINTHSP (the 16-bit halves of one
+  register), the MASTER TEMPO phase wrap (`dspint` then `dintsp`, 4 sites
+  from 0x8003E930) left every odd-lane phase unwrapped and the time-stretch
+  output ran at full scale. `gen_ext.py` renames it and reads src2 as a pair;
+  `tests/ext_test.c` runs the firmware's own word.
 
 ## Timing — the pipeline is architectural
 - **Result latency is visible to software**; SPRU732 Table 3-3 is literal.

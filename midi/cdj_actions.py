@@ -8,7 +8,7 @@ would silently do nothing, so every action names its status, bridge.py refuses
 to send `unbound` ones, and the learn/bridge tools print the status next to
 the binding.
 
-Transport is the panel key channel (hw/cdj/cdj_panelkeys.h): one UDP datagram
+Transport is the panel key channel (hw/cdj/common/cdj_panelkeys.h): one UDP datagram
 per press, `<off>:<val>:<dur_ms>[:<op>]`. The main ops:
 
     or    report[off] |= val   for as long as dur_ms lasts   (a held key)

@@ -12,6 +12,10 @@
  *     between two core builds.
  *
  * usage: c6xreplay <record> [max_cycles]
+ *
+ * REPLAY_PCM=<file>:<addr>:<len> appends, at every recorded state hash, the
+ * cycle (u64) and <len> bytes of guest RAM from <addr>: a sampled view of an
+ * output buffer, e.g. the McBSP0 ping-pong, whose words the audio model plays.
  */
 #include "c66x.h"
 
@@ -62,6 +66,35 @@ static size_t rec_len(const uint8_t *p)
 }
 
 static void apply_inline_followers(void);
+static uint8_t *ram_at(uint32_t a, uint32_t len);
+
+static FILE *pcm_out;
+static uint32_t pcm_addr, pcm_len;
+
+static void pcm_open(void)
+{
+    const char *spec = getenv("REPLAY_PCM");
+    char path[512], *c2, *c1;
+    /* Split from the right: a Windows path has a colon of its own. */
+    if (!spec || snprintf(path, sizeof path, "%s", spec) >= (int)sizeof path ||
+        !(c2 = strrchr(path, ':')) || (*c2 = 0, !(c1 = strrchr(path, ':'))))
+        return;
+    *c1 = 0;
+    pcm_addr = strtoul(c1 + 1, NULL, 0);
+    pcm_len = strtoul(c2 + 1, NULL, 0);
+    pcm_out = fopen(path, "wb");
+    if (!pcm_out)
+        fprintf(stderr, "REPLAY_PCM: cannot open %s\n", path);
+}
+
+static void pcm_sample(uint64_t cycle)
+{
+    const uint8_t *d = pcm_out ? ram_at(pcm_addr, pcm_len) : NULL;
+    if (!d)
+        return;
+    fwrite(&cycle, sizeof cycle, 1, pcm_out);
+    fwrite(d, 1, pcm_len, pcm_out);
+}
 
 static void die_at(const char *what)
 {
@@ -110,8 +143,6 @@ static void bus_write(void *opaque, uint32_t a, uint32_t v, unsigned n)
     n_write++;
     apply_inline_followers();
 }
-
-static uint8_t *ram_at(uint32_t a, uint32_t len);
 
 static void apply_store(const rec *r)
 {
@@ -198,6 +229,7 @@ int main(int argc, char **argv)
     fprintf(stderr, "%zu records, %.1f MB\n", NR, msize / 1e6);
 
     c66x_bus bus = { NULL, bus_read, bus_write };
+    pcm_open();
     double host_s = 0, t0 = 0;
     uint64_t cycles = 0, base_cycles = 0;
     /* The next record that is not consumed from inside a step, per index. */
@@ -278,6 +310,7 @@ int main(int argc, char **argv)
             break;
         case 'H':
             n_hash++;
+            pcm_sample(base_cycles + c66x_get_cycle(C));
             if (c66x_get_pc(C) != u32(r->p + 9) || c66x_state_hash(C) != u64(r->p + 13)) {
                 if (bad_hash++ < 5)
                     fprintf(stderr, "state hash differs at cycle %llu: pc 0x%08x (recorded 0x%08x)\n",
