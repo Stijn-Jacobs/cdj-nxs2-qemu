@@ -5,6 +5,8 @@
 #
 #   usage: ./scripts/run/boot_decks.sh <tag-prefix> [n]
 #   env:   JOBS FILMN MOTION_MS WALK KEYBYTE KEYBITS plus any CDJ_* knob
+#          SERVICE=1 boots into SERVICE MODE instead of loading a track
+#          (forces AUTOLOAD=0; see scripts/run/boot_deck.sh)
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HERE/../cdj_paths.sh"
@@ -20,6 +22,12 @@ export CDJ_DSP_REPLY="${CDJ_DSP_REPLY:-1}"
 export CDJ_DSP_REPLY_ID="${CDJ_DSP_REPLY_ID:-0}"
 export CDJ_DSP_REPLY_WORDS="${CDJ_DSP_REPLY_WORDS:-4}"
 export CDJ_DSP_TAG="${CDJ_DSP_TAG:-1}"
+# SERVICE MODE is entered before the firmware ever gets to the browse list, so
+# a load_track.py driver would just press keys the service screen doesn't use.
+if [ "${SERVICE:-0}" = "1" ] && [ "${AUTOLOAD:-1}" = "1" ]; then
+    echo "[$PREFIX] SERVICE=1: no track load in service mode (AUTOLOAD forced off)"
+    AUTOLOAD=0
+fi
 # AUTOLOAD=1 (the measurement default): load_track.py loads the first track and
 # presses PLAY, and a deck lives as long as its film. AUTOLOAD=0 boots the decks
 # and leaves them to the user for FILMN x MOTION_MS.
@@ -28,7 +36,9 @@ if [ "${AUTOLOAD:-1}" = 1 ]; then
     DECK_DUR=2
 else
     unset DRIVER
-    export CDJ_PANEL_PRESS=""
+    # SERVICE=1 needs boot_deck.sh's own CDJ_PANEL_PRESS default, so only wipe
+    # it here for the plain AUTOLOAD=0 case.
+    [ "${SERVICE:-0}" = "1" ] || export CDJ_PANEL_PRESS=""
     DECK_DUR=$(( ${FILMN:-1} * ${MOTION_MS:-1800} / 1000 ))
 fi
 export GUI_DISPLAY="${GUI_DISPLAY:-gtk}"

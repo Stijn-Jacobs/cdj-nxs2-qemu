@@ -8,6 +8,9 @@
 #   usage: ./start.sh             start
 #          ./start.sh stop        stop a running rig from another shell
 #          ./start.sh --dry-run   show what would be started
+#          ./start.sh --service   boot into the service manual's SERVICE MODE
+#                                  screen instead of the player (see "Service
+#                                  mode" in README.md)
 #   env:   every knob of scripts/run/rig.sh still works (AUDIODEV=, NOSOUND=1,
 #          GUI_DISPLAY=, PRIO=, TBFAST=0, ...).
 . "$(dirname "${BASH_SOURCE[0]}")/scripts/cdj_bash.sh"
@@ -15,9 +18,11 @@ set -uo pipefail
 E="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONF="$E/cdj.conf"
 DRY=0
+SERVICE_FLAG=""
 case "${1:-}" in
     stop) exec bash "$E/scripts/run/stop_rig.sh" ;;
     --dry-run) DRY=1 ;;
+    --service) SERVICE_FLAG=1 ;;
     -h | --help) sed -n '/^#   usage:/,/^#          GUI_DISPLAY/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     "") ;;
     *) echo "unknown argument: $1 (./start.sh --help)" >&2; exit 2 ;;
@@ -30,9 +35,12 @@ if [ ! -f "$CONF" ]; then
 fi
 CDJ_DECKS=1; CDJ_NAME=show; CDJ_DJLINK=0; CDJ_AUDIO=1; CDJ_CONTROLLER=none
 CDJ_RELAY_PORT=7202; CDJ_GROUP=239.77.77.1:45000; CDJ_MIDI_PYTHON=""
-QEMU_BUILD=""; QEMU_EB_BUILD=""
+QEMU_BUILD=""; QEMU_EB_BUILD=""; CDJ_SERVICE=0
 # shellcheck source=/dev/null
 . "$CONF"
+# --service always wins; otherwise a caller's own SERVICE=1 env, then the
+# hand-added CDJ_SERVICE=1 in cdj.conf (setup.sh does not ask about it).
+export SERVICE="${SERVICE_FLAG:-${SERVICE:-$CDJ_SERVICE}}"
 
 [ -n "$QEMU_BUILD" ] && export QEMU_BUILD
 [ -n "$QEMU_EB_BUILD" ] && export QEMU_EB_BUILD
@@ -102,9 +110,9 @@ if [ "$CDJ_CONTROLLER" != none ]; then
     fi
 fi
 
-echo "decks: $CDJ_DECKS ($CDJ_NAME)   Pro DJ Link: $([ "$DJLINK" = 1 ] && echo "on $GROUP" || echo off)   sound: $([ "$CDJ_AUDIO" = 1 ] && echo on || echo off)   controller: $CDJ_CONTROLLER"
+echo "decks: $CDJ_DECKS ($CDJ_NAME)   Pro DJ Link: $([ "$DJLINK" = 1 ] && echo "on $GROUP" || echo off)   sound: $([ "$CDJ_AUDIO" = 1 ] && echo on || echo off)   controller: $CDJ_CONTROLLER$([ "$SERVICE" = 1 ] && echo "   SERVICE MODE")"
 if [ "$DRY" = 1 ]; then
-    echo "would run:  RELAY_PORT=$RELAY_PORT DJLINK=$DJLINK GROUP=$GROUP${NOSOUND:+ NOSOUND=1}${QEMU_BUILD:+ QEMU_BUILD=$QEMU_BUILD} bash ${LAUNCH[*]}"
+    echo "would run:  RELAY_PORT=$RELAY_PORT DJLINK=$DJLINK GROUP=$GROUP${NOSOUND:+ NOSOUND=1}${QEMU_BUILD:+ QEMU_BUILD=$QEMU_BUILD}${SERVICE:+ SERVICE=$SERVICE} bash ${LAUNCH[*]}"
     [ "${#BRIDGE[@]}" -gt 0 ] && echo "and:        $(printf '%q ' "${BRIDGE[@]}") > logs/bridge.log"
     exit 0
 fi
@@ -118,5 +126,9 @@ if [ "${#BRIDGE[@]}" -gt 0 ]; then
     echo "controller bridge running (log: logs/bridge.log)"
 fi
 trap '[ -n "$BRIDGE_PID" ] && kill "$BRIDGE_PID" 2>/dev/null' EXIT
-echo "the first boot takes a minute; then press USB (or LINK) to browse, load a track and play."
+if [ "$SERVICE" = 1 ]; then
+    echo "the first boot takes a minute; SERVICE MODE appears once the logo clears."
+else
+    echo "the first boot takes a minute; then press USB (or LINK) to browse, load a track and play."
+fi
 bash "${LAUNCH[@]}"

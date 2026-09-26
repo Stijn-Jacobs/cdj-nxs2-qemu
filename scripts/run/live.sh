@@ -7,6 +7,7 @@
 #
 #   usage: bash scripts/run/live.sh [prefix=show] [decks=2]
 #   The rig lives as long as play_real_dsp.sh films: FRAMES (default 240) x 5 s = ~20 min.
+#   env:   SERVICE=1 boots into SERVICE MODE instead of playing a track (see rig.sh)
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TAG="${1:-show}"

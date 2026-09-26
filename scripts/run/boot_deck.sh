@@ -6,6 +6,9 @@
 # print.
 #
 #   usage: ./scripts/run/boot_deck.sh <tag> [seconds]
+#   env:   SERVICE=1 boots into the service manual's SERVICE MODE screen
+#          instead of the player (SERVICE_HOLD_MS overrides how long the entry
+#          keys are held, default 20000)
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HERE/../cdj_paths.sh"; PROJ="$CDJ_ROOT"
@@ -211,7 +214,16 @@ export CDJ_GUI_ARTBLOB="$PROJ/extract/artblob.bin"
 # MAIN.
 export CDJ_PANEL_KEYSOCK="/tmp/cdj-panel-keys-$TAG.sock"
 export CDJ_PANEL_RX=1 CDJ_PANEL_MAX_IRQ=4000000
-export CDJ_PANEL_PRESS="${CDJ_PANEL_PRESS-0x13:0x04:20000:3000}"
+# SERVICE=1: boot into the service manual's SERVICE MODE instead of the
+# regular player screen, by holding TEMPO RANGE (report 0x15, mask 0x08) and
+# MEMORY (0x0c, mask 0x08) from reset. Both keys release after
+# SERVICE_HOLD_MS so nothing stays stuck down once the logo clears. A caller's
+# own CDJ_PANEL_PRESS always wins.
+if [ "${SERVICE:-0}" = "1" ]; then
+    export CDJ_PANEL_PRESS="${CDJ_PANEL_PRESS-0x15:0x08:0:${SERVICE_HOLD_MS:-20000},0x0c:0x08:0:${SERVICE_HOLD_MS:-20000}}"
+else
+    export CDJ_PANEL_PRESS="${CDJ_PANEL_PRESS-0x13:0x04:20000:3000}"
+fi
 rm -f "$CDJ_PANEL_KEYSOCK" 2>/dev/null
 
 # ICOUNT: drive MAIN's virtual clock from executed instructions instead of host
