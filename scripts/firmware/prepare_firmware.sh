@@ -20,8 +20,8 @@
 #   usage: scripts/firmware/prepare_firmware.sh [--install [--force]] <C2KNXS2.UPD> [outdir]
 #
 #   outdir     must not exist yet, or be empty; default: a new mktemp dir.
-#              It may not be the repository root or lie inside its extract/,
-#              fw/ or notes/ -- use --install for that.
+#              It may not lie inside the repository -- use --install for
+#              that.
 #   PYTHON=    interpreter to use (default: the first working python3/python).
 #              Only the standard library is needed.
 #
@@ -109,12 +109,9 @@ if [ "${#ARGS[@]}" -eq 2 ]; then
     OUT="${ARGS[1]}"
     OUTC="$(canon "$OUT")"
     REPOC="$(cd "$REPO" && pwd -P)"
-    [ "$OUTC" = "$REPOC" ] && die "outdir is the repository root; write elsewhere and use --install"
-    for guarded in extract fw notes; do
-        case "$OUTC/" in
-            "$REPOC/$guarded/"*) die "outdir is inside $guarded/; write elsewhere and use --install" ;;
-        esac
-    done
+    case "$OUTC/" in
+        "$REPOC/"*) die "outdir is inside the repository; write elsewhere and use --install" ;;
+    esac
     if [ -e "$OUT" ]; then
         [ -d "$OUT" ] || die "outdir exists and is not a directory: $OUT"
         [ -z "$(ls -A "$OUT")" ] || die "outdir is not empty: $OUT"

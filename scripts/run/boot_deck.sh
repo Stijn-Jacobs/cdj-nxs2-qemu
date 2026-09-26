@@ -196,10 +196,9 @@ export CDJ_IIC_SLAVE=1 CDJ_USB_OC=1
 export CDJ_IIC_ADDR="${CDJ_IIC_ADDR:-0x30,0x2c}"
 export CDJ_IIC_CH="${CDJ_IIC_CH:-1}"
 export CDJ_GUI_VDC_SCANOUT=1 USB_MEDIA=1
-# GUI font/art archives: extract/ (prepare_firmware.sh --install), else notes/.
-_blobdir="$PROJ/extract"; [ -f "$_blobdir/resblob.bin" ] || _blobdir="$PROJ/notes"
-export CDJ_GUI_FONTBLOB="$_blobdir/resblob.bin"
-export CDJ_GUI_ARTBLOB="$_blobdir/artblob.bin"
+# GUI font/art archives, installed by prepare_firmware.sh --install.
+export CDJ_GUI_FONTBLOB="$PROJ/extract/resblob.bin"
+export CDJ_GUI_ARTBLOB="$PROJ/extract/artblob.bin"
 # The front panel is a datagram socket, so keys can be pressed without halting
 # MAIN.
 export CDJ_PANEL_KEYSOCK="/tmp/cdj-panel-keys-$TAG.sock"

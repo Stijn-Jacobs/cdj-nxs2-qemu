@@ -52,11 +52,11 @@ export KEYBYTE="${KEYBYTE:-0x10}" KEYBITS="${KEYBITS:-0x01}"
 export FILMN="${FILMN:-3}" JOBS="${JOBS:-3}" PRIVATE_MEDIA=1 RETRIES="${RETRIES:-0}"
 
 # ---- preflight --------------------------------------------------------------
-# Prior art for the taps from the knowledge graph, if present. Advisory only;
-# PREFLIGHT=0 silences it.
-if [ "${PREFLIGHT:-1}" = "1" ] && [ -f "$CDJ_ROOT/graph/gq.py" ]; then
+# A checkout may vet the tap list before a batch: $CDJ_ROOT/.cdj/preflight, if
+# present, gets the taps as its argument. Advisory only; PREFLIGHT=0 silences it.
+if [ "${PREFLIGHT:-1}" = "1" ] && [ -f "$CDJ_ROOT/.cdj/preflight" ]; then
     echo "--- preflight (prior art for these taps)"
-    python3 "$CDJ_ROOT/graph/gq.py" preflight "$CDJ_FWTRACE" 2>/dev/null         || echo "  (preflight found dead nodes above -- read them before believing this batch)"
+    bash "$CDJ_ROOT/.cdj/preflight" "$CDJ_FWTRACE"         || echo "  (preflight flagged the taps above -- read it before believing this batch)"
 fi
 
 # ---- snapshot coverage -------------------------------------------------------
