@@ -1,16 +1,17 @@
 diff --git a/target/sh4/op_helper.c b/target/sh4/op_helper.c
-index 99394b7..eb59bc0 100644
+index 99394b7..ac98235 100644
 --- a/target/sh4/op_helper.c
 +++ b/target/sh4/op_helper.c
-@@ -22,6 +22,7 @@
+@@ -22,6 +22,8 @@
  #include "exec/exec-all.h"
  #include "exec/cpu_ldst.h"
  #include "fpu/softfloat.h"
 +#include "sysemu/cpu-timers.h"
++#include "qemu/timer.h"
  
  #ifndef CONFIG_USER_ONLY
  
-@@ -94,6 +95,31 @@ void helper_sleep(CPUSH4State *env)
+@@ -94,6 +96,57 @@ void helper_sleep(CPUSH4State *env)
      raise_exception(env, EXCP_HLT, 0);
  }
  
@@ -39,10 +40,36 @@ index 99394b7..eb59bc0 100644
 +    raise_exception(env, EXCP_HLT, 0);
 +}
 +
++/*
++ * CDJ_TIMED_ADD: rn + imm for every <ms> of virtual time since the last run,
++ * the remainder carried to the next one, so a per-frame animation step keeps
++ * its speed at any frame rate. The first run after a gap of over 200 ms (the
++ * animation was idle) takes a single step, as it would have.
++ */
++uint32_t helper_cdj_timed_add(CPUSH4State *env, uint32_t rn, uint32_t imm,
++                              uint32_t ms)
++{
++    static int64_t last_ns, carry;
++    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
++    int64_t per = (int64_t)ms * SCALE_MS;
++    int64_t sum, step;
++
++    if (!last_ns || now - last_ns > 200 * SCALE_MS) {
++        last_ns = now;
++        carry = 0;
++        return rn + imm;
++    }
++    sum = (int64_t)(int32_t)imm * (now - last_ns) + carry;
++    step = sum / per;
++    carry = sum - step * per;
++    last_ns = now;
++    return rn + (uint32_t)step;
++}
++
  void helper_trapa(CPUSH4State *env, uint32_t tra)
  {
      env->tra = tra << 2;
-@@ -204,6 +230,10 @@ void helper_macw(CPUSH4State *env, int32_t arg0, int32_t arg1)
+@@ -204,6 +257,10 @@ void helper_macw(CPUSH4State *env, int32_t arg0, int32_t arg1)
  
  void helper_ld_fpscr(CPUSH4State *env, uint32_t val)
  {
@@ -53,7 +80,7 @@ index 99394b7..eb59bc0 100644
      env->fpscr = val & FPSCR_MASK;
      if ((val & FPSCR_RM_MASK) == FPSCR_RM_ZERO) {
          set_float_rounding_mode(float_round_to_zero, &env->fp_status);
-@@ -497,3 +527,1182 @@ void helper_ftrv(CPUSH4State *env, uint32_t n)
+@@ -497,3 +554,1182 @@ void helper_ftrv(CPUSH4State *env, uint32_t n)
          env->fregs[bank_vector + i] = r[i];
      }
  }
