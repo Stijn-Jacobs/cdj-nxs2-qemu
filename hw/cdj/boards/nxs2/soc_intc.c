@@ -2,13 +2,9 @@
 #include "cdj.h"
 #include "cdj_getenv.h"
 /*
- * Interrupt controller, TMU, SCIF and CCN glue for the SH7724.
- *
- * Peripheral clock: the firmware programs TCOR0 = 10415 with TPSC = P0/4,
- * which is exactly a 1 kHz RTOS tick at 41.666667 MHz. The GUI link times out
- * if MAIN's tick runs slow. CDJ_PERIPH_HZ overrides it.
+ * Interrupt controller for the SH7724. The TMU, SCIF and CCN glue every board
+ * shares is in common/sh4_periph.c.
  */
-#define CDJ_PERIPH_FREQ  41666667
 
 /* ---------------------------------------------------------------------------
  * INTC-A (0xA4080000).
@@ -162,39 +158,13 @@ static struct intc_prio_reg cdj_intc_prio_registers[] = {
 
 struct intc_desc cdj_intc;
 
-/* Return the INTC to its power-on state on machine reset. sh_intc keeps its
- * register values in the static arrays and nothing else resets them; a stale
- * timer enable would fire before the firmware refills its dispatch table
- * (0x0AC94F14, in bss) and reset the machine again. */
-static void cdj_intc_reset(void *opaque)
-{
-    struct intc_desc *desc = &cdj_intc;
-    unsigned i;
-
-    for (i = 0; i < ARRAY_SIZE(cdj_intc_mask_registers); i++) {
-        cdj_intc_mask_registers[i].value = 0;
-    }
-    for (i = 0; i < ARRAY_SIZE(cdj_intc_prio_registers); i++) {
-        cdj_intc_prio_registers[i].value = 0;
-    }
-    for (i = 0; i < (unsigned)desc->nr_sources; i++) {
-        desc->sources[i].asserted = 0;
-        desc->sources[i].enable_count = 0;
-        desc->sources[i].pending = 0;
-    }
-    desc->pending = 0;
-}
-
 void cdj_intc_init(MemoryRegion *sysmem, SuperHCPU *cpu)
 {
-    sh_intc_init(sysmem, &cdj_intc, CDJ_INTC_NR_SOURCES,
-                 _INTC_ARRAY(cdj_intc_mask_registers),
-                 _INTC_ARRAY(cdj_intc_prio_registers));
-    sh_intc_register_sources(&cdj_intc,
-                             _INTC_ARRAY(cdj_intc_vectors),
-                             _INTC_ARRAY(cdj_intc_groups));
-    cpu->env.intc_handle = &cdj_intc;
-    qemu_register_reset(cdj_intc_reset, NULL);
+    cdj_intc_setup(sysmem, cpu, &cdj_intc, CDJ_INTC_NR_SOURCES,
+                   _INTC_ARRAY(cdj_intc_mask_registers),
+                   _INTC_ARRAY(cdj_intc_prio_registers),
+                   _INTC_ARRAY(cdj_intc_vectors),
+                   _INTC_ARRAY(cdj_intc_groups));
 }
 
 /* CDJ_IRQ5_PROBE_MS=<period>: toggle IRQ5 on a timer. The firmware enables
@@ -236,194 +206,9 @@ void cdj_irq5_probe_init(void)
               qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) + cdj_irq5_period_ms);
 }
 
-/* ---------------------------------------------------------------------------
- * Counting passthrough on an IRQ line, reported at exit. Lines are level
- * driven, so "rises=1" means it went high and stayed high, not one tick.
- */
-typedef struct CdjIrqCount {
-    qemu_irq target;
-    const char *name;
-    uint64_t rises;
-    uint64_t falls;
-} CdjIrqCount;
-
-/* Lines past this limit are silently left out of the summary. */
-static CdjIrqCount *cdj_irq_counters[32];
-static unsigned cdj_irq_counter_n;
-Notifier cdj_irqcount_exit;
-
-static void cdj_irq_count(void *opaque, int n, int level)
+/* The sh_intc state behind the IRQ counts, printed after them at exit; the
+ * DMAC0A DEIs (H'800..H'860) are always printed. */
+void cdj_intc_exit_report(void)
 {
-    CdjIrqCount *c = opaque;
-
-    if (level) {
-        c->rises++;
-    } else {
-        c->falls++;
-    }
-    qemu_set_irq(c->target, level);
+    cdj_intc_report(&cdj_intc, CDJ_INTC_NR_SOURCES, 0x800, 0x860);
 }
-
-qemu_irq cdj_count_irq(qemu_irq target, const char *name)
-{
-    CdjIrqCount *c = g_new0(CdjIrqCount, 1);
-
-    c->target = target;
-    c->name = name;
-    if (cdj_irq_counter_n < ARRAY_SIZE(cdj_irq_counters)) {
-        cdj_irq_counters[cdj_irq_counter_n++] = c;
-    }
-    return qemu_allocate_irq(cdj_irq_count, c, 0);
-}
-
-void cdj_irqcount_dump(Notifier *n, void *opaque)
-{
-    unsigned i;
-
-    /* A machine reset invalidates every count below; say so. */
-    if (cdj_reset_count > 1) {
-        warn_report("MACHINE RESET happened %u times -- every count below is "
-                    "from a boot that did not run to completion",
-                    cdj_reset_count - 1);
-    }
-
-    for (i = 0; i < cdj_irq_counter_n; i++) {
-        info_report("irqcount: %-12s rises=%" PRIu64 " falls=%" PRIu64,
-                    cdj_irq_counters[i]->name, cdj_irq_counters[i]->rises,
-                    cdj_irq_counters[i]->falls);
-    }
-
-    /* sh_intc forwards a source only when enable_count reaches enable_max,
-     * and the CPU accepts it only above SR.IMASK; print both. */
-    for (i = 1; i < CDJ_INTC_NR_SOURCES && i < (unsigned)cdj_intc.nr_sources;
-         i++) {
-        struct intc_source *src = &cdj_intc.sources[i];
-
-        /* The DMAC0A DEIs are always printed. */
-        if (src->asserted || src->pending ||
-            (src->vect >= 0x800 && src->vect <= 0x860)) {
-            info_report("intc: src=%u vect=0x%03x asserted=%d pending=%d "
-                        "enable_count=%d enable_max=%d prio=%d",
-                        i, src->vect, src->asserted, src->pending,
-                        src->enable_count, src->enable_max,
-                        sh_intc_vector_priority(&cdj_intc, src->vect));
-        }
-    }
-}
-
-void cdj_irq_sink(void *opaque, int n, int level)
-{
-}
-
-void cdj_tmu_init(MemoryRegion *sysmem, hwaddr base,
-                         qemu_irq ch0, qemu_irq ch1, qemu_irq ch2)
-{
-    const char *fenv = getenv("CDJ_PERIPH_HZ");
-    uint32_t freq = fenv && *fenv ? (uint32_t)strtoul(fenv, NULL, 0)
-                                  : CDJ_PERIPH_FREQ;
-
-    tmu012_init(sysmem, base, TMU012_FEAT_3CHAN, freq,
-                ch0, ch1, ch2, NULL);
-}
-
-void cdj_scif(MemoryRegion *sysmem, const char *id,
-                     hwaddr addr, Chardev *chr)
-{
-    DeviceState *dev;
-    SysBusDevice *sb;
-    MemoryRegion *mr, *alias;
-
-    dev = qdev_new(TYPE_SH_SERIAL);
-    dev->id = g_strdup(id);
-    qdev_prop_set_chr(dev, "chardev", chr);
-    qdev_prop_set_uint8(dev, "features", SH_SERIAL_FEAT_SCIF);
-    sb = SYS_BUS_DEVICE(dev);
-    sysbus_realize_and_unref(sb, &error_fatal);
-    sysbus_mmio_map(sb, 0, addr);
-
-    /* eri/rxi/txi/bri are not connected; the firmware polls. */
-    mr = sysbus_mmio_get_region(sb, 0);
-    alias = g_malloc(sizeof(*alias));
-    memory_region_init_alias(alias, OBJECT(dev), id, mr, 0,
-                             memory_region_size(mr));
-    memory_region_add_subregion(sysmem, A7ADDR(addr), alias);
-}
-
-
-/* ---------------------------------------------------------------------------
- * CCN / exception registers (0xFF000000).
- *
- * The interrupt entry at VBR+0x600 dispatches on INTEVT (0xFF000028), so
- * EXPEVT and INTEVT expose QEMU's env->expevt/intevt. The rest of the block
- * is a plain register file.
- */
-#define CDJ_CCN_BASE    0xFF000000
-#define CDJ_CCN_SIZE    0x1000
-#define CCN_EXPEVT      0x24
-#define CCN_INTEVT      0x28
-
-typedef struct CdjCcnState {
-    MemoryRegion iomem;
-    SuperHCPU *cpu;
-    uint32_t reg[CDJ_CCN_SIZE / 4];
-} CdjCcnState;
-
-static unsigned cdj_ccn_dei_seen;
-
-static uint64_t cdj_ccn_read(void *opaque, hwaddr off, unsigned size)
-{
-    CdjCcnState *s = opaque;
-
-    switch (off) {
-    case CCN_EXPEVT:
-        return s->cpu->env.expevt;
-    case CCN_INTEVT:
-        /* With CDJ_DMAC_DEBUG, log the first few DMAC0A DEI dispatches. */
-        if (s->cpu->env.intevt >= 0x800 && s->cpu->env.intevt <= 0x860 &&
-            cdj_ccn_dei_seen < 6 && getenv("CDJ_DMAC_DEBUG")) {
-            cdj_ccn_dei_seen++;
-            info_report("ccn: INTEVT 0x%03x read at pc=0x%08x (spc=0x%08x "
-                        "sr=0x%08x) #%u", s->cpu->env.intevt, s->cpu->env.pc,
-                        s->cpu->env.spc, s->cpu->env.sr, cdj_ccn_dei_seen);
-        }
-        return s->cpu->env.intevt;
-    default:
-        return s->reg[off / 4];
-    }
-}
-
-static void cdj_ccn_write(void *opaque, hwaddr off, uint64_t val, unsigned size)
-{
-    CdjCcnState *s = opaque;
-
-    switch (off) {
-    case CCN_EXPEVT:
-        s->cpu->env.expevt = val;
-        return;
-    case CCN_INTEVT:
-        s->cpu->env.intevt = val;
-        return;
-    default:
-        s->reg[off / 4] = val;
-        return;
-    }
-}
-
-static const MemoryRegionOps cdj_ccn_ops = {
-    .read = cdj_ccn_read,
-    .write = cdj_ccn_write,
-    .endianness = DEVICE_LITTLE_ENDIAN,
-    .valid = { .min_access_size = 1, .max_access_size = 4 },
-};
-
-void cdj_ccn_init(MemoryRegion *sysmem, SuperHCPU *cpu)
-{
-    CdjCcnState *s = g_new0(CdjCcnState, 1);
-
-    s->cpu = cpu;
-    memory_region_init_io(&s->iomem, NULL, &cdj_ccn_ops, s,
-                          "sh4.ccn", CDJ_CCN_SIZE);
-    memory_region_add_subregion(sysmem, CDJ_CCN_BASE, &s->iomem);
-}
-
-

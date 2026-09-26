@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "../cdj.h"
-#include "../cdj_getenv.h"
+#include "cdj_getenv.h"
 /* ---------------------------------------------------------------------------
  * Exit-time diagnostics: console buffer, PC ring, interrupt table, and a few
  * logging probe regions.

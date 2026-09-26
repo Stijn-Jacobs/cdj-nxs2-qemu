@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "../cdj.h"
-#include "../cdj_getenv.h"
+#include "cdj_getenv.h"
 /*
  * Diagnostics for the MAIN->GUI link (DMA1 ch0) and the DSP command link
  * (DMA1 ch4).

@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "../cdj.h"
-#include "../cdj_getenv.h"
+#include "cdj_getenv.h"
 /*
  * CDJ_MAINPROF=<path>[:<start virtual s>] (Windows only): a sampling profiler
  * for MAIN's vCPU thread, since perf is not available on Windows. A thread

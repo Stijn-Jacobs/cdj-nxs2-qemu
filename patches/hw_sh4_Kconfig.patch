@@ -1,19 +1,32 @@
 diff --git a/hw/sh4/Kconfig b/hw/sh4/Kconfig
-index 99a76a9..c9643a1 100644
+index 99a76a9..299d80c 100644
 --- a/hw/sh4/Kconfig
 +++ b/hw/sh4/Kconfig
-@@ -25,3 +25,17 @@ config SH7750
+@@ -25,3 +25,30 @@ config SH7750
      select SH_INTC
      select SH_SCI
      select SH_TIMER
++
++# What every CDJ MAIN board shares (hw/cdj/common/).
++config CDJ_COMMON
++    bool
++    select SH_SCI
++    select SH_TIMER
++    select UNIMP
++    select PFLASH_CFI02
 +
 +config CDJ2000NXS2
 +    bool
 +    default y
 +    depends on SH4
-+    select SH_SCI
-+    select UNIMP
-+    select PFLASH_CFI02
++    select CDJ_COMMON
++
++# The CDJ-2000 and CDJ-2000NXS (SH7763), machines cdj2000 and cdj2000nxs.
++config CDJ2000
++    bool
++    default y
++    depends on SH4
++    select CDJ_COMMON
 +
 +config SH7269GUI
 +    bool

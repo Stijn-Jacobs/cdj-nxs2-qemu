@@ -14,7 +14,7 @@ appended log-style, the last one wins. The first halfword is 0x0179 | n << 10,
 n = 0 for AUTO or 1..4; the other three are 403f 8495 0322.
 
 This relies on the board's top-boot flash geometry (127 x 64 KiB + 8 x 8 KiB,
-see the NOR flash model in hw/cdj/board.c).
+see the NOR flash model in hw/cdj/common/sh4_board.c).
 
 The firmware provisions serial "PDJ0000001XX" at 0x7FE000 on every image, so
 two decks are otherwise identical there. --serial <12 chars> writes a different

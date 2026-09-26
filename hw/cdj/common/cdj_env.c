@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
-#include "cdj.h"
+#include "cdj_common.h"
 /*
  * Cached getenv(). The board reads many knobs on per-access paths, and
  * msvcrt's getenv() walks the whole environment each time.

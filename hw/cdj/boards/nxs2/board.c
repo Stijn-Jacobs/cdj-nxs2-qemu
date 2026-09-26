@@ -8,8 +8,8 @@
  * devices so their accesses are logged rather than silently reading zero.
  *
  * Boot: the decompressed MAIN image is loaded at the DRAM base and entered at
- * its reset stub (image offset 0x100) through P2, as the bootloader does. The
- * stub sets up no stack, so SP is primed with the bootloader's value.
+ * _start (image offset 0x800) through P2, as the bootloader does. _start sets
+ * up no stack, so SP is primed with the bootloader's value.
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
@@ -24,140 +24,90 @@ bool cdj_pnl_enabled(void)
     return !(e && !strcmp(e, "0"));
 }
 
-typedef struct CdjResetData {
-    SuperHCPU *cpu;
-    uint32_t pc;
-    uint32_t sp;
-} CdjResetData;
+/*
+ * The NXS2 memory map. Area 4 and area 6 are opt-in RAM:
+ *
+ * SH-4 area 4 (CS4), 0x10000000 up. The firmware uses it as plain shared
+ * memory: the DSP transfer driver at 0x083AFDC0 loads a pointer from
+ * 0x10DDEFC8, and the SPI1 tx busy flags (0x10DC1510..0x10DC151F) and
+ * the word tsk_DSP_startup reads (0x10DBFC78) live here too.
+ * CDJ_AREA4=1 backs it with 16 MB of RAM; unset, it stays unmapped.
+ *
+ * SH-4 area 6 (CS6), 0x18000000 up: the DSP's uPP data window. MAIN DMAs
+ * to 0xB8000000 from 0x083262A4 and waits on flg_DSPuPP; MSIOF0 is the
+ * control plane. The DSP has no program store of its own, so its boot
+ * image arrives here. CDJ_AREA6=1 backs it with RAM so the writes can be
+ * dumped; unset, it stays unmapped.
+ */
+static const CdjRamRegion cdj2000nxs2_extra_ram[] = {
+    { "cdj.area4", "CDJ_AREA4", CDJ_AREA4_PHYS, CDJ_AREA4_SIZE, "area 4" },
+    { "cdj.area6", "CDJ_AREA6", CDJ_AREA6_PHYS, CDJ_AREA6_SIZE,
+      "area 6 (CS6, the DSP window)" },
+};
 
-unsigned cdj_reset_count;
+static const CdjBoardDesc cdj2000nxs2_board = {
+    .name = "cdj2000nxs2",
+    .dram_phys = CDJ_DRAM_PHYS,
+    .dram_size = CDJ_DRAM_SIZE,
+    .extra_ram = cdj2000nxs2_extra_ram,
+    .n_extra_ram = ARRAY_SIZE(cdj2000nxs2_extra_ram),
+    /* Geometry from the firmware's sector tables (0x080B0978 addresses,
+     * 0x080B0B94 sizes): top-boot 8 MB, 127 x 64 KiB then 8 x 8 KiB, the
+     * settings sector being the 8 KiB one at 0x7F6000. The firmware programs
+     * it at 0x352CFC. */
+    .flash_phys = CDJ_FLASH_PHYS,
+    .flash_size = CDJ_FLASH_SIZE,
+    .flash = { { 127, 64 * KiB }, { 8, 8 * KiB } },
+    .flash_id = { 0x0001, 0x227e, 0x2220, 0x2200 },
+    .fw_entry = CDJ_FW_ENTRY,
+    .init_sp = CDJ_INIT_SP,
+    .sr_seed_slot = CDJ_SR_SAVE_SLOT,
+    .sr_seed = CDJ_SR_SEED,
+    /* The firmware programs TCOR0 = 10415 with TPSC = P0/4, which is exactly
+     * a 1 kHz RTOS tick at 41.666667 MHz. The GUI link times out if MAIN's
+     * tick runs slow. */
+    .periph_hz = 41666667,
+    .ccn_trace_lo = 0x800,              /* DMAC0A DEI0..DEI3 */
+    .ccn_trace_hi = 0x860,
+    .exit_report = cdj_intc_exit_report,
+};
 
-static void cdj_cpu_reset(void *opaque)
+/* DMAC0A's DEI lines, connected as the firmware needs them (CDJ_DMAC_DEI=0
+ * disconnects all, CDJ_DMAC_DEI_ALL=1 connects all four):
+ *   DEI0  USB D0FIFO drain, waited on at 0x08235952.
+ *   DEI1  panel receive (40-byte report from SCFRDR2 into 0xA9000000);
+ *         its ISR 0x083EB080 wakes PnlCom_RcvTASK. On with the panel.
+ *   DEI2  panel transmit; its ISR 0x083EB012 only clears CHCR_2, so it
+ *         is off unless CDJ_PANEL_DEI2=1.
+ * Delivery relies on the sh_intc priority-group fix in patches/. */
+static void cdj2000nxs2_dmac(MemoryRegion *sysmem, const qemu_irq *lines)
 {
-    CdjResetData *s = opaque;
-    CPUSH4State *env = &s->cpu->env;
+    CdjDmacDei dei[4] = { { 0 } };
+    const char *off = getenv("CDJ_DMAC_DEI");
+    const char *cap = getenv("CDJ_PANEL_MAX_IRQ");
+    unsigned i;
 
-    /* A reset looks like a firmware loop from the PC alone; log it. */
-    if (++cdj_reset_count > 1) {
-        qemu_log("MACHINE RESET #%u (pc was 0x%08x)\n",
-                 cdj_reset_count, env->pc);
-    }
-    cpu_reset(CPU(s->cpu));
-    env->pc = s->pc;
-    env->gregs[15] = s->sp;
-}
+    for (i = 0; i < ARRAY_SIZE(dei); i++) {
+        bool want = i == 0
+                 || (i == 1 && cdj_pnl_enabled())
+                 || (i == 2 && getenv("CDJ_PANEL_DEI2"))
+                 || getenv("CDJ_DMAC_DEI_ALL");
 
-/* Map a device region at both its architectural address and its A7 alias, so it
- * is reachable whichever segment the firmware uses. */
-static void cdj_unimp(const char *name, hwaddr addr, hwaddr size)
-{
-    create_unimplemented_device(name, addr, size);
-    if (A7ADDR(addr) != addr) {
-        g_autofree char *alias = g_strdup_printf("%s-a7", name);
-        create_unimplemented_device(alias, A7ADDR(addr), size);
+        dei[i].irq = (want && !(off && !strcmp(off, "0"))) ? lines[i] : NULL;
+        if (i == 1 || i == 2) {
+            /* The panel exchanges ~200 frames/s, so the default cap is about
+             * 15 minutes; CDJ_PANEL_MAX_IRQ overrides it. */
+            dei[i].max = cap ? (unsigned)strtoul(cap, NULL, 0) : 200000;
+        }
     }
+    cdj_dmac_init(sysmem, "sh7724.dmac", 0xFE008000,
+                  CDJ_USB_BASE, CDJ_USB_SIZE, dei);
 }
 
 static void cdj2000nxs2_init(MachineState *machine)
 {
-    SuperHCPU *cpu;
     MemoryRegion *sysmem = get_system_memory();
-    MemoryRegion *dram = g_new(MemoryRegion, 1);
-    CdjResetData *reset_info;
-    DriveInfo *dinfo;
-    ssize_t fwsize;
-
-    cpu = SUPERH_CPU(cpu_create(machine->cpu_type));
-
-    memory_region_init_ram(dram, NULL, "cdj.dram", CDJ_DRAM_SIZE, &error_fatal);
-    memory_region_add_subregion(sysmem, CDJ_DRAM_PHYS, dram);
-
-    /*
-     * SH-4 area 4 (CS4), 0x10000000 up. The firmware uses it as plain shared
-     * memory: the DSP transfer driver at 0x083AFDC0 loads a pointer from
-     * 0x10DDEFC8, and the SPI1 tx busy flags (0x10DC1510..0x10DC151F) and
-     * the word tsk_DSP_startup reads (0x10DBFC78) live here too.
-     * CDJ_AREA4=1 backs it with 16 MB of RAM; unset, it stays unmapped.
-     */
-    if (getenv("CDJ_AREA4")) {
-        MemoryRegion *area4 = g_new(MemoryRegion, 1);
-
-        memory_region_init_ram(area4, NULL, "cdj.area4", CDJ_AREA4_SIZE,
-                               &error_fatal);
-        memory_region_add_subregion(sysmem, CDJ_AREA4_PHYS, area4);
-        info_report("cdj2000nxs2: area 4 backed with %u MB RAM at 0x%08x",
-                    (unsigned)(CDJ_AREA4_SIZE / MiB), CDJ_AREA4_PHYS);
-    }
-
-    /*
-     * SH-4 area 6 (CS6), 0x18000000 up: the DSP's uPP data window. MAIN DMAs
-     * to 0xB8000000 from 0x083262A4 and waits on flg_DSPuPP; MSIOF0 is the
-     * control plane. The DSP has no program store of its own, so its boot
-     * image arrives here. CDJ_AREA6=1 backs it with RAM so the writes can be
-     * dumped; unset, it stays unmapped.
-     */
-    if (getenv("CDJ_AREA6")) {
-        MemoryRegion *area6 = g_new(MemoryRegion, 1);
-
-        memory_region_init_ram(area6, NULL, "cdj.area6", CDJ_AREA6_SIZE,
-                               &error_fatal);
-        memory_region_add_subregion(sysmem, CDJ_AREA6_PHYS, area6);
-        info_report("cdj2000nxs2: area 6 (CS6, the DSP window) backed with "
-                    "%u MB RAM at 0x%08x",
-                    (unsigned)(CDJ_AREA6_SIZE / MiB), CDJ_AREA6_PHYS);
-    }
-
-    /* NOR flash as a CFI device, not RAM: the firmware programs its settings
-     * sectors at runtime with the AMD command set (0xAA/0x55 unlock, 0xA0
-     * program, then DQ7/DQ5 polling, at 0x352CFC). The 0x55 goes to byte
-     * 0x554, i.e. word 0x2AA on a 16-bit bus.
-     *
-     * Geometry from the firmware's sector tables (0x080B0978 addresses,
-     * 0x080B0B94 sizes): top-boot 8 MB, 127 x 64 KiB then 8 x 8 KiB. The
-     * small sectors matter: with a uniform 64 KiB layout, erasing one 8 KiB
-     * sector wipes its neighbours, including the settings sector at 0x7F6000.
-     * No backing drive means erased (0xFF). CDJ_FLASH_UNIFORM=1 selects the
-     * uniform layout.
-     */
-    dinfo = drive_get(IF_PFLASH, 0, 0);
-    {
-        DeviceState *fl = qdev_new(TYPE_PFLASH_CFI02);
-        bool uniform = getenv("CDJ_FLASH_UNIFORM") != NULL;
-
-        if (dinfo) {
-            qdev_prop_set_drive(fl, "drive", blk_by_legacy_dinfo(dinfo));
-        }
-        if (uniform) {
-            qdev_prop_set_uint32(fl, "num-blocks", CDJ_FLASH_SIZE / (64 * KiB));
-            qdev_prop_set_uint32(fl, "sector-length", 64 * KiB);
-        } else {
-            qdev_prop_set_uint32(fl, "num-blocks0", 127);
-            qdev_prop_set_uint32(fl, "sector-length0", 64 * KiB);
-            qdev_prop_set_uint32(fl, "num-blocks1", 8);
-            qdev_prop_set_uint32(fl, "sector-length1", 8 * KiB);
-        }
-        qdev_prop_set_uint8(fl, "width", 2);
-        qdev_prop_set_uint8(fl, "mappings", 1);
-        qdev_prop_set_uint8(fl, "big-endian", 0);
-        qdev_prop_set_uint16(fl, "id0", 0x0001);
-        qdev_prop_set_uint16(fl, "id1", 0x227e);
-        qdev_prop_set_uint16(fl, "id2", 0x2220);
-        qdev_prop_set_uint16(fl, "id3", 0x2200);
-        qdev_prop_set_uint16(fl, "unlock-addr0", 0x555);
-        qdev_prop_set_uint16(fl, "unlock-addr1", 0x2aa);
-        qdev_prop_set_string(fl, "name", "cdj.flash");
-        sysbus_realize_and_unref(SYS_BUS_DEVICE(fl), &error_fatal);
-        sysbus_mmio_map(SYS_BUS_DEVICE(fl), 0, CDJ_FLASH_PHYS);
-        info_report("cdj2000nxs2: NOR flash %s", uniform
-                    ? "uniform 128 x 64 KiB (CDJ_FLASH_UNIFORM)"
-                    : "top-boot 127 x 64 KiB + 8 x 8 KiB");
-    }
-
-    /* CCN, the SH-4 core control block (0xFF000000..0xFF000028). QEMU only
-     * provides it through the SH7750 SoC model, which this board does not
-     * use; without it the firmware spins re-reading EXPEVT. */
-    cdj_ccn_init(sysmem, cpu);
-    cdj_unimp("sh4.ubc",      0xFF200000, 0x1000);
+    SuperHCPU *cpu = cdj_board_init(machine, &cdj2000nxs2_board);
 
     /* INTC-A (0xA4080000) is modelled by cdj_intc_init(); no unimplemented
      * region there, it would overlap sh_intc's register aliases. */
@@ -219,7 +169,7 @@ static void cdj2000nxs2_init(MachineState *machine)
             cdj_count_irq(cdj_intc.irqs[CDJ_DMAC0A_DEI3], "DMAC0A DEI3"),
         };
 
-        cdj_dmac_init(sysmem, dei);
+        cdj2000nxs2_dmac(sysmem, dei);
     }
     cdj_spilink_init();
     cdj_dirty_init();
@@ -331,28 +281,7 @@ static void cdj2000nxs2_init(MachineState *machine)
         cdj_unimp("sh7724.scif2", CDJ_SCIF2_ADDR, 0x1000);
     }
 
-    if (!machine->kernel_filename) {
-        error_report("cdj2000nxs2: pass the decompressed MAIN image with "
-                     "-kernel main_unpacked.bin");
-        exit(1);
-    }
-
-    /* Flat binary, not an ELF. */
-    fwsize = load_image_targphys(machine->kernel_filename,
-                                 CDJ_DRAM_PHYS, CDJ_DRAM_SIZE);
-    if (fwsize < 0) {
-        error_report("cdj2000nxs2: cannot load '%s'", machine->kernel_filename);
-        exit(1);
-    }
-    info_report("cdj2000nxs2: %zd bytes at 0x%08x, entry 0x%08x, sp 0x%08x",
-                fwsize, CDJ_DRAM_PHYS, CDJ_FW_ENTRY, CDJ_INIT_SP);
-
-    /* Seed the RTOS's SR save slot (see CDJ_SR_SAVE_SLOT). Done after the
-     * image load so the image cannot overwrite it. */
-    {
-        uint32_t sr_seed = cpu_to_le32(CDJ_SR_SEED);
-        cpu_physical_memory_write(CDJ_SR_SAVE_SLOT, &sr_seed, sizeof(sr_seed));
-    }
+    cdj_board_load(machine);
 
     if (getenv("CDJ_IVT_WATCH")) {
         cdj_ivtw_init(sysmem);
@@ -373,13 +302,7 @@ static void cdj2000nxs2_init(MachineState *machine)
     cdj_console_exit.notify = cdj_console_dump;
     qemu_add_exit_notifier(&cdj_console_exit);
 
-    /* PC/SP are applied on reset; setting env->pc here would be overwritten
-     * by the CPU's own reset. */
-    reset_info = g_new0(CdjResetData, 1);
-    reset_info->cpu = cpu;
-    reset_info->pc = CDJ_FW_ENTRY;
-    reset_info->sp = CDJ_INIT_SP;
-    qemu_register_reset(cdj_cpu_reset, reset_info);
+    cdj_board_start(cpu);
 }
 
 static void cdj2000nxs2_machine_init(MachineClass *mc)

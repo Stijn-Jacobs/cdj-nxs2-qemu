@@ -9,6 +9,14 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HERE/../cdj_paths.sh"; PROJ="$CDJ_ROOT"
+# The model (CDJ_MODEL, default cdj2000nxs2) names both machines and the folder
+# its images are in. This launcher needs a GUI board; a model still in
+# bring-up boots its MAIN board alone with boot_main.sh.
+. "$HERE/../cdj_model.sh"; cdj_model_load || exit 1
+if [ -z "${MODEL_GUI_MACHINE:-}" ]; then
+    echo "boot_deck.sh: $MODEL_TITLE has no GUI board yet; use scripts/run/boot_main.sh" >&2
+    exit 1
+fi
 TAG="${1:?usage: boot_deck.sh <tag> [seconds]}"
 DUR="${2:-60}"
 
@@ -246,7 +254,7 @@ AUDIO_ARGS=""
 NET_ARGS=""
 [ -n "${CDJ_NETDEV:-}" ] && NET_ARGS="-netdev $CDJ_NETDEV"
 
-"$MAIN_QEMU" -M cdj2000nxs2 -kernel "$PROJ_NATIVE/extract/main_unpacked.bin" \
+"$MAIN_QEMU" -M "$MODEL_MAIN_MACHINE" -kernel "$PROJ_NATIVE/$MODEL_EXTRACT/main_unpacked.bin" \
     -drive if=pflash,format=raw,file="$FLASH_FILE",$FLASH_SNAP \
     $MEDIA_ARGS \
     -chardev "socket,id=spilink,path=$SOCK,server=on,wait=off" \
@@ -302,7 +310,7 @@ case "$GUI_DISPLAY_ARG" in
     none | *show-cursor=*) ;;
     *) GUI_DISPLAY_ARG="$GUI_DISPLAY_ARG,show-cursor=on" ;;
 esac
-"$GUI_QEMU" -M sh7269gui -kernel "$PROJ_NATIVE/extract/gui_unpacked.bin" \
+"$GUI_QEMU" -M "$MODEL_GUI_MACHINE" -kernel "$PROJ_NATIVE/$MODEL_EXTRACT/gui_unpacked.bin" \
     -chardev "socket,id=spilink,path=$SOCK" \
     -display "$GUI_DISPLAY_ARG" -serial null \
     -monitor "$MON_ARG" \

@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "../cdj.h"
-#include "../cdj_getenv.h"
+#include "cdj_getenv.h"
 /*
  * Stand-in display drivers on the MAIN -> GUI link (DMA0 ch0), from before the
  * real DSP was emulated. All off by default. Each patches the deck-state frame

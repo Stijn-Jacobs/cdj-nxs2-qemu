@@ -1,8 +1,8 @@
 diff --git a/hw/intc/sh_intc.c b/hw/intc/sh_intc.c
-index c9b0b0c..e6db648 100644
+index c9b0b0c..2082951 100644
 --- a/hw/intc/sh_intc.c
 +++ b/hw/intc/sh_intc.c
-@@ -77,26 +77,133 @@ static void sh_intc_set_irq(void *opaque, int n, int level)
+@@ -77,26 +77,138 @@ static void sh_intc_set_irq(void *opaque, int n, int level)
      }
  }
  
@@ -17,6 +17,11 @@ index c9b0b0c..e6db648 100644
 +    intc_enum cur = desc->sources[head].next_enum_id;
 +    int steps;
 +
++    /* A group's members are chained through next_enum_id as well, so the
++     * rest of a member's chain is its siblings, not its members. */
++    if (desc->sources[head].vect) {
++        return false;
++    }
 +    for (steps = 0; cur && steps < desc->nr_sources; steps++) {
 +        if (cur == id) {
 +            return true;

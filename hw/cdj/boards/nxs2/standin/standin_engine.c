@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "../cdj.h"
-#include "../cdj_getenv.h"
+#include "cdj_getenv.h"
 /*
  * Behavioural DSP stand-in, from before the real C6655 was emulated. Every knob
  * here is off by default.

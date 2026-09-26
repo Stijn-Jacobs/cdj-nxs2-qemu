@@ -1,16 +1,17 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
-#include "cdj.h"
+#include "cdj_common.h"
 #include "cdj_getenv.h"
 /* ---------------------------------------------------------------------------
- * SH DMAC0 (0xFE008000).
+ * The SH-4A DMAC, shared by the SH7724 (DMAC0 at 0xFE008000) and the SH7763
+ * (0xFF608000): the same register block at a different base.
  *
  * Per channel: +0x00 SAR, +0x04 DAR, +0x08 TCR, +0x0C CHCR.
  * CHCR bit 0 = DE (start), bit 1 = TE (transfer end), bit 2 = IE.
  *
- * The firmware's memcpy uses DMA for 16 bytes and up and polls TE. Transfers
- * run synchronously; channels tied to a USB FIFO wait for its DREQ.
+ * The firmware uses DMA as its memcpy and polls TE, so transfers run
+ * synchronously. Channels with an end fixed on the board's DREQ window (its
+ * USB FIFO) wait for the peripheral's request instead.
  */
-#define CDJ_DMAC_BASE   0xFE008000
 #define CDJ_DMAC_SIZE   0x2000
 #define DMAC_UNIT       16
 
@@ -31,6 +32,7 @@ typedef struct CdjDmacState {
      * one bit per register block. */
     uint32_t dreq_pending;
     QEMUBH *dreq_bh;
+    hwaddr dreq_base, dreq_size;    /* the FIFO window, size 0 = none */
     Notifier exit;
     uint32_t nread[CDJ_DMAC_SIZE / 4];
     uint32_t reg[CDJ_DMAC_SIZE / 4];
@@ -116,19 +118,18 @@ static unsigned cdj_dmac_unit(uint32_t chcr)
     }
 }
 
-/* A channel with either end fixed on the USB FIFO window is DREQ-driven: it
- * runs when the USB module requests it, not when CHCR.DE is written. The
+/* A channel with either end fixed on the DREQ window is DREQ-driven: it
+ * runs when the peripheral requests it, not when CHCR.DE is written. The USB
  * driver arms DE before selecting the pipe (D0FIFOSEL), so running it early
  * would move data through the wrong pipe. */
-static bool cdj_dmac_waits_for_dreq(uint32_t sar, unsigned sm,
+static bool cdj_dmac_waits_for_dreq(CdjDmacState *s, uint32_t sar, unsigned sm,
                                     uint32_t dar, unsigned dm)
 {
-    bool src = sm == 0 && (A7ADDR(sar) & ~(uint32_t)(CDJ_USB_SIZE - 1))
-                          == CDJ_USB_BASE;
-    bool dst = dm == 0 && (A7ADDR(dar) & ~(uint32_t)(CDJ_USB_SIZE - 1))
-                          == CDJ_USB_BASE;
+    hwaddr mask = ~(s->dreq_size - 1);
+    bool src = sm == 0 && (A7ADDR(sar) & mask) == s->dreq_base;
+    bool dst = dm == 0 && (A7ADDR(dar) & mask) == s->dreq_base;
 
-    return src || dst;
+    return s->dreq_size && (src || dst);
 }
 
 static void cdj_dmac_run(CdjDmacState *s, hwaddr chan, bool from_dreq)
@@ -154,7 +155,7 @@ static void cdj_dmac_run(CdjDmacState *s, hwaddr chan, bool from_dreq)
                     chcr, (((chcr >> 20) & 3) << 2) | ((chcr >> 3) & 3),
                     (chcr >> 12) & 3, (chcr >> 14) & 3);
     }
-    if (!from_dreq && cdj_dmac_waits_for_dreq(sar, sm, dar, dm)) {
+    if (!from_dreq && cdj_dmac_waits_for_dreq(s, sar, sm, dar, dm)) {
         s->dreq_pending |= 1u << (chan / 16);
         return;                                 /* TE stays clear: not done yet */
     }
@@ -336,34 +337,20 @@ static void cdj_dmac_dump(Notifier *n, void *unused)
     }
 }
 
-/* dei carries the four DMAC0A DEI lines, or NULL entries for no interrupts. */
-void cdj_dmac_init(MemoryRegion *sysmem, qemu_irq *dei)
+/* dei[] gives the first four channels' DEI lines, a NULL line leaving that
+ * channel without an interrupt, and a raise cap per line (0 = unlimited).
+ * Which lines a board connects is its own policy. */
+void cdj_dmac_init(MemoryRegion *sysmem, const char *name, hwaddr base,
+                   hwaddr dreq_base, hwaddr dreq_size, const CdjDmacDei *dei)
 {
     CdjDmacState *s = g_new0(CdjDmacState, 1);
     unsigned i;
 
+    s->dreq_base = dreq_base;
+    s->dreq_size = dreq_size;
     for (i = 0; i < ARRAY_SIZE(s->dei); i++) {
-        /* Connected lines (CDJ_DMAC_DEI=0 disconnects all):
-         *   DEI0  USB D0FIFO drain, waited on at 0x08235952.
-         *   DEI1  panel receive (40-byte report from SCFRDR2 into 0xA9000000);
-         *         its ISR 0x083EB080 wakes PnlCom_RcvTASK. On with the panel.
-         *   DEI2  panel transmit; its ISR 0x083EB012 only clears CHCR_2, so it
-         *         is off unless CDJ_PANEL_DEI2=1.
-         * CDJ_DMAC_DEI_ALL=1 connects all four. Delivery relies on the sh_intc
-         * priority-group fix in patches/. */
-        const char *off = getenv("CDJ_DMAC_DEI");
-        const char *cap = getenv("CDJ_PANEL_MAX_IRQ");
-        bool want = i == 0
-                 || (i == 1 && cdj_pnl_enabled())
-                 || (i == 2 && getenv("CDJ_PANEL_DEI2"))
-                 || getenv("CDJ_DMAC_DEI_ALL");
-
-        s->dei[i] = (dei && want && !(off && !strcmp(off, "0"))) ? dei[i] : NULL;
-        if (i == 1 || i == 2) {
-            /* The panel exchanges ~200 frames/s, so the default cap is about
-             * 15 minutes; CDJ_PANEL_MAX_IRQ overrides it. */
-            s->dei_max[i] = cap ? (unsigned)strtoul(cap, NULL, 0) : 200000;
-        }
+        s->dei[i] = dei ? dei[i].irq : NULL;
+        s->dei_max[i] = dei ? dei[i].max : 0;
         if (s->dei[i]) {
             s->dei_bh[i] = qemu_bh_new(cdj_dmac_dei_raise, &s->dei[i]);
             s->dei_timer[i] = timer_new_ns(QEMU_CLOCK_VIRTUAL,
@@ -371,11 +358,10 @@ void cdj_dmac_init(MemoryRegion *sysmem, qemu_irq *dei)
         }
     }
     memory_region_init_io(&s->iomem, NULL, &cdj_dmac_ops, s,
-                          "sh7724.dmac", CDJ_DMAC_SIZE);
-    memory_region_add_subregion(sysmem, CDJ_DMAC_BASE, &s->iomem);
+                          name, CDJ_DMAC_SIZE);
+    memory_region_add_subregion(sysmem, base, &s->iomem);
     s->dreq_bh = qemu_bh_new(cdj_dmac_dreq_run, s);
     s->exit.notify = cdj_dmac_dump;
     qemu_add_exit_notifier(&s->exit);
     cdj_dmac = s;
 }
-

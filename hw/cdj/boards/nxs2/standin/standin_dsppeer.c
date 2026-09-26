@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "../cdj.h"
-#include "../cdj_getenv.h"
+#include "cdj_getenv.h"
 /*
  * Stand-in DSP peer on MSIOF0, from before the real C6655 was emulated.
  * CDJ_DSP_LINK=1 enables it; off by default.

@@ -12,7 +12,7 @@ mappings/<controller>.json unless --mapping says otherwise. profiles.py says
 what each file holds; learn.py makes both for a new controller.
 
 The bridge reads MIDI and decides what it means; midi_relay.py turns each
-decision into a panel key datagram for the machine (hw/cdj/cdj_panelkeys.h).
+decision into a panel key datagram for the machine (hw/cdj/common/cdj_panelkeys.h).
 The seam is one line of text per press:
 
     <tag> <off>:<val>:<dur_ms>:<op>        e.g.  show1 0x14:1:150:or

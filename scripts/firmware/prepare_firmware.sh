@@ -1,24 +1,30 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-2.0-or-later
 #
-# Turn Pioneer's public CDJ-2000NXS2 v1.87 update (C2KNXS2.UPD) into the six
-# images the rig reads, and prove each one against its known SHA-256.
+# Turn one of Pioneer's public firmware updates into the images the emulator
+# reads, and prove each one against its known SHA-256. What the update is, how
+# it unpacks and what comes out are in the model's profile (models/<id>.conf);
+# the default model is the CDJ-2000NXS2 v1.87 (C2KNXS2.UPD).
 #
-# Only the update file is needed, never a device dump.
+# Only the update is needed, never a device dump.
 #
 # By default everything is written to a NEW directory and nothing in the
 # repository is touched. The output mirrors the repository layout:
 #
-#   <outdir>/extract/{main_unpacked,gui_unpacked,flash,settings,resblob,artblob}.bin
-#   <outdir>/extract/section*.bin ...   intermediates
-#   <outdir>/log/<step>.log             each tool's own output
+#   <outdir>/extract/<image>.bin       the verified images
+#   <outdir>/extract/section*.bin ...  intermediates
+#   <outdir>/log/<step>.log            each tool's own output
 #
-# --install then copies the six verified images into the repository's
-# extract/. It refuses if any of them already exists, unless
-# --force is also given, and it installs nothing unless every image passed.
+# --install then copies the verified images into the model's folder in the
+# repository (extract/ for the CDJ-2000NXS2, extract/<model>/ for the others).
+# It refuses if any of them already exists, unless --force is also given, and
+# it installs nothing unless every image passed.
 #
-#   usage: scripts/firmware/prepare_firmware.sh [--install [--force]] <C2KNXS2.UPD> [outdir]
+#   usage: scripts/firmware/prepare_firmware.sh [--model <id>] [--install [--force]] <update> [outdir]
 #
+#   update     the .UPD file, or for a model whose update is several files
+#              (the CDJ-2000) the folder holding them
+#   --model    a profile in models/ (default: $CDJ_MODEL, else cdj2000nxs2)
 #   outdir     must not exist yet, or be empty; default: a new mktemp dir.
 #              It may not lie inside the repository -- use --install for
 #              that.
@@ -30,20 +36,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HERE/../cdj_paths.sh"; REPO="$CDJ_ROOT"
-
-# The supported update. Every firmware address in this project is for v1.87.
-UPD_SHA256=f211191a573b7a5c0e694936871f76011a58d5861dd061301cdb0d8b83a8b3e5
-
-# Output path relative to <outdir> -> expected SHA-256. settings.bin is the
-# settings block flash.bin is built from.
-EXPECTED=(
-    "extract/main_unpacked.bin 78182ce6e552ff4ba65c8c845a62317cecbec86c35e312c6ac9e9af9796a2076"
-    "extract/gui_unpacked.bin  20b52af38f29b2a59255e1ce4238cab896f28edca2ad5707650a8c8bb9d0457e"
-    "extract/flash.bin         c52253efd5e926968b892fcf1b762279f7f2119bc89426280e90d301ce8ee203"
-    "extract/resblob.bin         cb61896e8d6b3d3fe317e2af14a05c5729593beb084d0e53b98968181272d768"
-    "extract/artblob.bin         929372309ea24f8d30255876ad46f7b684470009a3b022eed03179db3d4161a7"
-    "extract/settings.bin      73af511542c0637da543f6bfec8513cf92befe0053552471411bb4e31854b56d"
-)
+. "$HERE/../cdj_model.sh"
 
 die() { echo "prepare_firmware: $*" >&2; exit 1; }
 
@@ -51,22 +44,45 @@ usage() { sed -n '/^#   usage:/,/^# Exit status/p' "${BASH_SOURCE[0]}" | sed 's/
 
 INSTALL=0
 FORCE=0
+MODEL="${CDJ_MODEL:-cdj2000nxs2}"
 ARGS=()
-for a in "$@"; do
-    case "$a" in
+while [ "$#" -gt 0 ]; do
+    case "$1" in
         --install) INSTALL=1 ;;
         --force)   FORCE=1 ;;
+        --model)   [ "$#" -ge 2 ] || die "--model needs a model id"; MODEL="$2"; shift ;;
         -h|--help) usage ;;
-        -*)        die "unknown option $a" ;;
-        *)         ARGS+=("$a") ;;
+        -*)        die "unknown option $1" ;;
+        *)         ARGS+=("$1") ;;
     esac
+    shift
 done
 [ "${#ARGS[@]}" -ge 1 ] && [ "${#ARGS[@]}" -le 2 ] || usage
 [ "$FORCE" = 1 ] && [ "$INSTALL" = 0 ] && die "--force only means something with --install"
+cdj_model_load "$MODEL" || exit 1
 
-UPD="${ARGS[0]}"
-[ -f "$UPD" ] || die "no such file: $UPD"
-UPD="$(cd "$(dirname "$UPD")" && pwd)/$(basename "$UPD")"
+# The update files, in section order. A one-file update is a container that
+# split_update.py carves; a several-file update already is one file per section.
+read -r -a UPD_NAMES <<<"$MODEL_UPD"
+read -r -a UPD_SUMS <<<"$MODEL_UPD_SHA256"
+[ "${#UPD_NAMES[@]}" = "${#UPD_SUMS[@]}" ] \
+    || die "models/$MODEL.conf: MODEL_UPD and MODEL_UPD_SHA256 differ in length"
+SRC="${ARGS[0]}"
+[ -e "$SRC" ] || die "no such file or folder: $SRC"
+if [ -d "$SRC" ]; then
+    UPD_DIR="$(cd "$SRC" && pwd)"
+else
+    [ "${#UPD_NAMES[@]}" = 1 ] || UPD_DIR="$(cd "$(dirname "$SRC")" && pwd)"
+fi
+UPD_FILES=()
+if [ "${#UPD_NAMES[@]}" = 1 ] && [ -f "$SRC" ]; then
+    UPD_FILES=("$(cd "$(dirname "$SRC")" && pwd)/$(basename "$SRC")")
+else
+    for n in "${UPD_NAMES[@]}"; do
+        [ -f "$UPD_DIR/$n" ] || die "$MODEL_TITLE needs $n next to the other update files in $UPD_DIR"
+        UPD_FILES+=("$UPD_DIR/$n")
+    done
+fi
 
 # A bare `python3` on Windows can be the Microsoft Store stub, which exists on
 # PATH but cannot run anything, so probe by running rather than by `command -v`.
@@ -99,11 +115,13 @@ canon() {
     echo "$(cd "$d" && pwd -P)$tail"
 }
 
-got="$(sha256 "$UPD")"
-if [ "$got" != "$UPD_SHA256" ]; then
-    die "$UPD is not the v1.87 update (sha256 $got, want $UPD_SHA256).
-Only v1.87 is supported: every address in the model and the harness is for it."
-fi
+for i in "${!UPD_FILES[@]}"; do
+    got="$(sha256 "${UPD_FILES[$i]}")"
+    if [ "$got" != "${UPD_SUMS[$i]}" ]; then
+        die "${UPD_FILES[$i]} is not the $MODEL_TITLE v$MODEL_FW_VERSION update (sha256 $got, want ${UPD_SUMS[$i]}).
+Only v$MODEL_FW_VERSION is supported: every address in the model and the harness is for it."
+    fi
+done
 
 if [ "${#ARGS[@]}" -eq 2 ]; then
     OUT="${ARGS[1]}"
@@ -124,9 +142,10 @@ OUT="$(cd "$OUT" && pwd)"
 mkdir -p "$OUT/extract" "$OUT/notes" "$OUT/log"
 
 echo "python : $("$PY" --version 2>&1) ($PY)"
-echo "update : $UPD"
+echo "model  : $MODEL_TITLE ($MODEL)"
+for f in "${UPD_FILES[@]}"; do echo "update : $f"; done
 echo "outdir : $OUT"
-echo "update : sha256 ok (v1.87)"
+echo "update : sha256 ok (v$MODEL_FW_VERSION)"
 echo
 
 # Each tool runs with <outdir> as its working directory, because gui_decode,
@@ -138,7 +157,7 @@ step() {
     local name="$1"; shift
     printf '  %-14s ' "$name"
     local t0=$SECONDS
-    if (cd "$OUT" && "$PY" "$@") >"$OUT/log/$name.log" 2>&1; then
+    if (cd "$OUT" && "$@") >"$OUT/log/$name.log" 2>&1; then
         echo "done ($((SECONDS - t0)) s)"
     else
         echo "FAILED -- see $OUT/log/$name.log"
@@ -147,16 +166,38 @@ step() {
     fi
 }
 
+# extract/section<N>.bin, one per section, from the container or the files.
+sections() {
+    if [ "${#UPD_FILES[@]}" = 1 ]; then
+        "$PY" "$HERE/split_update.py" "${UPD_FILES[0]}" extract
+    else
+        local i
+        for i in "${!UPD_FILES[@]}"; do
+            cp "${UPD_FILES[$i]}" "extract/section$((i + 1)).bin"
+            echo "section$((i + 1)).bin <- $(basename "${UPD_FILES[$i]}")"
+        done
+    fi
+}
+
+MAIN_SEC="extract/section$MODEL_MAIN_SECTION"
+GUI_SEC="extract/section${MODEL_GUI_SECTION:-1}"
 echo "steps:"
-step split_update   "$HERE/split_update.py"   "$UPD" extract
-step srec_coverage  "$HERE/srec_coverage.py"  extract/section3.bin
-step lzss_decode    "$HERE/lzss_decode.py"    extract/section3.sparse.bin 0x50004
-step gui_decode     "$HERE/gui_decode.py"     extract/section1.bin extract/gui_unpacked.bin
-step gui_resources  "$HERE/gui_resources.py"  extract/resblob.bin
-step gui_artwork    "$HERE/gui_artwork.py"    extract/artblob.bin
-step make_settings  "$HERE/make_settings.py"  extract/settings.bin
-step make_flash     "$HERE/make_flash.py"     extract/flash.bin extract/settings.bin
+for s in $MODEL_FW_STEPS; do
+    case "$s" in
+        sections)      step sections      sections ;;
+        srec_coverage) step srec_coverage "$PY" "$HERE/srec_coverage.py" "$MAIN_SEC.bin" ;;
+        lzss_decode)   step lzss_decode   "$PY" "$HERE/lzss_decode.py" "$MAIN_SEC.sparse.bin" "$MODEL_MAIN_LZSS" ;;
+        gui_decode)    step gui_decode    "$PY" "$HERE/gui_decode.py" "$GUI_SEC.bin" extract/gui_unpacked.bin ;;
+        gui_resources) step gui_resources "$PY" "$HERE/gui_resources.py" extract/resblob.bin ;;
+        gui_artwork)   step gui_artwork   "$PY" "$HERE/gui_artwork.py" extract/artblob.bin ;;
+        make_settings) step make_settings "$PY" "$HERE/make_settings.py" extract/settings.bin ;;
+        make_flash)    step make_flash    "$PY" "$HERE/make_flash.py" extract/flash.bin extract/settings.bin ;;
+        *)             die "models/$MODEL.conf: unknown step '$s'" ;;
+    esac
+done
 echo
+
+mapfile -t EXPECTED < <(printf '%s\n' "$MODEL_EXPECTED" | sed '/^[[:space:]]*$/d')
 
 echo "verify:"
 FAIL=0
@@ -180,25 +221,26 @@ if [ "$FAIL" != 0 ]; then
 fi
 
 if [ "$INSTALL" = 0 ]; then
-    echo "all images match. To use them:  $0 --install $UPD"
-    echo "(or copy the six images from $OUT/extract/ into the repository's extract/ by hand)"
+    echo "all images match. To use them:  $0 --model $MODEL --install ${ARGS[0]}"
+    echo "(or copy the images from $OUT/extract/ into the repository's $MODEL_EXTRACT/ by hand)"
     exit 0
 fi
 
 # Check every destination before copying anything, so a refusal leaves the
 # repository exactly as it was.
+dest() { printf '%s/%s/%s' "$REPO" "$MODEL_EXTRACT" "${1#extract/}"; }
 if [ "$FORCE" = 0 ]; then
     clash=""
     for entry in "${EXPECTED[@]}"; do
         read -r rel _ <<<"$entry"
-        [ -e "$REPO/$rel" ] && clash="$clash $rel"
+        [ -e "$(dest "$rel")" ] && clash="$clash $MODEL_EXTRACT/${rel#extract/}"
     done
     [ -z "$clash" ] || die "refusing to overwrite:$clash (add --force to replace them)"
 fi
 
-mkdir -p "$REPO/extract" "$REPO/notes"
+mkdir -p "$REPO/$MODEL_EXTRACT" "$REPO/notes"
 for entry in "${EXPECTED[@]}"; do
     read -r rel _ <<<"$entry"
-    cp "$OUT/$rel" "$REPO/$rel"
-    echo "installed $rel"
+    cp "$OUT/$rel" "$(dest "$rel")"
+    echo "installed $MODEL_EXTRACT/${rel#extract/}"
 done

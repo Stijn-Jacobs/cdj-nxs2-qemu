@@ -1,8 +1,10 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
-/* Shared declarations for the CDJ-2000NXS2 board model. */
+/* Shared declarations for the CDJ-2000NXS2 board model. What every board
+ * shares is in common/cdj_common.h. */
 #ifndef CDJ_H
 #define CDJ_H
 #include "qemu/osdep.h"
+#include "cdj_common.h"
 #include "qemu/units.h"
 #include "qemu/error-report.h"
 #include "qemu/log.h"
@@ -45,9 +47,6 @@
 #include <psapi.h>
 #endif
 
-/* Strip the SH-4 segment bits to get the physical address, as sh7750.c does. */
-#define A7ADDR(x) ((x) & 0x1fffffff)
-
 /* USB 2.0 host module; the DMAC needs it to recognise its FIFO ports. */
 #define CDJ_USB_BASE 0x04D80000
 #define CDJ_USB_SIZE 0x1000
@@ -69,8 +68,8 @@
 #include "audio/audio.h"
 
 /* Entry is image offset 0x800 (from the decompressor stub's literal pool).
- * With VBR at the image base: +0x100 general exception, +0x400 interrupt,
- * +0x600 TLB miss, +0x800 _start. */
+ * With VBR at the image base: +0x100 general exception, +0x400 TLB miss,
+ * +0x600 interrupt, +0x800 _start. */
 #define CDJ_FW_ENTRY        0xA8000800   /* P2 | (DRAM base + 0x800) */
 #define CDJ_INIT_SP         0xB8000000   /* value the real bootloader loads */
 
@@ -519,11 +518,7 @@ enum {
     CDJ_INTC_NR_SOURCES
 };
 
-const char *cdj_getenv(const char *name);
 bool cdj_pnl_enabled(void);
-extern unsigned cdj_reset_count;
-void cdj_dmac_dreq(void);
-void cdj_dmac_init(MemoryRegion *sysmem, qemu_irq *dei);
 void cdj_dirty_init(void);
 void cdj_spilink_init(void);
 extern CdjDspEng cdj_dsp_eng;
@@ -606,16 +601,8 @@ void cdj_hpb_probe_init(MemoryRegion *sysmem);
 extern struct intc_desc cdj_intc;
 void cdj_intc_init(MemoryRegion *sysmem, SuperHCPU *cpu);
 void cdj_irq5_probe_init(void);
-extern Notifier cdj_irqcount_exit;
-qemu_irq cdj_count_irq(qemu_irq target, const char *name);
-void cdj_irqcount_dump(Notifier *n, void *opaque);
-void cdj_irq_sink(void *opaque, int n, int level);
-void cdj_tmu_init(MemoryRegion *sysmem, hwaddr base,
-                         qemu_irq ch0, qemu_irq ch1, qemu_irq ch2);
-void cdj_scif(MemoryRegion *sysmem, const char *id,
-                     hwaddr addr, Chardev *chr);
+void cdj_intc_exit_report(void);
 void cdj_panel_init(void);
-void cdj_ccn_init(MemoryRegion *sysmem, SuperHCPU *cpu);
 void cdj_probe(MemoryRegion *sysmem, const char *name,
                       hwaddr base, hwaddr size);
 void cdj_ivtw_init(MemoryRegion *sysmem);

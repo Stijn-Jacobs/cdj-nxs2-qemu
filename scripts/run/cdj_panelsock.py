@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""The host end of the panel side channel (the peer of hw/cdj/cdj_panelkeys.h).
+"""The host end of the panel side channel (the peer of hw/cdj/common/cdj_panelkeys.h).
 
 The panel key and panel state channels are UDP on 127.0.0.1, because Windows
 has no datagram AF_UNIX. CDJ_PANEL_KEYSOCK and CDJ_PANEL_STATESOCK still hold a
@@ -7,7 +7,7 @@ path-like name ("/tmp/cdj-panel-keys-show1.sock"); port_for() hashes it, so two
 tags get two ports. A name ending in ":<port>", or a bare number, sets the port
 outright.
 
-port_for() must agree with cdj_panelsock_port() in hw/cdj/cdj_panelkeys.h; the
+port_for() must agree with cdj_panelsock_port() in hw/cdj/common/cdj_panelkeys.h; the
 two processes only meet on this number.
 """
 
