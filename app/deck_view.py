@@ -408,7 +408,7 @@ class DeckView:
                     "·  wheel to nudge")
         elif L.SLIDER_FRAME[0] <= x <= L.SLIDER_FRAME[2] and \
                 L.SLIDER_FRAME[1] <= y <= L.SLIDER_FRAME[3]:
-            text = "Tempo  ·  " + C.describe_action("tempo")
+            text = "Tempo  ·  drag to move the slider"
         else:
             key = next((k for k in L.KEYS if k.hit(x, y)), None)
             text = C.describe(key) if key else ""

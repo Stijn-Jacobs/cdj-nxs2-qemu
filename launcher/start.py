@@ -123,6 +123,20 @@ def main(argv):
         if env["RELAY_PORT"] != str(want):
             say("TCP %s is reserved or in use here; the controller relay uses %s instead" % (
                 want, env["RELAY_PORT"]))
+    # This is now the port every consumer gets told (below, and live.py's own
+    # spawn of the relay): live.py must not re-pick on its own, or a port that
+    # drifted between the two checks reaches the app/bridge but not the relay
+    # that actually bound (RELAY_PORT_FIXED tells it this one is already good).
+    env["RELAY_PORT_FIXED"] = "1"
+    # rig.py only warns about Pro DJ Link's own UDP port (it is equality-tested
+    # against master's rig.sh, which does the same); steer it here instead, the
+    # way setup.sh already does once at setup time.
+    if host.is_windows() and env["DJLINK"] == "1":
+        host_ip, _, gport = env["GROUP"].rpartition(":")
+        fixed = host.pick_udp_port(int(gport))
+        if fixed != int(gport):
+            say("UDP %s is reserved by Windows; Pro DJ Link uses %d instead" % (gport, fixed))
+            env["GROUP"] = "%s:%d" % (host_ip, fixed)
     if c["CDJ_AUDIO"] != "1":
         env["NOSOUND"] = "1"
     # One frame of 24 hours: the rig lives until Ctrl-C and writes nothing per frame.

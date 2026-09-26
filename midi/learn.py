@@ -434,9 +434,9 @@ def print_actions():
     rows = cdj_actions.catalogue()
     order = {cdj_actions.CONFIRMED: 0, cdj_actions.PARTIAL: 1,
              cdj_actions.DECODED: 2, cdj_actions.GUESS: 3, cdj_actions.UNBOUND: 4}
-    print(f"{'action':<18} {'kind':<9} {'report':<16} {'status':<10} note")
-    for name, kind, where, status, note in sorted(rows, key=lambda r: (order[r[3]], r[0])):
-        print(f"{name:<18} {kind:<9} {where:<16} {status:<10} {note[:60]}")
+    print(f"{'action':<18} {'kind':<9} {'report':<16} status")
+    for name, kind, where, status in sorted(rows, key=lambda r: (order[r[3]], r[0])):
+        print(f"{name:<18} {kind:<9} {where:<16} {status}")
     print("\nconfirmed = seen working here; partial = does something; decoded = the "
           "firmware reads it, never pressed here;\nguess = unverified raw bit; "
           "unbound = nothing to send. Any key_0xOFF_0xMASK, level_0xOFF or "

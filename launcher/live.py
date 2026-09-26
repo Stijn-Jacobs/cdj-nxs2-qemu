@@ -25,10 +25,13 @@ def main(argv, linked=False):
     lay = Layout()
     env = dict(os.environ)
     port = nonempty(env, "RELAY_PORT", "7202")
-    # start.py already steers this clear of a reserved range, but live.sh is
-    # also run directly (developers, the equality harness); check here too,
-    # since the range Windows reserves changes on every boot.
-    if host.is_windows():
+    # start.py already steers this clear of a reserved range and tells the
+    # app and the bridge the port it picked (RELAY_PORT_FIXED): re-picking
+    # here too, independently, could steer the relay itself onto a different
+    # port than the one they were given. live.sh is also run directly
+    # (developers, the equality harness) with no such guarantee, so it still
+    # gets its own check, since the range Windows reserves changes on every boot.
+    if host.is_windows() and env.get("RELAY_PORT_FIXED") != "1":
         chosen = host.pick_tcp_port(int(port))
         if str(chosen) != port:
             chain.say("[%s] TCP %s is reserved or in use here; the relay uses %d instead" % (tag, port, chosen))
@@ -39,8 +42,16 @@ def main(argv, linked=False):
         chain.say("[%s] %d deck(s); DJ-202 relay on 127.0.0.1:%s; Pro DJ Link on %s" % (tag, n, port, env["GROUP"]))
         chain.say("[%s] on WINDOWS, once the deck windows are up:" % tag)
         chain.say("[%s]     python -u midi\\bridge.py --relay 127.0.0.1:%s" % (tag, port))
+    # midi_relay.py's own default is the literal string "/tmp/...", which
+    # boot_deck.py's CDJ_PANEL_KEYSOCK (built from lay.tmp) only matches on a
+    # platform where lay.tmp IS "/tmp" verbatim. On Windows lay.tmp is already
+    # resolved to a native path (cygpath's, or the OS temp dir), so the relay
+    # has to be told it explicitly or it binds a socket nothing ever reaches --
+    # the deck stays "Starting up" and its panel keys go nowhere.
     helpers = [subprocess.Popen(host.python_argv() + [os.path.join(lay.run, "midi_relay.py"), "--tags", tags,
-                                                      "--port", port])]
+                                                      "--port", port,
+                                                      "--socket-pattern", "%s/cdj-panel-keys-<tag>.sock" % lay.tmp,
+                                                      "--state-pattern", "%s/cdj-panel-state-<tag>.sock" % lay.tmp])]
     pcap = os.path.join(lay.tmp, "j2-%s.pcap" % tag)
     if linked and env.get("SNIFF") == "1":
         with open(os.path.join(lay.tmp, "j2-%s.sniff" % tag), "wb") as log:

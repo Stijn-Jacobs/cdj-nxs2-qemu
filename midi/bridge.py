@@ -174,8 +174,8 @@ class Bridge:
         """An unbound action: say why once, then stay out of the way."""
         if not binding.warned:
             binding.warned = True
-            print(f"  {binding.name} -> {binding.action_name}: NOT SENT. "
-                  f"{binding.action.note}")
+            print(f"  {binding.name} -> {binding.action_name}: NOT SENT, "
+                  f"no report bit is known for it")
         return True
 
     def _fire(self, binding, value=1, dur_ms=None, datagram=None):
@@ -192,10 +192,10 @@ class Bridge:
                 caveat = "  [UNVERIFIED map]"
             elif binding.action.status == cdj_actions.DECODED and not binding.warned:
                 binding.warned = True
-                caveat = f"  [decoder name only, never pressed here: {binding.action.note}]"
+                caveat = "  [decoder name only, never pressed here]"
             elif binding.action.status == cdj_actions.PARTIAL and not binding.warned:
                 binding.warned = True
-                caveat = f"  [{binding.action.note}]"
+                caveat = "  [partial: does something, but not the thing its name implies]"
             print(f"{binding.name:<20} -> {deck}/{binding.action_name:<12} "
                   f"{datagram}{caveat}")
         return True

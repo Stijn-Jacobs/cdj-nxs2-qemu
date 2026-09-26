@@ -37,34 +37,11 @@ def look_for(action_name):
     return INERT
 
 
-def describe_action(action_name):
-    """An action's name, evidence status and note, for the status bar."""
-    a = A.resolve(action_name)
-    note = f" -- {a.note}" if a.note else ""
-    return f"{a.name} ({a.status}){note}"
-
-
-# How sure a control is, in the words the status strip uses; a confirmed
-# control says nothing about it.
-_SURENESS = {A.PARTIAL: "partly working", A.DECODED: "not yet tried on a deck",
-             A.GUESS: "a guess", A.UNBOUND: "not connected"}
-
-
 def describe(key):
-    """One line for the status strip: the control, its key, and how sure we
-    are when that is less than confirmed."""
+    """One line for the status strip: the control and its keyboard key."""
     parts = [key.name.replace("_", " ").capitalize()]
     if key.keycap:
         parts.append(f"key {key.keycap}")
-    if not key.action:
-        parts.append("not modelled yet")
-    else:
-        a = A.resolve(key.action)
-        sure = _SURENESS.get(a.status)
-        # A partial control's note says what it does and does not do; the
-        # others' notes are only the firmware's name for the bit.
-        if sure:
-            parts.append(f"{sure}: {a.note}" if a.note and a.status == A.PARTIAL else sure)
     return "  ·  ".join(parts)
 
 

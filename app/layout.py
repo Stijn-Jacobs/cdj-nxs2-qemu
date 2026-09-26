@@ -11,7 +11,7 @@ Each control names an action from midi/cdj_actions.py, so the report bits live
 in one table. `lamp` is a role from midi/leds.py's LAMPS: the NXS2 lamp that
 lights it. How a control behaves follows its action's evidence status (see
 controls.py): confirmed, partial and decoded ones work, the rest are drawn but
-inert. The status bar names the status of the control under the mouse.
+inert. The status bar names the control under the mouse and its key.
 """
 
 from dataclasses import dataclass

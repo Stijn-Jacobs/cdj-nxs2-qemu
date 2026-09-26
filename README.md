@@ -250,18 +250,20 @@ to a track, `Enter` to load, `Space` to play.
 
 ## 🎛️ The virtual deck app
 
-<img src="docs/img/app-deck.png" alt="The virtual deck app: a drawn NXS2-style player with the emulated screen in it and, beside it, the same screen at full size" width="900">
+<img src="docs/img/app-deck.gif" alt="The virtual deck app playing a track: the colour waveform scrolling, the time counting down, PLAY lit" width="500">
 
 ```sh
 ./start.sh --app          # or CDJ_APP=1 in cdj.conf; --no-app for the plain window
 ```
 
-Instead of a bare screen, a window with the whole player drawn around it:
+A full player drawn around the emulated screen instead of a bare window:
 source and browse keys, the rotary selector, hot cue pads, the loop section,
 CUE and PLAY, a jog with its centre display, the tempo fader. Everything on
 it is drawn by the app itself; no photo, logo or artwork of the real unit is
-used. With two decks (`CDJ_DECKS=2`) both stand side by side in one window.
-Closing the window, or Ctrl-C, stops the decks.
+used. With two decks (`CDJ_DECKS=2`) both stand side by side in one window,
+find each other over the emulated Pro DJ Link, and MASTER and SYNC light up
+between them, same as the real players. Closing the window, or Ctrl-C, stops
+the decks.
 
 | you do | the deck gets |
 |---|---|
