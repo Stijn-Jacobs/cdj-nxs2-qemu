@@ -247,7 +247,7 @@ to a track, `Enter` to load, `Space` to play.
 ## 🧩 Mods
 
 Small on/off tweaks to how the deck behaves, each with its own default,
-listed in `scripts/mods.conf`:
+listed in `mods/mods.conf`:
 
 | mod | what it does | default |
 |---|---|---|

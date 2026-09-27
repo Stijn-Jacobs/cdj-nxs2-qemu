@@ -36,7 +36,7 @@ fi
 CDJ_DECKS=1; CDJ_NAME=show; CDJ_DJLINK=0; CDJ_AUDIO=1; CDJ_CONTROLLER=none
 CDJ_RELAY_PORT=7202; CDJ_GROUP=239.77.77.1:45000; CDJ_MIDI_PYTHON=""
 QEMU_BUILD=""; QEMU_EB_BUILD=""; CDJ_SERVICE=0
-. "$E/scripts/mods.sh"
+. "$E/mods/mods.sh"
 # A mod's knob can share its name with the cdj.conf key it is saved under
 # (CDJ_GUI_FRAME_MS), so remember a caller's own value before sourcing
 # cdj.conf clobbers it just by being sourced.

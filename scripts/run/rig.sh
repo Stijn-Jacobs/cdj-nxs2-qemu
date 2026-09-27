@@ -17,7 +17,7 @@
 #          SERVICE=1 boots into SERVICE MODE instead of playing a track
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-. "$HERE/../mods.sh"
+. "$HERE/../../mods/mods.sh"
 TAG="${1:-show}"
 FRAMES="${2:-120}"
 NDECKS="${NDECKS:-1}"

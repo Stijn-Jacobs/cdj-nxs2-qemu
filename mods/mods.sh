@@ -47,7 +47,7 @@ mods_apply() {
             return 0
         fi
         # Sourcing cdj.conf sets a CDJ_ knob without exporting it.
-        [ -n "${!env-}" ] && { export "$env"; return 0; }
+        [ -n "${!env-}" ] && { export "${env?}"; return 0; }
         confkey="$(mod_conf_key "$env")"
         saved="${!confkey-}"
         case "$saved" in

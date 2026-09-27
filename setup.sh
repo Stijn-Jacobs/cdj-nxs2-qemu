@@ -23,8 +23,8 @@
 #   6 your setup      one deck or two, Pro DJ Link, audio, a MIDI controller,
 #                     saved to cdj.conf -- which ./start.sh then uses
 #   7 mods            small on/off tweaks to how the deck behaves (see
-#                     scripts/mods.conf), asked one at a time and saved
-#                     alongside your setup
+#                     mods/mods.conf), all defaults in one answer or one
+#                     at a time, saved alongside your setup
 #
 # options:
 #   --dry-run              print what would happen; run and write nothing
@@ -52,7 +52,7 @@ set -uo pipefail
 E="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HERE="$E/scripts"
 . "$HERE/cdj_paths.sh"
-. "$HERE/mods.sh"
+. "$E/mods/mods.sh"
 CONF="$E/cdj.conf"
 LOGDIR="$E/logs"
 EXTRACT="$CDJ_ROOT/extract"

@@ -287,13 +287,13 @@ NET_ARGS=""
 # patch_gui.py mod <name> is on when CDJ_GUI_<NAME>=1 (e.g. CDJ_GUI_WAVE3).
 GUI_IMAGE="$PROJ_NATIVE/$MODEL_EXTRACT/gui_unpacked.bin"
 GUI_MODS=()
-for m in $(python3 "$HERE/../firmware/patch_gui.py" --list | cut -d' ' -f1); do
+for m in $(python3 "$HERE/../../mods/patch_gui.py" --list | cut -d' ' -f1); do
     knob="CDJ_GUI_$(printf '%s' "$m" | tr '[:lower:]' '[:upper:]')"
     [ "${!knob:-0}" = 1 ] && GUI_MODS+=("$m")
 done
 if [ ${#GUI_MODS[@]} -gt 0 ]; then
     GUI_PATCHED="$LOGDIR/cdj-$TAG-gui.bin"
-    python3 "$HERE/../firmware/patch_gui.py" "$GUI_IMAGE" "$GUI_PATCHED" \
+    python3 "$HERE/../../mods/patch_gui.py" "$GUI_IMAGE" "$GUI_PATCHED" \
         "${GUI_MODS[@]}" | sed "s/^/[$TAG] /"
     [ "${PIPESTATUS[0]}" = 0 ] || { echo "[$TAG] display firmware not patched" >&2; exit 1; }
     GUI_IMAGE="$(nativepath_or_self "$GUI_PATCHED")"
