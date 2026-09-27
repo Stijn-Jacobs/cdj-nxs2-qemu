@@ -218,10 +218,18 @@ def _copy(src, dst):
 
 
 def _dll_closure(exe):
-    """The MSYS2 DLLs a Windows program loads (ldd names /mingw64/bin ones)."""
-    out = subprocess.run(["ldd", exe], capture_output=True, text=True).stdout
-    return [host.native(line.split("=>")[1].split("(")[0].strip()) for line in out.splitlines()
-            if "=>" in line and "/mingw64/" in line]
+    """The MSYS2 DLLs a Windows program loads (ldd names /mingw64/bin ones).
+    The names are converted by the cygpath beside that ldd: a CI runner's
+    preinstalled C:\\msys64, which host.native prefers, is not the MSYS2 the
+    build ran in and has none of these DLLs."""
+    ldd = shutil.which("ldd")
+    cygpath = os.path.join(os.path.dirname(ldd), "cygpath.exe")
+    out = subprocess.run([ldd, exe], capture_output=True, text=True).stdout
+    names = [line.split("=>")[1].split("(")[0].strip() for line in out.splitlines()
+             if "=>" in line and "/mingw64/" in line]
+    if not names:
+        return []
+    return subprocess.run([cygpath, "-m"] + names, capture_output=True, text=True, check=True).stdout.split()
 
 
 def add_qemu(runtime, lay):
