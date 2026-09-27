@@ -1,7 +1,10 @@
 # The portable packages for a release: on each OS the same build a developer
 # runs, packaging/release.sh (./build.sh, then packaging/package.py), and the
 # archive attached to the release. Run it by hand (workflow_dispatch) to get
-# the archives as workflow artifacts instead.
+# the archives as workflow artifacts instead, or with a tag to build the
+# branch it is run on and attach to that existing release, replacing its
+# archives (a failed platform, after the fix is pushed):
+#   gh workflow run release.yml --ref main -f tag=v0.0.1
 #
 # Nothing from Pioneer DJ / AlphaTheta is built or shipped: the firmware is
 # installed by the user, the DSP modules are compiled on the user's machine,
@@ -13,6 +16,11 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "attach to this existing release (empty: keep as artifacts)"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -79,13 +87,14 @@ jobs:
           "$PY" packaging/package.py --check dist/CDJ-Emulator-*
 
       - name: Attach to the release
-        if: github.event_name == 'release'
+        if: github.event_name == 'release' || inputs.tag != ''
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.event.release.tag_name }}" dist/CDJ-Emulator-* --clobber
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: gh release upload "$TAG" dist/CDJ-Emulator-* --clobber
       - name: Keep as a workflow artifact
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && inputs.tag == ''
         uses: actions/upload-artifact@v4.6.2
         with:
           name: CDJ-Emulator-${{ matrix.name }}

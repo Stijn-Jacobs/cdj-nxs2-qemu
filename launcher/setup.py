@@ -861,6 +861,12 @@ def missing_prerequisites(platform):
             host.MACOS: ["glib-2.0", "pixman-1", "zlib"]}.get(
         platform, ["glib-2.0", "pixman-1", "zlib", "gtk+-3.0", "libpulse"])
     missing = [t for t in tools if not shutil.which(t)]
+    # QEMU's configure takes distlib from the Python it runs on, and MSYS2's
+    # Python no longer brings it along with pip.
+    py = shutil.which("python3") or shutil.which("python")
+    if platform == host.WINDOWS and py and subprocess.run([py, "-c", "import distlib"],
+                                                          capture_output=True).returncode:
+        missing.append("distlib")
     # build.sh needs bash 4; macOS's own is 3.2.
     if platform == host.MACOS and not host.find_bash():
         missing.append("bash")
@@ -884,7 +890,7 @@ def _pkg_for(platform, x):
                 "python": "mingw-w64-x86_64-python", "glib-2.0": "mingw-w64-x86_64-glib2",
                 "pixman-1": "mingw-w64-x86_64-pixman", "zlib": "mingw-w64-x86_64-zlib",
                 "gtk+-3.0": "mingw-w64-x86_64-gtk3", "sdl2": "mingw-w64-x86_64-SDL2",
-                "diff": "diffutils"}.get(x, x)
+                "distlib": "mingw-w64-x86_64-python-distlib", "diff": "diffutils"}.get(x, x)
     if platform == host.MACOS:
         return {"pkg-config": "pkgconf", "python3": "python", "glib-2.0": "glib",
                 "pixman-1": "pixman"}.get(x, x)
