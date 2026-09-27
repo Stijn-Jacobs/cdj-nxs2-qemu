@@ -3,8 +3,9 @@
 # archive attached to the release. Run it by hand (workflow_dispatch) to get
 # the archives as workflow artifacts instead, or with a tag to build the
 # branch it is run on and attach to that existing release, replacing its
-# archives (a failed platform, after the fix is pushed):
-#   gh workflow run release.yml --ref main -f tag=v0.0.1
+# archives; platforms limits it to some of them (a failed platform, after the
+# fix is pushed):
+#   gh workflow run release.yml --ref main -f tag=v0.0.1 -f platforms=windows-x86_64
 #
 # Nothing from Pioneer DJ / AlphaTheta is built or shipped: the firmware is
 # installed by the user, the DSP modules are compiled on the user's machine,
@@ -21,24 +22,45 @@ on:
         description: "attach to this existing release (empty: keep as artifacts)"
         required: false
         default: ""
+      platforms:
+        description: "only these, comma-separated (empty: all four)"
+        required: false
+        default: ""
 
 permissions:
   contents: write
 
 jobs:
+  # A job's own condition cannot see its matrix, so the platforms input
+  # filters the list here instead.
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      include: ${{ steps.pick.outputs.include }}
+    steps:
+      - id: pick
+        env:
+          ONLY: ${{ inputs.platforms }}
+          ALL: >-
+            [{"name": "windows-x86_64", "os": "windows-2022", "shell": "msys2 {0}"},
+             {"name": "macos-arm64", "os": "macos-15", "shell": "bash"},
+             {"name": "macos-x86_64", "os": "macos-15-intel", "shell": "bash"},
+             {"name": "linux-x86_64", "os": "ubuntu-22.04", "shell": "bash"}]
+        # linux-x86_64 is the oldest supported runner: the package then needs
+        # no newer glibc.
+        run: |
+          filter='map(select(.name as $n | $only == "" or ($only | split(",") | map(gsub(" "; "")) | index($n))))'
+          echo "include=$(jq -c --arg only "$ONLY" "$filter" <<< "$ALL")" >> "$GITHUB_OUTPUT"
+
   package:
+    needs: plan
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 150
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { name: windows-x86_64, os: windows-2022, shell: "msys2 {0}" }
-          - { name: macos-arm64, os: macos-15, shell: bash }
-          - { name: macos-x86_64, os: macos-15-intel, shell: bash }
-          # The oldest supported runner: the package then needs no newer glibc.
-          - { name: linux-x86_64, os: ubuntu-22.04, shell: bash }
+        include: ${{ fromJSON(needs.plan.outputs.include) }}
     defaults:
       run:
         shell: ${{ matrix.shell }}
