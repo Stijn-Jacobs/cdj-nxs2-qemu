@@ -10,7 +10,7 @@ import sys
 TESTS = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(TESTS)
 
-for sub in ("midi", "scripts/run", "scripts/net", "scripts/firmware", "scripts/media"):
+for sub in ("midi", "scripts/run", "scripts/net", "scripts/firmware", "scripts/media", "mods"):
     path = os.path.join(ROOT, *sub.split("/"))
     if path not in sys.path:
         sys.path.insert(0, path)

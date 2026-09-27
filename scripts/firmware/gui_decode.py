@@ -63,7 +63,13 @@ def decode(section):
     hdr = section[:32].rstrip(b'\x00 ').decode('latin1')
     declared = struct.unpack_from('>I', section, 0x20)[0]
     avail = len(section) - GUI_STREAM_OFF
-    out = unpack(section, GUI_STREAM_OFF, GUI_RING_INIT, GUI_RING_POS)
+    # Bounded to the declared length, not the whole section: the 2-byte
+    # trailer past the stream is a checksum, not more compressed data, and
+    # feeding it in only happened to decode to nothing extra for Pioneer's
+    # own images. A re-encoded section's trailer is a different value and is
+    # not guaranteed to be as harmless.
+    out = unpack(section[:GUI_STREAM_OFF + declared], GUI_STREAM_OFF,
+                 GUI_RING_INIT, GUI_RING_POS)
     return hdr, declared, avail, out
 
 

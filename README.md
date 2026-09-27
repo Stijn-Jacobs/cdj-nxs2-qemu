@@ -2,7 +2,7 @@
 
 # CDJ-2000NXS2 Emulator
 
-**A Pioneer DJ CDJ-2000NXS2 on your computer: its own firmware on emulated hardware, played from a virtual deck or a MIDI controller, with mods.**
+**A Pioneer DJ CDJ-2000NXS2 on your computer: its own firmware on emulated hardware, played from a virtual deck or a MIDI controller, with mods and a patcher that builds them into your own firmware update.**
 
 [![License: GPL-2.0-or-later](https://img.shields.io/badge/license-GPL--2.0--or--later-blue.svg)](LICENSE)
 [![Platform: Windows | Linux | macOS](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)](#quick-start)
@@ -370,6 +370,31 @@ or override any of them for one run with the environment, e.g.
 
 [SERVICE MODE](#service-mode) is a separate boot option, not a mod: it changes
 what the deck boots into, not how it behaves once it is up.
+
+**Patching a real firmware update.** `three_band` is already a display-firmware
+code patch, not an emulator knob: the launcher applies it to a copy of the
+display image at boot (`mods/patch_gui.py`), the same file a real update would
+carry. `mods/patch_update.py` makes that same patch to a real Pioneer `.UPD`
+file, so it ends up on an actual player instead of a copy this emulator throws
+away on exit:
+
+```sh
+python mods/patch_update.py C2KNXS2.UPD C2KNXS2-wave3.UPD wave3
+```
+
+Only a mod that is an actual firmware code patch is offered this way — an
+emulator-only knob such as `high_fps` or `live_clock` has nothing to
+write into a real update, and does not appear. `python mods/patch_update.py
+--list` shows what is available and which firmware version it was verified
+against; a mismatched version is refused unless you pass `--force-version`.
+
+**This is untested on real hardware.** The container repacking and the LZSS
+re-encoding have been checked against the real update file byte for byte, and
+the patched image has been checked against `patch_gui.py`'s own output (see
+`tests/`), but nobody has flashed a patched update into an actual player.
+Flashing a modified firmware update is entirely at your own risk — keep the
+original file, and expect that a mistake here could mean a trip through
+service mode's recovery path, or worse.
 
 ## 🔧 Service mode
 
