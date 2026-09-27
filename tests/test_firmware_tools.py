@@ -213,6 +213,51 @@ def test_make_flash_places_the_sector_in_an_erased_8mb_image(tmp_path):
     assert img[0x7F8000:].count(0xFF) == 0x800000 - 0x7F8000
 
 
+def srec(addr, data):
+    """One S2 record (24-bit address) with its checksum."""
+    body = bytes([len(data) + 4]) + addr.to_bytes(3, "big") + data
+    return b"S2" + (body + bytes([~sum(body) & 0xFF])).hex().upper().encode()
+
+
+def main_section(*records, label=b"CDJ-2000NXS2MAINVer1.87\x00       0"):
+    return label + b"S00E0000\r\n" + b"".join(srec(a, d) + b"\r\n" for a, d in records) + b"S705A00000005A\r\n"
+
+
+def test_make_flash_lays_the_main_section_at_its_record_addresses(tmp_path):
+    src = tmp_path / "s.bin"
+    src.write_bytes(make_settings.build([(1, 2)]))
+    sec = tmp_path / "section3.bin"
+    sec.write_bytes(main_section((0, b"\x09\x00\x05\xa0"), (0x50000, b"\x12\x34")))
+    out = tmp_path / "flash.bin"
+    r = run_script("scripts/firmware/make_flash.py", out, src, sec)
+    assert r.returncode == 0, r.stderr
+    img = out.read_bytes()
+    assert img[:4] == b"\x09\x00\x05\xa0"
+    assert img[0x50000:0x50002] == b"\x12\x34"
+    assert img[4:0x50000].count(0xFF) == 0x50000 - 4       # gaps stay erased
+    assert img[0x7F6000:0x7F8000] == src.read_bytes()
+
+
+def test_make_flash_refuses_a_bad_record_checksum(tmp_path):
+    src = tmp_path / "s.bin"
+    src.write_bytes(make_settings.build([(1, 2)]))
+    bad = srec(0, b"\x00\x01")
+    bad = bad[:-2] + (b"00" if bad[-2:] != b"00" else b"01")
+    sec = tmp_path / "section3.bin"
+    sec.write_bytes(main_section() + bad + b"\r\n")
+    r = run_script("scripts/firmware/make_flash.py", tmp_path / "f.bin", src, sec)
+    assert r.returncode == 1 and "bad S-record checksum" in r.stderr
+
+
+def test_make_flash_refuses_a_section_that_is_not_main(tmp_path):
+    src = tmp_path / "s.bin"
+    src.write_bytes(make_settings.build([(1, 2)]))
+    sec = tmp_path / "section4.bin"
+    sec.write_bytes(main_section(label=b"CDJ-2000NXS2PANLVer1.00\x00       0"))
+    r = run_script("scripts/firmware/make_flash.py", tmp_path / "f.bin", src, sec)
+    assert r.returncode == 1 and "not a MAIN section" in r.stderr
+
+
 def test_make_flash_refuses_a_wrong_sized_sector(tmp_path):
     src = tmp_path / "s.bin"
     src.write_bytes(b"\xff" * 100)

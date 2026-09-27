@@ -121,11 +121,28 @@ PLAYERNO="${PLAYERNO//%N%/$DECK_N}"
 # PDJ0000001XX. "auto" derives it from the player number, empty keeps it.
 SERIAL="${SERIAL:-}"
 SERIAL="${SERIAL//%N%/$DECK_N}"
+#
+# FLASH_BASE=<image>: the flash every deck starts from (default
+# extract/flash.bin).
+# MAIN_BOOT=flash: MAIN resets into Pioneer's bootloader in that flash, which
+# then has to hold the MAIN section (make_flash.py with the section). The
+# default, kernel, loads main_unpacked.bin into DRAM and starts past it.
+FLASH_BASE="${FLASH_BASE:-$PROJ/extract/flash.bin}"
+KERNEL_ARGS=(-kernel "$PROJ_NATIVE/$MODEL_EXTRACT/main_unpacked.bin")
+if [ "${MAIN_BOOT:-kernel}" = "flash" ]; then
+    KERNEL_ARGS=()
+    # An image from before the flash carried the MAIN section is erased at 0.
+    if [ "$(od -An -tx1 -N2 "$FLASH_BASE" | tr -d ' ')" = "ffff" ]; then
+        echo "[$TAG] $FLASH_BASE holds no bootloader (made by an older setup);" \
+             "run ./setup.sh --firmware <C2KNXS2.UPD> again, or leave MAIN_BOOT unset" >&2
+        exit 1
+    fi
+fi
 mint_flash() {  # <out>
-    python3 "$HERE/../firmware/player_flash.py" "$PLAYERNO" "$1" "$PROJ/extract/flash.bin" \
+    python3 "$HERE/../firmware/player_flash.py" "$PLAYERNO" "$1" "$FLASH_BASE" \
         ${SERIAL:+--serial "$SERIAL"} | sed "s/^/[$TAG] /"
 }
-FLASH_FILE="$PROJ_NATIVE/extract/flash.bin"
+FLASH_FILE="$(nativepath_or_self "$FLASH_BASE")"
 FLASH_SNAP="snapshot=on"
 if [ "${PERSIST:-0}" = "1" ]; then
     _fl="$PROJ/extract/flash-$TAG.bin"
@@ -133,7 +150,7 @@ if [ "${PERSIST:-0}" = "1" ]; then
         if [ -n "$PLAYERNO" ]; then
             mint_flash "$_fl"
         else
-            cp "$PROJ/extract/flash.bin" "$_fl"
+            cp "$FLASH_BASE" "$_fl"
         fi
         echo "[$TAG] made $_fl -- this deck now keeps its own settings"
     fi
@@ -195,7 +212,7 @@ else
 fi
 # The image is 256 MB per deck per run. Unlinking it while QEMU has it open is
 # safe.
-trap 'rm -f "${MEDIA_IMG:-}" 2>/dev/null' EXIT INT TERM
+trap 'rm -f "${MEDIA_IMG:-}" "${GUI_PATCHED:-}" 2>/dev/null' EXIT INT TERM
 
 export CDJ_SPILINK_OVERFLOW=1 CDJ_SPILINK_QUEUE=0
 export CDJ_SPILINK_DEDUP="${CDJ_SPILINK_DEDUP:-0}"
@@ -266,7 +283,20 @@ AUDIO_ARGS=""
 NET_ARGS=""
 [ -n "${CDJ_NETDEV:-}" ] && NET_ARGS="-netdev $CDJ_NETDEV"
 
-"$MAIN_QEMU" -M "$MODEL_MAIN_MACHINE" -kernel "$PROJ_NATIVE/$MODEL_EXTRACT/main_unpacked.bin" \
+# Display firmware mods are patched into a copy of the image, per run.
+# CDJ_GUI_WAVE3=1: draw the centre waveform as three bands (low/mid/high).
+GUI_IMAGE="$PROJ_NATIVE/$MODEL_EXTRACT/gui_unpacked.bin"
+GUI_MODS=()
+[ "${CDJ_GUI_WAVE3:-0}" = 1 ] && GUI_MODS+=(wave3)
+if [ ${#GUI_MODS[@]} -gt 0 ]; then
+    GUI_PATCHED="$LOGDIR/cdj-$TAG-gui.bin"
+    python3 "$HERE/../firmware/patch_gui.py" "$GUI_IMAGE" "$GUI_PATCHED" \
+        "${GUI_MODS[@]}" | sed "s/^/[$TAG] /"
+    [ "${PIPESTATUS[0]}" = 0 ] || { echo "[$TAG] display firmware not patched" >&2; exit 1; }
+    GUI_IMAGE="$(nativepath_or_self "$GUI_PATCHED")"
+fi
+
+"$MAIN_QEMU" -M "$MODEL_MAIN_MACHINE" "${KERNEL_ARGS[@]}" \
     -drive if=pflash,format=raw,file="$FLASH_FILE",$FLASH_SNAP \
     $MEDIA_ARGS \
     -chardev "socket,id=spilink,path=$SOCK,server=on,wait=off" \
@@ -322,7 +352,7 @@ case "$GUI_DISPLAY_ARG" in
     none | *show-cursor=*) ;;
     *) GUI_DISPLAY_ARG="$GUI_DISPLAY_ARG,show-cursor=on" ;;
 esac
-"$GUI_QEMU" -M "$MODEL_GUI_MACHINE" -kernel "$PROJ_NATIVE/$MODEL_EXTRACT/gui_unpacked.bin" \
+"$GUI_QEMU" -M "$MODEL_GUI_MACHINE" -kernel "$GUI_IMAGE" \
     -chardev "socket,id=spilink,path=$SOCK" \
     -display "$GUI_DISPLAY_ARG" -serial null \
     -monitor "$MON_ARG" \

@@ -6,7 +6,7 @@
 #   ./setup.sh                 walk through everything, asking as it goes
 #   ./setup.sh --dry-run       show every step and command, change nothing
 #
-# Six steps, each one safe to re-run and each one skipped when its result is
+# Seven steps, each one safe to re-run and each one skipped when its result is
 # already there:
 #
 #   1 prerequisites   compilers, libraries and Python packages, with the exact
@@ -22,6 +22,9 @@
 #                     a profile-guided module built from a recording instead
 #   6 your setup      one deck or two, Pro DJ Link, audio, a MIDI controller,
 #                     saved to cdj.conf -- which ./start.sh then uses
+#   7 mods            small on/off tweaks to how the deck behaves (see
+#                     scripts/mods.conf), asked one at a time and saved
+#                     alongside your setup
 #
 # options:
 #   --dry-run              print what would happen; run and write nothing
@@ -33,7 +36,7 @@
 #   --curated-jit          step 5 builds the profile-guided DSP module (~1 h,
 #                          ~16 GB free disk while it runs)
 #   --keep-recording       keep that build's DSP recording (~10 GB) afterwards
-#   --reconfigure          ask the step 6 questions again
+#   --reconfigure          ask the step 6 and 7 questions again
 #   --firmware <file>      the C2KNXS2.UPD to use (re-installs the images)
 #   --music <folder>       the rekordbox USB export to image (re-makes the stick)
 #   --decks 1|2            --name <deck name>    --djlink on|off   --audio on|off
@@ -49,6 +52,7 @@ set -uo pipefail
 E="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HERE="$E/scripts"
 . "$HERE/cdj_paths.sh"
+. "$HERE/mods.sh"
 CONF="$E/cdj.conf"
 LOGDIR="$E/logs"
 EXTRACT="$CDJ_ROOT/extract"
@@ -105,7 +109,7 @@ case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
     *) OK="ok"; BAD="XX"; WARN="!!"; SPIN='|/-\' ;;
 esac
 
-TOTAL_STEPS=6
+TOTAL_STEPS=7
 step() { printf '\n%s[%s/%s] %s%s\n' "$B$C" "$1" "$TOTAL_STEPS" "$2" "$N"; }
 info() { printf '  %s\n' "$*"; }
 good() { printf '  %s%s%s %s\n' "$G" "$OK" "$N" "$*"; }
@@ -837,6 +841,26 @@ if [ "$ASK5" = 1 ]; then
     CDJ_TOOLS_PYTHON="$PY_TOOLS"
 fi
 
+# =================================================================== 7. mods ====
+step 7 "Mods"
+info "Small on/off tweaks to how the deck behaves, each with its own default;"
+info "./setup.sh --reconfigure asks again, or edit cdj.conf by hand."
+ask_one_mod() {  # key env on off default description
+    local env="$2" on="$3" off="$4" def="$5" desc="$6" confkey cur ans
+    confkey="$(mod_conf_key "$env")"
+    cur="${!confkey-}"
+    case "$cur" in "$on") cur=on ;; "$off") cur=off ;; *) cur="$def" ;; esac
+    ans="$(choose "$desc?" "$cur" on off)"
+    printf -v "$confkey" '%s' "$([ "$ans" = on ] && printf '%s' "$on" || printf '%s' "$off")"
+}
+if [ -f "$CONF" ] && [ "$RECONFIGURE" = 0 ]; then
+    good "keeping your mods in cdj.conf (./setup.sh --reconfigure to change them)"
+    ASK7=0
+else
+    ASK7=1
+    mods_each ask_one_mod
+fi
+
 write_conf() {
     printf '# Written by ./setup.sh on %s. ./start.sh reads it.\n' "$(date '+%Y-%m-%d %H:%M')"
     printf '# Edit it, or run ./setup.sh --reconfigure.\n'
@@ -846,6 +870,13 @@ write_conf() {
         "$CDJ_CONTROLLER" "$CDJ_RELAY_PORT" "$CDJ_GROUP"
     printf 'CDJ_MIDI_PYTHON=%q\nCDJ_TOOLS_PYTHON=%q\n' "$CDJ_MIDI_PYTHON" "$CDJ_TOOLS_PYTHON"
     printf 'QEMU_BUILD=%q\nQEMU_EB_BUILD=%q\n' "$QEMU_BUILD" "$QEMU_EB_BUILD"
+    write_mod_line() {  # key env on off default description
+        local confkey val; confkey="$(mod_conf_key "$2")"
+        val="${!confkey-}"
+        case "$val" in "$3" | "$4") ;; *) [ "$5" = on ] && val="$3" || val="$4" ;; esac
+        printf '%s=%q\n' "$confkey" "$val"
+    }
+    mods_each write_mod_line
 }
 # A kept setup still takes the Pythons found now, e.g. after installing mido.
 if [ "$ASK5" = 0 ] && { { [ -n "$PY_MIDI" ] && [ "$PY_MIDI" != "$CDJ_MIDI_PYTHON" ]; } ||
@@ -854,7 +885,7 @@ if [ "$ASK5" = 0 ] && { { [ -n "$PY_MIDI" ] && [ "$PY_MIDI" != "$CDJ_MIDI_PYTHON
     CDJ_TOOLS_PYTHON="${PY_TOOLS:-$CDJ_TOOLS_PYTHON}"
     ASK5=1
 fi
-if [ "$ASK5" = 1 ]; then
+if [ "$ASK5" = 1 ] || [ "$ASK7" = 1 ]; then
     if [ "$DRY" = 1 ]; then
         info "(dry run) would write cdj.conf:"
         write_conf | sed 's/^/      /'
@@ -878,6 +909,15 @@ elif [ "$(cached_modules)" -gt 0 ]; then
 else
     info "DSP JIT      cold: the first minutes of your first sessions will be slow"
 fi
+MODS_LINE=""
+summary_mod() {  # key env on off default description
+    local confkey val state
+    confkey="$(mod_conf_key "$2")"; val="${!confkey-}"
+    [ "$val" = "$3" ] && state=on || state=off
+    MODS_LINE="${MODS_LINE:+$MODS_LINE, }$1=$state"
+}
+mods_each summary_mod
+info "mods         $MODS_LINE"
 info "start it:    ${B}./start.sh${N}      stop: Ctrl-C (or ./start.sh stop from another shell)"
 if [ "$DRY" = 0 ] && [ "$INTERACTIVE" = 1 ] && have_firmware && [ -f "$USB_IMG" ] &&
    [ -e "$MAIN_BIN" ] && ask_yn "start the deck now?" y; then

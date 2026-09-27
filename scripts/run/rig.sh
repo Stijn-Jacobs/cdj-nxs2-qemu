@@ -17,6 +17,7 @@
 #          SERVICE=1 boots into SERVICE MODE instead of playing a track
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$HERE/../mods.sh"
 TAG="${1:-show}"
 FRAMES="${2:-120}"
 NDECKS="${NDECKS:-1}"
@@ -76,13 +77,15 @@ case "$(uname -s)" in
 esac
 # The DSP JIT module: the first that exists of C66X_JIT (named by hand),
 # ~/c14gen/$MODULE/m.so (MODULE=none: no module), ~/c14gen/curated/m.so (built
-# by ./setup.sh --curated-jit), then the maintainers' g20u800 (g18u plus MASTER
-# TEMPO's code) and g18u. Without one the run-time auto-JIT compiles the hot DSP
-# code into ~/c14gen as the deck plays; with one it is off, so no gcc runs
-# mid-session. AUTOJIT=1 keeps it on beside a module, AUTOJIT=0 turns it off.
+# by ./setup.sh --curated-jit), then the maintainers' g23n (compiles MASTER TEMPO
+# at a non-zero tempo too), g20u800 (g18u plus MASTER TEMPO's code) and g18u.
+# Without one the run-time auto-JIT compiles the hot DSP code into ~/c14gen as
+# the deck plays; with one it is off, so no gcc runs mid-session. AUTOJIT=1
+# keeps it on beside a module, AUTOJIT=0 turns it off.
 if [ -z "${C66X_JIT:-}" ] && [ "${MODULE:-}" != none ]; then
     for _m in ${MODULE:+"$HOME/c14gen/$MODULE/m.so"} "$HOME/c14gen/curated/m.so" \
-              "$HOME/c14gen/g20u800/m.so" "$HOME/c14gen/g18u/m.so" $_legacy_jit; do
+              "$HOME/c14gen/g23n/m.so" "$HOME/c14gen/g20u800/m.so" "$HOME/c14gen/g18u/m.so" \
+              $_legacy_jit; do
         [ -f "$_m" ] && { C66X_JIT="$(native_path "$_m")"; break; }
     done
 fi
@@ -162,12 +165,14 @@ export CDJ_SPILINK_FRESH="${CDJ_SPILINK_FRESH:-16}"
 export CDJ_GUI_LINK_IDLE_MS="${CDJ_GUI_LINK_IDLE_MS:-20}"
 # The display firmware repaints REMAIN once its frames' measured drawing time
 # adds up to 42 ms; the emulated board draws so fast that this was ~3 times a
-# second. Count each frame as 43 ms: a repaint every frame. 0 = firmware.
-export CDJ_GUI_CLOCK_DT="${CDJ_GUI_CLOCK_DT:-43}"
+# second. Count each frame as 43 ms: a repaint every frame. 0 = firmware. The
+# mod "live_clock" in mods.conf carries this default.
+export CDJ_GUI_CLOCK_DT="${CDJ_GUI_CLOCK_DT:-$(mod_default CDJ_GUI_CLOCK_DT)}"
 # The display firmware draws a frame at most every 15 ms plus a tick; 6 lets
 # the zoomed-in waveform show ~73 pictures a second instead of ~33, for about
-# a fifth of a core more on the display board. 0 = firmware.
-export CDJ_GUI_FRAME_MS="${CDJ_GUI_FRAME_MS:-6}"
+# a fifth of a core more on the display board. 0 = firmware. The mod
+# "fast_waveform" in mods.conf carries this default.
+export CDJ_GUI_FRAME_MS="${CDJ_GUI_FRAME_MS:-$(mod_default CDJ_GUI_FRAME_MS)}"
 # Diagnostic re-read and scan of every DMA'd display frame; off.
 export CDJ_GUI_FRAME_SCAN="${CDJ_GUI_FRAME_SCAN:-0}"
 # TOUCH=1 (default): a click/drag in the display window, or a 'touch'/'tap' on

@@ -68,7 +68,7 @@ cd cdj-nxs2
 ./setup.sh
 ```
 
-`setup.sh` walks you through six steps. Every one is safe to re-run and is
+`setup.sh` walks you through seven steps. Every one is safe to re-run and is
 skipped when it is already done:
 
 1. **Prerequisites** — checks compilers, libraries and Python packages, and
@@ -87,6 +87,8 @@ skipped when it is already done:
    first real session already keeps up (about 15 minutes).
 6. **Your setup** — one deck or two, Pro DJ Link, sound, a MIDI controller;
    saved to `cdj.conf`.
+7. **Mods** — small on/off tweaks to how the deck behaves, one question each
+   (see [Mods](#mods)); saved alongside your setup.
 
 **3. Play:**
 
@@ -132,7 +134,7 @@ version), and your own music.
 
 ```text
 ./setup.sh --dry-run            show every step and command, change nothing
-./setup.sh --reconfigure        ask the "your setup" questions again
+./setup.sh --reconfigure        ask the "your setup" and "mods" questions again
 ./setup.sh --yes                never ask; take the defaults and the options below
 ./setup.sh --skip-build         leave the build out (a build tree you made yourself)
 ./setup.sh --rebuild            build even when the emulators are already built
@@ -242,6 +244,25 @@ Each window drives its own deck.
 The mouse is the touch screen. A typical start: `U` (or click the source), `↓`
 to a track, `Enter` to load, `Space` to play.
 
+## 🧩 Mods
+
+Small on/off tweaks to how the deck behaves, each with its own default,
+listed in `scripts/mods.conf`:
+
+| mod | what it does | default |
+|---|---|---|
+| `fast_waveform` | Draw the zoomed-in waveform about twice as often (~73 fps instead of ~33). | on |
+| `live_clock` | Repaint the REMAIN clock every frame instead of about three times a second. | on |
+
+`./setup.sh` asks about each one (step 7) and saves your answer to `cdj.conf`;
+`./setup.sh --reconfigure` asks again. You can also edit `cdj.conf` directly,
+or override any of them for one run with the environment, e.g.
+`CDJ_GUI_FRAME_MS=0 ./start.sh` (a caller's own environment always wins over
+`cdj.conf`).
+
+[SERVICE MODE](#service-mode) is a separate boot option, not a mod: it changes
+what the deck boots into, not how it behaves once it is up.
+
 ## 🔧 Service mode
 
 ```sh
@@ -263,6 +284,26 @@ image, so nothing you change in SERVICE MODE (or anywhere else) survives past
 Ctrl-C. With `PERSIST=1` a deck keeps its own flash image between runs
 (`extract/flash-<tag>.bin`), the same as a real unit's memory — a setting
 changed in SERVICE MODE on a persistent deck stays changed.
+
+## 🥾 Booting from the flash
+
+```sh
+MAIN_BOOT=flash ./start.sh
+```
+
+By default MAIN starts with its firmware already unpacked into memory
+(`extract/main_unpacked.bin`), past the point where the player's own
+bootloader hands over. With `MAIN_BOOT=flash` it starts the way the real unit
+does: from the reset vector, in Pioneer's bootloader. The firmware update's
+MAIN section carries that bootloader, an emergency updater and the packed MAIN
+image, at the flash addresses the player's own updater writes them to, and
+`./setup.sh --firmware` lays them into `extract/flash.bin` the same way. The
+bootloader sets up the clocks and memory, checks the image's checksum, unpacks
+it and starts it; a damaged image starts the emergency updater instead, as on
+the real player. It adds about two seconds to MAIN's start.
+
+A `flash.bin` made by an older setup holds no bootloader; MAIN then refuses to
+start and says so. Run `./setup.sh --firmware <C2KNXS2.UPD>` again to rebuild it.
 
 ## 🎚️ MIDI controllers
 

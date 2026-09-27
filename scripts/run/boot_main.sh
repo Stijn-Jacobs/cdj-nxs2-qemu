@@ -12,6 +12,9 @@
 #   LOGDIR      where <tag>.main.log goes (default /tmp)
 #   QEMU_D      the -d list (default unimp,guest_errors)
 #   ICOUNT      -icount value, for a run that repeats instruction for instruction
+#   FLASH       a NOR flash image (default none: the flash reads erased)
+#   MAIN_BOOT   flash: reset into the bootloader in FLASH instead of loading
+#               main_unpacked.bin (the default, kernel)
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HERE/../cdj_paths.sh"; PROJ="$CDJ_ROOT"
@@ -31,13 +34,17 @@ IMAGE="$PROJ/$MODEL_EXTRACT/main_unpacked.bin"
 # QEMU is a native program on Windows and cannot open MSYS2 paths (/c/...).
 if command -v cygpath >/dev/null 2>&1; then
     IMAGE="$(cygpath -m "$IMAGE")"
+    [ -n "${FLASH:-}" ] && FLASH="$(cygpath -m "$FLASH")"
 fi
+BOOT_ARGS=(-kernel "$IMAGE")
+[ "${MAIN_BOOT:-kernel}" = "flash" ] && BOOT_ARGS=()
+[ -n "${FLASH:-}" ] && BOOT_ARGS+=(-drive "if=pflash,format=raw,file=$FLASH,snapshot=on")
 
 # On Windows kill is TerminateProcess, which runs no exit handlers, so the
 # board quits through a monitor socket (cdj_monsock.py picks the transport).
 MAINMON="/tmp/cdj-$TAG-main-mon.sock"
 rm -f "$MAINMON" 2>/dev/null
-"$MAIN_QEMU" -M "$MODEL_MAIN_MACHINE" -kernel "$IMAGE" \
+"$MAIN_QEMU" -M "$MODEL_MAIN_MACHINE" "${BOOT_ARGS[@]}" \
     -nographic -d "${QEMU_D:-unimp,guest_errors}" ${ICOUNT:+-icount "$ICOUNT"} \
     -monitor "$(python3 "$HERE/cdj_monsock.py" spec "$MAINMON")" \
     > "$MAINLOG" 2>&1 &

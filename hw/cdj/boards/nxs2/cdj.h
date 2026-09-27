@@ -72,6 +72,9 @@
  * +0x600 interrupt, +0x800 _start. */
 #define CDJ_FW_ENTRY        0xA8000800   /* P2 | (DRAM base + 0x800) */
 #define CDJ_INIT_SP         0xB8000000   /* value the real bootloader loads */
+/* The bootloader's reset stub clears RB and IMASK (SR &= 0xDFFFFF0F) and
+ * enters the image with that: MD=1, BL=1, RB=0, IMASK=0. */
+#define CDJ_INIT_SR         0x50000000
 
 /* The RTOS restores SR from this global, not the stack (0x085129E0 and
  * 0x085129EC restore it; only 0x085129D0 writes it). A restore before the

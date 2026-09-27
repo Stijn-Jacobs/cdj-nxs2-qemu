@@ -3,9 +3,12 @@
 #include "cdj_getenv.h"
 /*
  * The boot half of a CDJ MAIN board: CPU, DRAM, NOR flash, the SH-4 core
- * blocks, and the firmware image. The decompressed MAIN image is loaded at
- * the DRAM base and entered where the bootloader enters it, with the SP the
- * bootloader leaves; the numbers come from the board's CdjBoardDesc.
+ * blocks, and the firmware image. Without -kernel the CPU starts at the reset
+ * vector, which is the start of the NOR flash, and the bootloader programmed
+ * there loads the firmware as it does on the device. With -kernel the
+ * decompressed MAIN image is loaded at the DRAM base instead and entered where
+ * the bootloader enters it, with the SP the bootloader leaves; the numbers
+ * come from the board's CdjBoardDesc.
  */
 
 const CdjBoardDesc *cdj_board;
@@ -13,9 +16,12 @@ unsigned cdj_reset_count;
 
 typedef struct CdjResetData {
     SuperHCPU *cpu;
+    bool from_flash;
     uint32_t pc;
     uint32_t sp;
 } CdjResetData;
+
+static bool cdj_boot_from_flash;
 
 static void cdj_cpu_reset(void *opaque)
 {
@@ -28,6 +34,9 @@ static void cdj_cpu_reset(void *opaque)
                  cdj_reset_count, env->pc);
     }
     cpu_reset(CPU(s->cpu));
+    if (s->from_flash) {
+        return;
+    }
     /* Every bank register is zero after the reset, so changing RB here needs
      * no bank swap. */
     if (cdj_board->init_sr) {
@@ -143,22 +152,37 @@ void cdj_board_load(MachineState *machine)
     ssize_t fwsize;
 
     if (!machine->kernel_filename) {
-        error_report("%s: pass the decompressed MAIN image with "
-                     "-kernel main_unpacked.bin", d->name);
-        exit(1);
+        uint16_t reset_insn;
+
+        /* The reset vector, P2 0xA0000000, is the first word of the flash.
+         * Erased there means an image built without the bootloader, and the
+         * CPU would run 0xFFFF opcodes. */
+        cpu_physical_memory_read(d->flash_phys, &reset_insn, sizeof(reset_insn));
+        if (reset_insn == 0xFFFF) {
+            error_report("%s: the NOR flash holds no bootloader; build it with "
+                         "make_flash.py from the firmware update, or pass "
+                         "-kernel main_unpacked.bin", d->name);
+            exit(1);
+        }
+        info_report("%s: booting through the bootloader in the NOR flash",
+                    d->name);
+        cdj_boot_from_flash = true;
+    } else {
+        /* Flat binary, not an ELF. */
+        fwsize = load_image_targphys(machine->kernel_filename,
+                                     d->dram_phys, d->dram_size);
+        if (fwsize < 0) {
+            error_report("%s: cannot load '%s'", d->name,
+                         machine->kernel_filename);
+            exit(1);
+        }
+        info_report("%s: %zd bytes at 0x%08x, entry 0x%08x, sp 0x%08x",
+                    d->name, fwsize, (unsigned)d->dram_phys, d->fw_entry,
+                    d->init_sp);
     }
 
-    /* Flat binary, not an ELF. */
-    fwsize = load_image_targphys(machine->kernel_filename,
-                                 d->dram_phys, d->dram_size);
-    if (fwsize < 0) {
-        error_report("%s: cannot load '%s'", d->name, machine->kernel_filename);
-        exit(1);
-    }
-    info_report("%s: %zd bytes at 0x%08x, entry 0x%08x, sp 0x%08x", d->name,
-                fwsize, (unsigned)d->dram_phys, d->fw_entry, d->init_sp);
-
-    /* Done after the image load so the image cannot overwrite it. */
+    /* Done after the image load so the image cannot overwrite it. The
+     * bootloader does not write there either. */
     if (d->sr_seed_slot) {
         uint32_t sr_seed = cpu_to_le32(d->sr_seed);
 
@@ -167,12 +191,13 @@ void cdj_board_load(MachineState *machine)
 }
 
 /* PC/SP are applied on reset; setting env->pc directly would be overwritten
- * by the CPU's own reset. */
+ * by the CPU's own reset. Booting from the flash keeps the reset state. */
 void cdj_board_start(SuperHCPU *cpu)
 {
     CdjResetData *reset_info = g_new0(CdjResetData, 1);
 
     reset_info->cpu = cpu;
+    reset_info->from_flash = cdj_boot_from_flash;
     reset_info->pc = cdj_board->fw_entry;
     reset_info->sp = cdj_board->init_sp;
     qemu_register_reset(cdj_cpu_reset, reset_info);

@@ -209,8 +209,11 @@ int main(int argc, char **argv)
     size_t cap = 1 << 20;
     R = malloc(cap * sizeof *R);
     for (const uint8_t *p = m; p < m + msize;) {
-        size_t l = rec_len(p);
-        if (!l || p + l > m + msize) {
+        /* A recorder killed mid-write leaves a partial record: its length
+         * field may itself lie past the end of the file. */
+        size_t left = (size_t)(m + msize - p);
+        size_t l = left < 9 || (p[0] == 'D' && left < 17) ? 0 : rec_len(p);
+        if (!l || l > left) {
             fprintf(stderr, "bad record at offset %zu\n", (size_t)(p - m));
             break;
         }

@@ -36,11 +36,21 @@ fi
 CDJ_DECKS=1; CDJ_NAME=show; CDJ_DJLINK=0; CDJ_AUDIO=1; CDJ_CONTROLLER=none
 CDJ_RELAY_PORT=7202; CDJ_GROUP=239.77.77.1:45000; CDJ_MIDI_PYTHON=""
 QEMU_BUILD=""; QEMU_EB_BUILD=""; CDJ_SERVICE=0
+. "$E/scripts/mods.sh"
+# A mod's knob can share its name with the cdj.conf key it is saved under
+# (CDJ_GUI_FRAME_MS), so remember a caller's own value before sourcing
+# cdj.conf clobbers it just by being sourced.
+mods_snapshot
 # shellcheck source=/dev/null
 . "$CONF"
 # --service always wins; otherwise a caller's own SERVICE=1 env, then the
 # hand-added CDJ_SERVICE=1 in cdj.conf (setup.sh does not ask about it).
 export SERVICE="${SERVICE_FLAG:-${SERVICE:-$CDJ_SERVICE}}"
+# mods_apply applies every mod's own cdj.conf choice (fast_waveform,
+# live_clock, ...) unless mods_snapshot found the caller's own environment had
+# already set that knob. SERVICE MODE is not a mod (see above): it stays out
+# of mods.conf.
+mods_apply
 
 [ -n "$QEMU_BUILD" ] && export QEMU_BUILD
 [ -n "$QEMU_EB_BUILD" ] && export QEMU_EB_BUILD

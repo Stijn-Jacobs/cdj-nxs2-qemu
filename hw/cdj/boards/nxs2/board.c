@@ -7,9 +7,19 @@
  * from a datasheet. Regions that are not modelled are mapped as unimplemented
  * devices so their accesses are logged rather than silently reading zero.
  *
- * Boot: the decompressed MAIN image is loaded at the DRAM base and entered at
- * _start (image offset 0x800) through P2, as the bootloader does. _start sets
- * up no stack, so SP is primed with the bootloader's value.
+ * Boot: without -kernel the CPU resets into Pioneer's own bootloader in the
+ * NOR flash. make_flash.py lays the MAIN section of the official update there
+ * at its S-record addresses, which are flash offsets, as the firmware's
+ * updater does: the bootloader at 0, an emergency updater image at 0x10000
+ * and the MAIN image at 0x50000, both images a 32-bit length, an LZSS stream
+ * and a 16-bit sum of the preceding bytes. The bootloader initialises clocks
+ * and DDR, copies the MAIN image to DRAM with DMAC channel 5, checks the sum,
+ * decompresses to the DRAM base (the emergency image if the sum is wrong) and
+ * enters _start (image offset 0x800) through P2 with SP 0xB8000000.
+ *
+ * With -kernel the decompressed image is loaded at the DRAM base and entered
+ * at _start directly, with SP primed with the bootloader's value, since
+ * _start sets up no stack.
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
@@ -61,6 +71,9 @@ static const CdjBoardDesc cdj2000nxs2_board = {
     .flash_id = { 0x0001, 0x227e, 0x2220, 0x2200 },
     .fw_entry = CDJ_FW_ENTRY,
     .init_sp = CDJ_INIT_SP,
+    /* From the reset value's bank 1 the RTOS's first SR restore drops to user
+     * mode once _start's DMA clear of the BSS has zeroed the saved SR. */
+    .init_sr = CDJ_INIT_SR,
     .sr_seed_slot = CDJ_SR_SAVE_SLOT,
     .sr_seed = CDJ_SR_SEED,
     /* The firmware programs TCOR0 = 10415 with TPSC = P0/4, which is exactly

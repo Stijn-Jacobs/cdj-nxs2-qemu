@@ -191,7 +191,7 @@ for s in $MODEL_FW_STEPS; do
         gui_resources) step gui_resources "$PY" "$HERE/gui_resources.py" extract/resblob.bin ;;
         gui_artwork)   step gui_artwork   "$PY" "$HERE/gui_artwork.py" extract/artblob.bin ;;
         make_settings) step make_settings "$PY" "$HERE/make_settings.py" extract/settings.bin ;;
-        make_flash)    step make_flash    "$PY" "$HERE/make_flash.py" extract/flash.bin extract/settings.bin ;;
+        make_flash)    step make_flash    "$PY" "$HERE/make_flash.py" extract/flash.bin extract/settings.bin "$MAIN_SEC.bin" ;;
         *)             die "models/$MODEL.conf: unknown step '$s'" ;;
     esac
 done

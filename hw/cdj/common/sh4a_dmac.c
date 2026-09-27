@@ -160,8 +160,9 @@ static void cdj_dmac_run(CdjDmacState *s, hwaddr chan, bool from_dreq)
         return;                                 /* TE stays clear: not done yet */
     }
 
-    /* Refuse a nonsense TCR from an uninitialised channel. */
-    if (len == 0 || len > 64 * MiB || tcr > 0x10000) {
+    /* Refuse a nonsense TCR from an uninitialised channel. TCR is 24 bits;
+     * the MAIN bootloader's own copy of the flash image is 0x79000 units. */
+    if (len == 0 || len > 64 * MiB || tcr > 0xFFFFFF) {
         cdj_dmac_complete(s, chan, from_dreq);             /* claim TE anyway */
         return;
     }
