@@ -853,12 +853,24 @@ ask_one_mod() {  # key env on off default description
     ans="$(choose "$desc?" "$cur" on off)"
     printf -v "$confkey" '%s' "$([ "$ans" = on ] && printf '%s' "$on" || printf '%s' "$off")"
 }
+show_mod_default() {  # key env on off default description
+    info "  $(printf '%-3s' "$5")  $6"
+}
+set_mod_default() {  # key env on off default description
+    printf -v "$(mod_conf_key "$2")" '%s' "$([ "$5" = on ] && printf '%s' "$3" || printf '%s' "$4")"
+}
 if [ -f "$CONF" ] && [ "$RECONFIGURE" = 0 ]; then
     good "keeping your mods in cdj.conf (./setup.sh --reconfigure to change them)"
     ASK7=0
 else
     ASK7=1
-    mods_each ask_one_mod
+    info "The defaults:"
+    mods_each show_mod_default
+    if ask_yn "use the defaults?" y; then
+        mods_each set_mod_default
+    else
+        mods_each ask_one_mod
+    fi
 fi
 
 write_conf() {

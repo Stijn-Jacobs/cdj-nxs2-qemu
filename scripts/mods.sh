@@ -8,11 +8,12 @@ MODS_CONF="${MODS_CONF:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/mods.conf}
 # for every mod in the registry, in file order.
 mods_each() {
     local key env on off def desc
-    while IFS='|' read -r key env on off def desc; do
+    # fd 3, so a <function> that prompts still reads the terminal on stdin.
+    while IFS='|' read -r -u 3 key env on off def desc; do
         [ -z "$key" ] && continue
         case "$key" in \#*) continue ;; esac
         "$1" "$key" "$env" "$on" "$off" "$def" "$desc"
-    done < <(grep -v '^[[:space:]]*#' "$MODS_CONF" | grep -v '^[[:space:]]*$')
+    done 3< <(grep -v '^[[:space:]]*#' "$MODS_CONF" | grep -v '^[[:space:]]*$')
 }
 
 # mod_conf_key <env> -> the cdj.conf key this knob is saved under. A knob that
