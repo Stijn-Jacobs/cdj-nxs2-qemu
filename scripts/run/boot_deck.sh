@@ -283,11 +283,14 @@ AUDIO_ARGS=""
 NET_ARGS=""
 [ -n "${CDJ_NETDEV:-}" ] && NET_ARGS="-netdev $CDJ_NETDEV"
 
-# Display firmware mods are patched into a copy of the image, per run.
-# CDJ_GUI_WAVE3=1: draw the centre waveform as three bands (low/mid/high).
+# Display firmware mods are patched into a copy of the image, per run: each
+# patch_gui.py mod <name> is on when CDJ_GUI_<NAME>=1 (e.g. CDJ_GUI_WAVE3).
 GUI_IMAGE="$PROJ_NATIVE/$MODEL_EXTRACT/gui_unpacked.bin"
 GUI_MODS=()
-[ "${CDJ_GUI_WAVE3:-0}" = 1 ] && GUI_MODS+=(wave3)
+for m in $(python3 "$HERE/../firmware/patch_gui.py" --list | cut -d' ' -f1); do
+    knob="CDJ_GUI_$(printf '%s' "$m" | tr '[:lower:]' '[:upper:]')"
+    [ "${!knob:-0}" = 1 ] && GUI_MODS+=("$m")
+done
 if [ ${#GUI_MODS[@]} -gt 0 ]; then
     GUI_PATCHED="$LOGDIR/cdj-$TAG-gui.bin"
     python3 "$HERE/../firmware/patch_gui.py" "$GUI_IMAGE" "$GUI_PATCHED" \

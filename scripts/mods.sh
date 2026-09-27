@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-2.0-or-later
 # Sourced, not run. Reads mods.conf, the mods registry shared by setup.sh,
-# start.sh and rig.sh (see that file for the row format).
+# start.sh, rig.sh and boot_deck.sh (see that file for the row format).
 MODS_CONF="${MODS_CONF:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/mods.conf}"
 
 # mods_each <function>: calls <function> key env on off default description
@@ -22,18 +22,6 @@ mod_conf_key() {
     case "$1" in CDJ_*) printf '%s' "$1" ;; *) printf 'CDJ_%s' "$1" ;; esac
 }
 
-# mod_default <env> -> the value to fall back to when nothing else set that
-# knob: this mod's own "on" or "off" value, whichever the registry defaults to.
-mod_default() {
-    local want="$1" found=""
-    _mod_default_one() {
-        [ "$2" = "$want" ] || return 0
-        [ "$5" = on ] && found="$3" || found="$4"
-    }
-    mods_each _mod_default_one
-    printf '%s' "$found"
-}
-
 # mods_snapshot: remember which knobs the caller's own environment already set
 # (a bare env var, e.g. CDJ_GUI_FRAME_MS=3 ./start.sh), before sourcing
 # cdj.conf, whose CDJ_-prefixed keys share those same names and would
@@ -47,8 +35,8 @@ mods_snapshot() {
 }
 
 # mods_apply: export every mod's knob from cdj.conf's saved choice, unless
-# mods_snapshot found the caller's own environment had already set it. Call
-# after sourcing cdj.conf.
+# mods_snapshot found the caller's own environment had already set it; a knob
+# set nowhere gets the registry default. Call after sourcing cdj.conf.
 mods_apply() {
     _mods_apply_one() {
         local key="$1" env="$2" on="$3" off="$4" def="$5" confkey saved marker
@@ -58,7 +46,8 @@ mods_apply() {
             unset "$marker"
             return 0
         fi
-        [ -n "${!env+x}" ] && [ -n "${!env}" ] && return 0
+        # Sourcing cdj.conf sets a CDJ_ knob without exporting it.
+        [ -n "${!env-}" ] && { export "$env"; return 0; }
         confkey="$(mod_conf_key "$env")"
         saved="${!confkey-}"
         case "$saved" in

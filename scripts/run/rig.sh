@@ -163,16 +163,8 @@ export CDJ_SPILINK_FRESH="${CDJ_SPILINK_FRESH:-16}"
 # A receive that finds the queue empty gets the newest heartbeat again after
 # 20 ms; a starved GUI link driver gives up and the display freezes.
 export CDJ_GUI_LINK_IDLE_MS="${CDJ_GUI_LINK_IDLE_MS:-20}"
-# The display firmware repaints REMAIN once its frames' measured drawing time
-# adds up to 42 ms; the emulated board draws so fast that this was ~3 times a
-# second. Count each frame as 43 ms: a repaint every frame. 0 = firmware. The
-# mod "live_clock" in mods.conf carries this default.
-export CDJ_GUI_CLOCK_DT="${CDJ_GUI_CLOCK_DT:-$(mod_default CDJ_GUI_CLOCK_DT)}"
-# The display firmware draws a frame at most every 15 ms plus a tick; 6 lets
-# the zoomed-in waveform show ~73 pictures a second instead of ~33, for about
-# a fifth of a core more on the display board. 0 = firmware. The mod
-# "fast_waveform" in mods.conf carries this default.
-export CDJ_GUI_FRAME_MS="${CDJ_GUI_FRAME_MS:-$(mod_default CDJ_GUI_FRAME_MS)}"
+# Every mod in mods.conf the caller left unset gets its registry default.
+mods_apply
 # Diagnostic re-read and scan of every DMA'd display frame; off.
 export CDJ_GUI_FRAME_SCAN="${CDJ_GUI_FRAME_SCAN:-0}"
 # TOUCH=1 (default): a click/drag in the display window, or a 'touch'/'tap' on

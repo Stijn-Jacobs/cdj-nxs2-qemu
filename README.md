@@ -253,9 +253,11 @@ listed in `scripts/mods.conf`:
 |---|---|---|
 | `fast_waveform` | Draw the zoomed-in waveform about twice as often (~73 fps instead of ~33). | on |
 | `live_clock` | Repaint the REMAIN clock every frame instead of about three times a second. | on |
+| `three_band` | Draw the RGB centre waveform as three bands (low blue, mid amber, high white), CDJ-3000 style. | off |
 
-`./setup.sh` asks about each one (step 7) and saves your answer to `cdj.conf`;
-`./setup.sh --reconfigure` asks again. You can also edit `cdj.conf` directly,
+`./setup.sh` shows the defaults (step 7) and either takes them or asks about
+each one, and saves your answers to `cdj.conf`; `./setup.sh --reconfigure`
+asks again. You can also edit `cdj.conf` directly,
 or override any of them for one run with the environment, e.g.
 `CDJ_GUI_FRAME_MS=0 ./start.sh` (a caller's own environment always wins over
 `cdj.conf`).
