@@ -2060,6 +2060,8 @@ typedef struct {
     bool dirty;
     uint8_t *vdc_copy;       /* CDJ_GUI_VDC_SCANOUT: staged frame + previous  */
     uint8_t *vdc_prev;
+    QEMUTimer *refresh_timer;
+    long refresh_period_ms;
 } Sh7269Lcd;
 
 static Sh7269Lcd *lcd_state;
@@ -2091,6 +2093,106 @@ static uint32_t vdc_scanout_reg(void)
         return (uint32_t)strtoul(e, NULL, 16);
     }
     return SH7269_VDC_GR3_FLM2;
+}
+
+/*
+ * CDJ_GUI_PRESENT_FPS=1: count every frame that actually reaches the display
+ * backend (a poll that finds nothing new does not call this) and print how
+ * many landed per second of host wall-clock time at exit. This is the number
+ * a person watching the window would see change, as opposed to how often the
+ * firmware redraws its own buffer.
+ */
+typedef struct {
+    unsigned per_sec[300];
+    int64_t start_ms;
+    unsigned total;
+    Notifier exit;
+} GuiPresentFps;
+
+static GuiPresentFps *present_fps;
+
+static void present_fps_summary(Notifier *n, void *data)
+{
+    GuiPresentFps *p = container_of(n, GuiPresentFps, exit);
+    char line[ARRAY_SIZE(p->per_sec) * 4 + 1];
+    unsigned i, last = 0;
+    int off = 0;
+
+    for (i = 0; i < ARRAY_SIZE(p->per_sec); i++) {
+        if (p->per_sec[i]) {
+            last = i + 1;
+        }
+    }
+    for (i = 0; i < last; i++) {
+        off += snprintf(line + off, sizeof(line) - off, "%u ", p->per_sec[i]);
+    }
+    info_report("lcd: frames presented per 1 s (host wall clock), %u total: "
+                "%s", p->total, line);
+}
+
+static void present_fps_init(void)
+{
+    if (!getenv("CDJ_GUI_PRESENT_FPS")) {
+        return;
+    }
+    present_fps = g_new0(GuiPresentFps, 1);
+    present_fps->start_ms = qemu_clock_get_ms(QEMU_CLOCK_REALTIME);
+    present_fps->exit.notify = present_fps_summary;
+    qemu_add_exit_notifier(&present_fps->exit);
+}
+
+static void lcd_present(Sh7269Lcd *s)
+{
+    dpy_gfx_update_full(s->con);
+    if (present_fps) {
+        int64_t sec = (qemu_clock_get_ms(QEMU_CLOCK_REALTIME)
+                       - present_fps->start_ms) / 1000;
+
+        if (sec >= 0 && (uint64_t)sec < ARRAY_SIZE(present_fps->per_sec)) {
+            present_fps->per_sec[sec]++;
+        }
+        present_fps->total++;
+    }
+}
+
+/*
+ * lcd_update only runs when the console layer polls hw_ops->gfx_update, and
+ * that poll sits behind ui/console.c's own host timer, capped at 30 ms
+ * (GUI_REFRESH_INTERVAL_DEFAULT) unless a display backend asks for something
+ * faster. A firmware frame drawn quicker than that cap never reaches the
+ * window: the guest has already drawn several more by the time the host
+ * timer fires again.
+ *
+ * Poll the console ourselves on a faster host timer instead of waiting for
+ * that cap. lcd_update already returns immediately when nothing changed
+ * (dirty bitmap or VDC diff), so an extra poll that finds no new frame costs
+ * one comparison, not a redraw.
+ *
+ * CDJ_GUI_REFRESH_MS=<ms>: the poll period, default 4 ms (0 falls back to
+ * QEMU's own timer).
+ */
+static void gui_refresh_tick(void *opaque)
+{
+    Sh7269Lcd *s = opaque;
+
+    graphic_hw_update(s->con);
+    timer_mod(s->refresh_timer,
+              qemu_clock_get_ms(QEMU_CLOCK_REALTIME) + s->refresh_period_ms);
+}
+
+static void gui_refresh_timer_init(Sh7269Lcd *s)
+{
+    const char *e = getenv("CDJ_GUI_REFRESH_MS");
+    long ms = e ? strtol(e, NULL, 0) : 4;
+
+    if (ms <= 0) {
+        return;
+    }
+    s->refresh_period_ms = ms;
+    s->refresh_timer = timer_new_ms(QEMU_CLOCK_REALTIME, gui_refresh_tick, s);
+    timer_mod(s->refresh_timer, qemu_clock_get_ms(QEMU_CLOCK_REALTIME) + ms);
+    info_report("sh7269gui: polling the display every %ld ms instead of "
+                "QEMU's 30 ms refresh timer (CDJ_GUI_REFRESH_MS)", ms);
 }
 
 static void lcd_update(void *opaque)
@@ -2136,7 +2238,7 @@ static void lcd_update(void *opaque)
                            |  (b << 3 | b >> 2);
                 }
             }
-            dpy_gfx_update_full(s->con);
+            lcd_present(s);
             return;
         }
     }
@@ -2195,7 +2297,7 @@ static void lcd_update(void *opaque)
                 *dst++ = 0xff000000 | (r << 16) | (g << 8) | b;
             }
         }
-        dpy_gfx_update_full(s->con);
+        lcd_present(s);
         return;
     }
 
@@ -2214,7 +2316,7 @@ static void lcd_update(void *opaque)
             src += 2;
         }
     }
-    dpy_gfx_update_full(s->con);
+    lcd_present(s);
 
     /* Log once when the frame first has content (CPU stores included). */
     {
@@ -2242,6 +2344,104 @@ static void lcd_update(void *opaque)
 static void lcd_invalidate(void *opaque)
 {
     ((Sh7269Lcd *)opaque)->invalid = true;
+}
+
+/*
+ * CDJ_GUI_FRAME_FILE=<path>: publish the scanned-out frame to a file, checked
+ * CDJ_GUI_FRAME_HZ (default 120) times a host second and rewritten whenever it
+ * changed, for a viewer that wants the screen faster than a display backend
+ * refreshes it (QEMU's VNC server stops at 33 Hz). The virtual deck app
+ * (emulator/app/) reads it. Off unless set; the console is untouched.
+ *
+ * Layout, integers little-endian:
+ *   0   "CDJLCD1\0"
+ *   8   u32 done      sequence number of the last frame written in full
+ *   12  u16 width, u16 height (800 x 480)
+ *   16  u32 format    1 = RGB565 big-endian, as the VDC scans it out
+ *   20  12 bytes zero
+ *   32  the frame, width * height * 2 bytes
+ *   end u32 started   sequence number of the frame being written
+ * A frame is written as started, pixels, done. A reader that reads the file
+ * front to back and finds done == started has a whole frame.
+ */
+#define CDJ_FRAME_HDR 32
+
+static struct {
+    FILE *f;
+    QEMUTimer *timer;
+    unsigned period_ms;
+    uint8_t *cur, *prev;
+    uint32_t seq;
+} gui_frame;
+
+static void gui_frame_put32(long off, uint32_t v)
+{
+    uint8_t b[4] = { v, v >> 8, v >> 16, v >> 24 };
+
+    fseek(gui_frame.f, off, SEEK_SET);
+    fwrite(b, 1, 4, gui_frame.f);
+}
+
+static void gui_frame_tick(void *opaque)
+{
+    Sh7269Lcd *s = opaque;
+    uint32_t reg = vdc_scanout_reg(), base = 0;
+
+    timer_mod(gui_frame.timer, qemu_clock_get_ms(QEMU_CLOCK_REALTIME)
+                               + gui_frame.period_ms);
+    if (reg) {
+        cpu_physical_memory_read(reg, &base, 4);
+        base = be32_to_cpu(base);
+    }
+    if (base) {
+        cpu_physical_memory_read(base, gui_frame.cur, SH7269_LCD_BYTES);
+    } else {
+        memcpy(gui_frame.cur, s->fb + SH7269_LCD_OFFSET, SH7269_LCD_BYTES);
+    }
+    if (gui_frame.seq && !memcmp(gui_frame.cur, gui_frame.prev, SH7269_LCD_BYTES)) {
+        return;
+    }
+    memcpy(gui_frame.prev, gui_frame.cur, SH7269_LCD_BYTES);
+    gui_frame.seq++;
+    gui_frame_put32(CDJ_FRAME_HDR + SH7269_LCD_BYTES, gui_frame.seq);
+    fflush(gui_frame.f);
+    fseek(gui_frame.f, CDJ_FRAME_HDR, SEEK_SET);
+    fwrite(gui_frame.cur, 1, SH7269_LCD_BYTES, gui_frame.f);
+    fflush(gui_frame.f);
+    gui_frame_put32(8, gui_frame.seq);
+    fflush(gui_frame.f);
+}
+
+static void gui_frame_init(Sh7269Lcd *s)
+{
+    const char *path = getenv("CDJ_GUI_FRAME_FILE");
+    const char *hz = getenv("CDJ_GUI_FRAME_HZ");
+    uint8_t hdr[CDJ_FRAME_HDR] = "CDJLCD1";
+    unsigned rate = hz && atoi(hz) > 0 ? atoi(hz) : 120;
+
+    if (!path || !*path) {
+        return;
+    }
+    gui_frame.f = fopen(path, "w+b");
+    if (!gui_frame.f) {
+        warn_report("CDJ_GUI_FRAME_FILE: cannot open %s: %s", path,
+                    strerror(errno));
+        return;
+    }
+    stw_le_p(hdr + 12, SH7269_LCD_WIDTH);
+    stw_le_p(hdr + 14, SH7269_LCD_HEIGHT);
+    stl_le_p(hdr + 16, 1);
+    fwrite(hdr, 1, sizeof(hdr), gui_frame.f);
+    gui_frame.cur = g_malloc0(SH7269_LCD_BYTES);
+    gui_frame.prev = g_malloc0(SH7269_LCD_BYTES);
+    fwrite(gui_frame.cur, 1, SH7269_LCD_BYTES, gui_frame.f);
+    gui_frame_put32(CDJ_FRAME_HDR + SH7269_LCD_BYTES, 0);
+    fflush(gui_frame.f);
+    gui_frame.period_ms = MAX(1000 / rate, 1);
+    gui_frame.timer = timer_new_ms(QEMU_CLOCK_REALTIME, gui_frame_tick, s);
+    timer_mod(gui_frame.timer, qemu_clock_get_ms(QEMU_CLOCK_REALTIME));
+    info_report("sh7269gui: frames to %s, checked every %u ms", path,
+                gui_frame.period_ms);
 }
 
 /*
@@ -2726,9 +2926,12 @@ static void lcd_init(MemoryRegion *sysmem, MemoryRegion *sdram)
     s->con = graphic_console_init(NULL, 0, &lcd_ops, s);
     qemu_console_resize(s->con, SH7269_LCD_WIDTH, SH7269_LCD_HEIGHT);
     lcd_state = s;
+    gui_refresh_timer_init(s);
+    present_fps_init();
     band_fps_init();
     cdj_gui_keys_init();
     gui_touch_init();
+    gui_frame_init(s);
 }
 
 

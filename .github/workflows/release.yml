@@ -1,0 +1,93 @@
+# The portable packages for a release: on each OS the same build a developer
+# runs, packaging/release.sh (./build.sh, then packaging/package.py), and the
+# archive attached to the release. Run it by hand (workflow_dispatch) to get
+# the archives as workflow artifacts instead.
+#
+# Nothing from Pioneer DJ / AlphaTheta is built or shipped: the firmware is
+# installed by the user, the DSP modules are compiled on the user's machine,
+# and package.py refuses (and the check below fails on) any archive holding
+# firmware images, a USB image or DSP code.
+name: release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: windows-x86_64, os: windows-2022, shell: "msys2 {0}" }
+          - { name: macos-arm64, os: macos-15, shell: bash }
+          - { name: macos-x86_64, os: macos-15-intel, shell: bash }
+          # The oldest supported runner: the package then needs no newer glibc.
+          - { name: linux-x86_64, os: ubuntu-22.04, shell: bash }
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    steps:
+      - uses: actions/checkout@v4.2.2
+
+      - name: MSYS2 MINGW64 (Windows)
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2.27.0
+        with:
+          msystem: MINGW64
+          update: true
+          install: mingw-w64-x86_64-python
+      - name: Prerequisites, as setup.sh lists them
+        run: |
+          pkgs="$(PYTHONPATH=. python3 -m launcher packages 2>/dev/null || PYTHONPATH=. python -m launcher packages)"
+          echo "missing: ${pkgs:-nothing}"
+          case "$RUNNER_OS" in
+            Windows) [ -z "$pkgs" ] || pacman -S --needed --noconfirm $pkgs ;;
+            macOS) [ -z "$pkgs" ] || brew install $pkgs ;;
+            Linux) sudo apt-get update
+                   sudo apt-get install -y --no-install-recommends $pkgs patchelf ;;
+          esac
+
+      # QEMU's own sources and the build trees: a rebuild then compiles only
+      # what the board sources and patches touch.
+      - uses: actions/cache@v4.2.3
+        with:
+          path: |
+            qemu-src
+            ${{ runner.temp }}/build
+          key: build-${{ matrix.name }}-${{ hashFiles('patches/**', 'hw/cdj/**', 'scripts/build/**', 'build.sh', 'packaging/package.py') }}
+          restore-keys: build-${{ matrix.name }}-
+
+      - name: Build and package
+        run: |
+          root="$(cygpath -u "$RUNNER_TEMP" 2>/dev/null || printf '%s' "$RUNNER_TEMP")/build"
+          suffix=""; [ "$RUNNER_OS" = Windows ] && suffix="-mingw"
+          export QEMU_BUILD="$root/qemu-build$suffix" QEMU_EB_BUILD="$root/qemu-build$suffix-eb"
+          export C66X_JIT_LIBDIR="$root/c6x" JOBS=4
+          bash packaging/release.sh --out dist --cache "$root/downloads"
+
+      - name: Check the archives once more
+        run: |
+          PY=python3; command -v python3 >/dev/null || PY=python
+          "$PY" packaging/package.py --check dist/CDJ-Emulator-*
+
+      - name: Attach to the release
+        if: github.event_name == 'release'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" dist/CDJ-Emulator-* --clobber
+      - name: Keep as a workflow artifact
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: CDJ-Emulator-${{ matrix.name }}
+          path: dist/CDJ-Emulator-*
+          if-no-files-found: error
