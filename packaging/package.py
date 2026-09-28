@@ -294,15 +294,23 @@ def add_keymaps(runtime, eb_dir):
     one looks in ../share/qemu beside its own folder."""
     import glob
 
-    found = glob.glob(os.path.join(eb_dir, "qemu-bundle", "**", "share", "qemu", "keymaps"), recursive=True)
-    src = found[0] if found else os.path.join(EMU, "qemu-src", "pc-bios", "keymaps")
-    names = [n for n in os.listdir(src) if "." not in n] if os.path.isdir(src) else []
-    if "en-us" not in names:
-        sys.exit("no QEMU keymaps (en-us) in %s: build the display QEMU first (./build.sh display)" % src)
+    # A build with xkbcommon (Linux) generates its keymaps, and its bundle's
+    # links point at them even when only the QEMU binary was built; the
+    # source tree's ready-made ones stand in for any not there.
+    dirs = glob.glob(os.path.join(eb_dir, "qemu-bundle", "**", "share", "qemu", "keymaps"), recursive=True)
+    dirs.append(os.path.join(EMU, "qemu-src", "pc-bios", "keymaps"))
+    maps = {}
+    for d in reversed(dirs):
+        for n in os.listdir(d) if os.path.isdir(d) else []:
+            path = os.path.join(d, n)
+            if "." not in n and os.path.isfile(path):       # follows the links
+                maps[n] = path
+    if "en-us" not in maps:
+        sys.exit("no QEMU keymap en-us in %s" % " or ".join(dirs))
     dst = os.path.join(runtime, "share", "qemu", "keymaps")
     os.makedirs(dst)
-    for n in names:
-        shutil.copyfile(os.path.join(src, n), os.path.join(dst, n))    # follows the links
+    for n, path in maps.items():
+        shutil.copyfile(path, os.path.join(dst, n))
 
 
 def check_display_qemu(runtime):
