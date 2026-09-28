@@ -147,8 +147,6 @@ static void cdj_dmac_run(CdjDmacState *s, hwaddr chan, bool from_dreq)
     g_autofree uint8_t *buf = NULL;
 
     if (getenv("CDJ_DMAC_DEBUG")) {
-        uint32_t chcr = s->reg[(chan + 0x0C) / 4];
-
         info_report("dmac: ch %d (+0x%03x) sar=0x%08x dar=0x%08x tcr=%u "
                     "chcr=0x%08x (TS=%u SM=%u DM=%u)",
                     cdj_dmac_chan_num(chan), (unsigned)chan, sar, dar, tcr,

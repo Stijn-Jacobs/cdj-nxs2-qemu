@@ -1008,10 +1008,10 @@ static void cdj_dma1_dump(Notifier *n, void *unused)
         }
         if (s->ran[i]) {
             char line[60 * 8 + 1];
-            unsigned k, n = 0;
+            unsigned k, len = 0;
 
             for (k = 0; k < ARRAY_SIZE(s->run_bucket[i]); k++) {
-                n += snprintf(line + n, sizeof(line) - n, "%u ",
+                len += snprintf(line + len, sizeof(line) - len, "%u ",
                               s->run_bucket[i][k]);
             }
             info_report("dma1: ch%u runs per 1 s: %s", i, line);

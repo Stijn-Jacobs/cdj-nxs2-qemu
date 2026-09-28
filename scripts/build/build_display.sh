@@ -51,6 +51,7 @@ if [ "$need_configure" = "1" ]; then
     "$SRC/configure" $CFG_ARGS
     printf '%s' "$CFG_ARGS" > .cdj-eb-cfg-args
 fi
+. "$HERE/no_werror.sh"
 ninja "qemu-system-sh4eb$EXESUF"
 
 echo
