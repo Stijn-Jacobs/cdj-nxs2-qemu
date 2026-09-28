@@ -19,6 +19,7 @@ Retina screen -- so the face is as sharp as the display.
 """
 
 import argparse
+import logging
 import os
 import sys
 import time
@@ -54,6 +55,38 @@ RESCALE_S = 0.06
 # What the window's frame takes, for the first layout.
 TITLE_BAR = 32
 TITLE = "NXS2 Virtual Deck"
+
+
+log = logging.getLogger("app")
+
+
+def _tail(path, n):
+    try:
+        with open(path, "rb") as f:
+            text = f.read()[-8192:].decode("utf-8", "replace")
+    except OSError:
+        return []
+    return [line for line in text.splitlines() if line.strip()][-n:]
+
+
+def start_log(path, args):
+    """The app's own log (--log): each screen's connection changes, for a
+    report when a deck's screen never comes."""
+    if not path:
+        return
+    try:
+        handler = logging.FileHandler(path, "w", encoding="utf-8")
+    except OSError as e:
+        print(f"app log {path}: {e}", flush=True)
+        return
+    handler.setFormatter(logging.Formatter("%(asctime)s %(name)s: %(message)s"))
+    root = logging.getLogger()
+    root.addHandler(handler)
+    root.setLevel(logging.INFO)
+    log.info("started: %s on %s, Python %s, pygame %s",
+             " ".join(sys.argv), sys.platform, sys.version.split()[0], pygame.version.ver)
+    log.info("decks %d, VNC %s:%d+N, frame dir %r, display logs %r",
+             args.decks, args.vnc_host, args.vnc_base, args.frame_dir, args.gui_logs)
 
 
 def work_area():
@@ -110,14 +143,19 @@ class App:
         self.rescale_at = None
         self.set_size = None            # the size this code last gave the window
         self.redraw = True
+        self.no_screen = set()          # decks whose missing screen was reported
 
         self.dock = DockView()
         for n in range(1, args.decks + 1):
             tag = f"{args.prefix}{n}"
             frames = (FrameFile(os.path.join(args.frame_dir, f"cdj-lcd-{tag}.bin"))
                       if args.frame_dir else None)
-            screen = Screen(RfbClient(args.vnc_host, args.vnc_base + n, f"deck{n}"),
-                            frames)
+            # With the frame dir the launcher also publishes the port each
+            # display board's VNC server took there (boot_deck.py).
+            port_file = (os.path.join(args.frame_dir, f"cdj-vnc-{tag}.port")
+                         if args.frame_dir else None)
+            screen = Screen(RfbClient(args.vnc_host, args.vnc_base + n, f"deck{n}",
+                                      port_file), frames)
             self.decks.append(DeckView(n, tag, self.relay, screen, self._hover,
                                        self.toggle_window))
         self.focus = self.decks[0]
@@ -279,6 +317,26 @@ class App:
         if flip:
             self.window.flip()
 
+    def _report_no_screen(self, now):
+        """Say once in the terminal, where the launcher's own lines are, why a
+        deck's screen has not come, and where the display board's log is."""
+        for d in self.decks:
+            why = d.screen.trouble(now)
+            if why is None:
+                self.no_screen.discard(d.number)
+            elif d.number not in self.no_screen:
+                self.no_screen.add(d.number)
+                lines = [f"deck {d.number}: still no screen ({why}, "
+                         f"{self.args.vnc_host}:{d.screen.rfb.addr[1]}). If the rig is up, "
+                         f"the display board's QEMU has probably exited."]
+                if self.args.gui_logs:
+                    path = os.path.join(self.args.gui_logs, f"bridge-gui-{d.tag}.log")
+                    lines.append(f"  the end of {path}:")
+                    lines += ["    " + line for line in _tail(path, 12)] or ["    (none, or empty)"]
+                for line in lines:
+                    print(line, flush=True)
+                    log.warning("%s", line)
+
     # -- the loop ---------------------------------------------------------------
 
     def run(self):
@@ -308,6 +366,7 @@ class App:
                 self.arrange(self._content())
             for d in self.decks:
                 d.tick(now)
+            self._report_no_screen(now)
             if self.stats_next and now >= self.stats_next:
                 self.stats_next = now + self.args.stats
                 print(" | ".join(d.status() for d in self.decks), flush=True)
@@ -495,6 +554,12 @@ def parse_args(argv=None):
                     help="where the display boards write cdj-lcd-<tag>.bin "
                          "(GUI_DISPLAY=vnc; env CDJ_APP_FRAME_DIR); without it "
                          "the screen comes over VNC, at up to 33 frames a second")
+    ap.add_argument("--gui-logs", default=os.environ.get("CDJ_APP_GUI_LOGS", ""),
+                    help="where the display boards log (bridge-gui-<tag>.log), "
+                         "named when a screen never comes (env CDJ_APP_GUI_LOGS)")
+    ap.add_argument("--log", default=os.environ.get("CDJ_APP_LOG", ""),
+                    help="write the app's log here: each screen's connection "
+                         "changes (env CDJ_APP_LOG)")
     ap.add_argument("--screen", default=os.environ.get("CDJ_APP_SCREEN", "face"),
                     choices=("face", "dock", "window", "auto"),
                     help="face (default): the decks alone, each with its screen in "
@@ -514,7 +579,9 @@ def parse_args(argv=None):
 
 def main(argv=None):
     try:
-        app = App(parse_args(argv))
+        args = parse_args(argv)
+        start_log(args.log, args)
+        app = App(args)
     except KeyboardInterrupt:          # Ctrl-C while the face is first drawn
         return
     app.run()

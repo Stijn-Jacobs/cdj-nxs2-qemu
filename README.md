@@ -322,6 +322,17 @@ stops the decks.
 </details>
 
 <details>
+<summary><b>Stuck on "Waiting for the screen"</b></summary>
+
+The screen comes from each deck's display board, a QEMU of its own. After
+45 seconds without it the status strip says why, and the terminal prints the
+end of that board's log (`bridge-gui-show1.log` in `/tmp`, or the system's
+temp folder on Windows). `logs/app.log` records every attempt the app made
+to reach each screen. Those two files are what to send with a bug report.
+
+</details>
+
+<details>
 <summary><b>How it is built</b></summary>
 
 Pillow draws the face and pygame-ce (SDL) puts it on screen; both are in
@@ -342,7 +353,8 @@ to the deck three ways:
   QEMU's VNC server, the portable alternative, stops at 33 updates a second
   and is kept only as the fallback for an older build;
 - **the touch screen and the keyboard** go over that VNC server (loopback
-  only, one port per deck from 5921), straight into the display board's own
+  only, one port per deck from 5921, or the next free one: the launcher
+  tells the app which), straight into the display board's own
   touch and key handlers, exactly as with the plain window;
 - **the drawn controls and the lamps** go through the controller relay, the
   same path and the same key table (`midi/cdj_actions.py`) as a MIDI

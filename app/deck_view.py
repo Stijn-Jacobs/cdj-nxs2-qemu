@@ -294,7 +294,8 @@ class DeckView:
         status strip."""
         name = f"Deck {self.number}"
         if not self.screen.connected:
-            return name, "Waiting for the screen", False
+            why = self.screen.trouble(time.monotonic())
+            return name, f"No screen  ·  {why}" if why else "Waiting for the screen", False
         if not self.relay.connected:
             return name, "Panel offline", False
         if not self.relay.state(self.tag).live:

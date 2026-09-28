@@ -21,6 +21,7 @@ decompress, and Pillow unpacks each rectangle in C.
 The connection runs in its own thread; the UI polls `take_frame()`.
 """
 
+import logging
 import socket
 import struct
 import threading
@@ -41,6 +42,9 @@ PIXEL_FORMAT = struct.pack(">BBBBHHHBBB3x", 32, 24, 0, 1, 255, 255, 255, 16, 8, 
 RAW_MODE = "BGRX"
 
 
+log = logging.getLogger("screen")
+
+
 class RfbError(Exception):
     pass
 
@@ -49,12 +53,19 @@ class RfbClient(FrameSource):
     """One VNC connection, reconnecting until closed."""
 
     RETRY_S = 1.0
+    HANDSHAKE_S = 5.0
 
-    def __init__(self, host, port, name="deck"):
+    def __init__(self, host, port, name="deck", port_file=None):
+        """port_file: where the launcher publishes the port the display
+        board's VNC server took (boot_deck.py); `port` is then only shown
+        until it has."""
         super().__init__()
         self.addr = (host, port)
+        self.port_file = port_file
         self.name = name
         self.status = "waiting for the screen"
+        self.error = None           # why the last connection failed, in a few words
+        self.down_since = time.monotonic()
         self.absolute = True
         self._want = True           # ask for screen updates
         self._screen_size = (800, 480)
@@ -121,16 +132,49 @@ class RfbClient(FrameSource):
             except OSError:
                 pass
 
+    def current_port(self):
+        """The port to try now: the published one, or None while there is
+        none. A port not yet published may be another program's, or a
+        leftover QEMU's showing an old screen."""
+        if not self.port_file:
+            return self.addr[1]
+        try:
+            with open(self.port_file) as f:
+                return int(f.read().strip())
+        except (OSError, ValueError):
+            return None
+
+    def _note(self, error):
+        """Log each change of state once, not every retry."""
+        if error != self.error:
+            if error:
+                log.info("%s: no screen on %s:%s: %s", self.name, *self.addr, error)
+            self.error = error
+
     def _run(self):
+        log.info("%s: looking for the screen on %s:%s%s", self.name, *self.addr,
+                 f" (port from {self.port_file})" if self.port_file else "")
         while not self.closed:
+            port = self.current_port()
+            if port is None:
+                self._note("the display board has not published its port yet")
+                self.status = f"screen: waiting for {self.port_file}"
+                time.sleep(self.RETRY_S)
+                continue
+            if port != self.addr[1]:
+                log.info("%s: the display board's VNC server is on port %d", self.name, port)
+                self.addr = (self.addr[0], port)
             try:
                 self._session()
             except (OSError, RfbError, struct.error) as e:
                 if not self.closed:
                     self.status = f"screen: {self.addr[0]}:{self.addr[1]} ({e})"
+                    self._note(_in_words(e))
             finally:
                 s, self.sock = self.sock, None
                 if s:
+                    self.down_since = time.monotonic()
+                    log.info("%s: screen connection closed (%s)", self.name, self.status)
                     try:
                         s.close()
                     except OSError:
@@ -140,7 +184,9 @@ class RfbClient(FrameSource):
 
     def _session(self):
         s = socket.create_connection(self.addr, timeout=2)
-        s.settimeout(None)
+        # Bounded until the handshake is done: a program on this port that is
+        # not a VNC server would otherwise hold the app at "waiting" forever.
+        s.settimeout(self.HANDSHAKE_S)
         s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         rd = s.makefile("rb", buffering=1 << 20)
         read = _exact_reader(rd)
@@ -179,8 +225,11 @@ class RfbClient(FrameSource):
         with self.lock:
             self.frame = Image.new("RGB", (w, h))
             self.dirty = True
+        s.settimeout(None)
         self.sock = s
+        self.error = None
         self.status = f"screen: {self.addr[0]}:{self.addr[1]}"
+        log.info("%s: screen connected on %s:%s, %dx%d, RFB 3.%d", self.name, *self.addr, w, h, minor)
         self._request(w, h, incremental=False)
 
         while not self.closed:
@@ -250,3 +299,13 @@ def _exact_reader(rd):
 def _reason(read):
     (n,) = struct.unpack(">I", read(4))
     return read(n).decode("utf-8", "replace") or "refused"
+
+
+def _in_words(e):
+    if isinstance(e, ConnectionRefusedError):
+        return "nothing listening"
+    if isinstance(e, (socket.timeout, TimeoutError)):
+        return "no answer"
+    if isinstance(e, RfbError):
+        return str(e)
+    return getattr(e, "strerror", None) or str(e) or type(e).__name__

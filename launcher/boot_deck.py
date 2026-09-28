@@ -11,6 +11,7 @@ exit counters print.
 """
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -52,6 +53,9 @@ class Deck:
         self.media_cache = None  # (src, dst)
         self.media_copy = None   # (src, dst)
         self.gui_env = None
+        self.gui_respawns = 0
+        self.vnc_port_file = None  # where the app learns this deck's VNC port
+        self.vnc_port = None       # the port the GUI QEMU took, once known
         self._plan()
 
     def _plan(self):
@@ -289,11 +293,27 @@ class Deck:
             # screen and the keyboard.
             port = int(nonempty(env, "CDJ_APP_VNC_BASE", "5920")) + int(self.n)
             self.gui_qemu = env.get("CDJ_APP_GUI_QEMU") or self.gui_qemu
-            if env.get("CDJ_APP_FRAME_DIR"):
-                self.gui_env["CDJ_GUI_FRAME_FILE"] = "%s/cdj-lcd-%s.bin" % (env["CDJ_APP_FRAME_DIR"], tag)
-            self.notes.append((2, "[%s] screen on VNC 127.0.0.1:%d%s for the virtual deck app" % (
-                tag, port, " and " + self.gui_env["CDJ_GUI_FRAME_FILE"] if env.get("CDJ_APP_FRAME_DIR") else "")))
-            return "vnc=127.0.0.1:%d" % (port - 5900)
+            if not env.get("CDJ_APP_FRAME_DIR"):
+                self.notes.append((2, "[%s] screen on VNC 127.0.0.1:%d for the virtual deck app" % (tag, port)))
+                return "vnc=127.0.0.1:%d" % (port - 5900)
+            d = env["CDJ_APP_FRAME_DIR"]
+            self.gui_env["CDJ_GUI_FRAME_FILE"] = "%s/cdj-lcd-%s.bin" % (d, tag)
+            # The port is only where QEMU starts looking: with to=, a port some
+            # other program (or a leftover QEMU) took since the launcher looked
+            # makes it take the next one instead of exiting. Which one it took
+            # is read back from its monitor and published in the port file,
+            # the only port the app connects to (watch_gui).
+            self.vnc_port_file = "%s/cdj-vnc-%s.port" % (d, tag)
+            last = port + self.VNC_SPAN - 1
+            # A bind inside a range Windows reserves fails with something other
+            # than "in use", which ends QEMU's search: stop short of one.
+            for lo, _hi in sorted(host.windows_reserved_ranges("tcp")):
+                if port < lo <= last:
+                    last = lo - 1
+                    break
+            self.notes.append((2, "[%s] screen on VNC 127.0.0.1:%d (or the next free port to %d) and %s "
+                               "for the virtual deck app" % (tag, port, last, self.gui_env["CDJ_GUI_FRAME_FILE"])))
+            return "vnc=127.0.0.1:%d,to=%d" % (port - 5900, last - 5900)
         # Fall back to headless when there is no X or Wayland socket (WSLg can
         # lose its X server mid-session, and -display gtk then kills the GUI
         # QEMU). macOS has no GTK build: its window is Cocoa, and it needs the
@@ -372,8 +392,65 @@ class Deck:
             chain.err("[%s] spilink socket never appeared" % tag)
             self.main.kill()
             return False
-        self.gui = _spawn(self.gui_argv, self.gui_log, self.gui_env)
+        self._spawn_gui()
         return True
+
+    # A GUI QEMU that exits this soon never got going: most often its connect
+    # to MAIN's link socket lost the race with MAIN's listen (the socket file
+    # appears at bind, before listen), and QEMU gives up on a refused connect.
+    GUI_EARLY_S = 15
+    GUI_RESPAWNS = 3
+    VNC_SPAN = 32               # ports the GUI QEMU may try for its VNC server
+
+    def _spawn_gui(self):
+        if self.vnc_port_file:
+            chain.remove(self.vnc_port_file)
+        self.vnc_port = None
+        self.gui = _spawn(self.gui_argv, self.gui_log, self.gui_env)
+        self.gui_started = time.time()
+
+    def _publish_vnc_port(self):
+        """Ask the GUI QEMU which port its VNC server took and write it where
+        the app reads it. Quietly tries again next time while the monitor is
+        not up yet."""
+        try:
+            out = _monsock(self.lay).command(self.gui_mon, "info vnc", settle=0.2, timeout=0.5)
+        except OSError:
+            return
+        m = re.search(r"Server: \S+:(\d+) \(", out.decode("utf-8", "replace"))
+        if not m:
+            return
+        self.vnc_port = int(m.group(1))
+        tmp = self.vnc_port_file + ".new"
+        with open(tmp, "w") as f:
+            f.write("%d\n" % self.vnc_port)
+        os.replace(tmp, self.vnc_port_file)
+        chain.say("[%s] screen's VNC server is on 127.0.0.1:%d" % (self.tag, self.vnc_port))
+
+    def watch_gui(self):
+        """Start the GUI board again if it died early while MAIN runs on, and
+        say why it died when it will not stay up: without it the deck has no
+        screen, and the virtual deck app waits for one forever."""
+        if self.gui.poll() is None:
+            if self.vnc_port_file and self.vnc_port is None:
+                self._publish_vnc_port()
+            return
+        if self.main.poll() is not None or self.gui_respawns is None:
+            return
+        tail = _tail(self.gui_log, 8)
+        early = time.time() - self.gui_started < self.GUI_EARLY_S
+        if early and self.gui_respawns < self.GUI_RESPAWNS:
+            self.gui_respawns += 1
+            chain.err("[%s] the GUI board exited at once (code %s); starting it again (%d/%d)"
+                      % (self.tag, self.gui.returncode, self.gui_respawns, self.GUI_RESPAWNS))
+            time.sleep(0.5 * self.gui_respawns)
+            self._spawn_gui()
+            return
+        self.gui_respawns = None
+        chain.err("[%s] ⚠ the GUI board exited (code %s); the deck has no screen. %s:"
+                  % (self.tag, self.gui.returncode, host.posix(self.gui_log)))
+        for line in tail or ["(empty log)"]:
+            chain.err("[%s]   %s" % (self.tag, line))
 
     def running(self):
         return self.main.poll() is None or self.gui.poll() is None
@@ -401,6 +478,8 @@ class Deck:
                 p.kill()
                 p.wait()
         chain.remove(self.sock)
+        if self.vnc_port_file:
+            chain.remove(self.vnc_port_file)
         if self.media_img:
             chain.remove(self.media_img)
 
@@ -412,6 +491,15 @@ def _spawn(argv, log, env):
         kw = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if host.is_windows() \
             else {"start_new_session": True}
         return subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=f, stderr=subprocess.STDOUT, env=env, **kw)
+
+
+def _tail(path, n):
+    try:
+        with open(path, "rb") as f:
+            lines = f.read()[-8192:].decode("utf-8", "replace").splitlines()
+    except OSError:
+        return []
+    return [line for line in lines if line.strip()][-n:]
 
 
 def _launchctl_manager():
@@ -469,8 +557,13 @@ def main(argv):
             while drv.poll() is None:
                 if chain.stop_requested():
                     drv.terminate()
+                deck.watch_gui()
                 time.sleep(0.3)
-        chain.sleep(dur, until=lambda: not deck.running())
+        end = time.time() + dur
+        parent = None if host.is_windows() else os.getppid()
+        while time.time() < end and deck.running() and not chain.stop_requested(parent):
+            deck.watch_gui()
+            chain.sleep(min(1.0, end - time.time()), until=lambda: not deck.running())
     finally:
         deck.stop()
     chain.say("[%s] done -- %s %s" % (tag, host.posix(deck.main_log), host.posix(deck.gui_log)))

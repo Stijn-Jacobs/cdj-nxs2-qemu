@@ -16,6 +16,7 @@ A source scales each new frame to the window's size in its own thread, so
 the UI thread only pastes.
 """
 
+import logging
 import struct
 import threading
 import time
@@ -24,6 +25,8 @@ from array import array
 from PIL import Image
 
 LCD_SIZE = (800, 480)
+
+log = logging.getLogger("screen")
 
 
 class FrameStats:
@@ -143,6 +146,8 @@ class FrameFile(FrameSource):
                 with open(self.path, "rb", buffering=0) as f:
                     self._follow(f)
             except (OSError, ValueError) as e:
+                if self.following or self.status != f"frames: {self.path} ({e})":
+                    log.info("frame file %s: %s", self.path, e)
                 self.following = False
                 self.status = f"frames: {self.path} ({e})"
             time.sleep(self.RETRY_S)
@@ -185,6 +190,8 @@ class FrameFile(FrameSource):
                 self.frame = img
                 self._publish()
             self.seq = done
+            if not self.following:
+                log.info("frame file %s: live, %dx%d", self.path, w, h)
             self.following = True
             idle_since = time.monotonic()
 
@@ -220,6 +227,19 @@ class Screen:
     @property
     def status(self):
         return self.rfb.status
+
+    # The first boot's own steps can hold the display board back a while;
+    # past this, a missing screen is worth saying why.
+    NO_SCREEN_S = 45
+
+    def trouble(self, now):
+        """Why there is still no screen, in a few words, once it has been
+        missing for NO_SCREEN_S; else None."""
+        if self.connected or now - self.rfb.down_since < self.NO_SCREEN_S:
+            return None
+        if self.rfb.port_file and self.rfb.current_port() is None:
+            return "the display board never came up"
+        return f"{self.rfb.error or 'no answer'} on port {self.rfb.addr[1]}"
 
     @property
     def updates(self):

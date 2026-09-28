@@ -203,7 +203,9 @@ def main(argv):
             return 1
         env["GUI_DISPLAY"] = "vnc"
         vnc_want = int(nonempty(env, "CDJ_APP_VNC_BASE", "5920"))
-        vnc_base = host.pick_port_block(vnc_want, int(decks)) if host.is_windows() else vnc_want
+        # A port another program (or a leftover QEMU) holds makes the display
+        # board's QEMU exit at once, and the app then waits for its screen forever.
+        vnc_base = host.pick_port_block(vnc_want, int(decks))
         if vnc_base != vnc_want:
             say("TCP %d+ is reserved or in use here; the deck app's VNC screens use %d+ instead" % (
                 vnc_want, vnc_base))
@@ -211,6 +213,10 @@ def main(argv):
         # Both QEMU and a Windows Python want a native path here.
         env["CDJ_APP_FRAME_DIR"] = env.get("CDJ_APP_FRAME_DIR") or (
             host.native(env["TMPDIR"]) if env.get("TMPDIR") else lay.tmp)
+        # Where boot_deck.py logs each display board, for the app to point at
+        # when a deck's screen never comes.
+        env["CDJ_APP_GUI_LOGS"] = host.posix(nonempty(env, "LOGDIR", lay.tmp))
+        env["CDJ_APP_LOG"] = env.get("CDJ_APP_LOG") or os.path.join(lay.logs, "app.log")
         app_cmd = app_py + [os.path.join(lay.emu, "app", "virtual_deck.py"), "--decks", decks,
                             "--prefix", c["CDJ_NAME"], "--relay", "127.0.0.1:" + env["RELAY_PORT"],
                             "--vnc-base", env["CDJ_APP_VNC_BASE"], "--frame-dir", env["CDJ_APP_FRAME_DIR"]]
@@ -273,7 +279,7 @@ def run(lay, env, launch, bridge, app_cmd):
         # closing the window or Ctrl-C stops the decks.
         with open(os.path.join(lay.logs, "rig.log"), "wb") as log:
             rig = subprocess.Popen(launch, env=env, stdout=log, stderr=subprocess.STDOUT)
-        say("decks starting (log: logs/rig.log); the virtual deck window opens now.")
+        say("decks starting (logs: logs/rig.log, logs/app.log); the virtual deck window opens now.")
         window = subprocess.Popen(app_cmd, env=env)
         while window.poll() is None and rig.poll() is None and not os.path.exists(env["LAUNCHER_STOP_FILE"]):
             time.sleep(0.5)
