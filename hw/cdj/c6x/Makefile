@@ -17,7 +17,7 @@ GLIB_LIBS   := $(shell pkg-config --libs gmodule-2.0 2>/dev/null)
 CFLAGS += $(GLIB_CFLAGS)
 SRC     = $(abspath .)
 
-CORE    = c66x_decode.c c66x_image.c c66x_core.c
+CORE    = c66x_decode.c c66x_image.c c66x_core.c c66x_mem.c c66x_exec.c c66x_step.c c66x_jit.c
 CORE_O  = $(patsubst %.c,$(O)/%.o,$(CORE))
 HDRS    = $(wildcard *.h binutils/*.h)
 

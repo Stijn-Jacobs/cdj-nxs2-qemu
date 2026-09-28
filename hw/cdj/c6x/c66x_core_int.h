@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
- * C66x core internals shared by c66x_core.c and the compiled regions that
+ * C66x core internals shared by the core (c66x_*.c) and the compiled regions that
  * the block compiler (tools/c14_jitgen.py) generates: the core struct and the
  * few constants a generated region reads. A region is built against this exact
  * header; C66X_JIT_ABI changes whenever the struct does, and the loader refuses

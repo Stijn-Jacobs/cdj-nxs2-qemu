@@ -187,7 +187,8 @@ if [ "$WIN" = 1 ]; then
     # shellcheck disable=SC2046  # pkg-config prints one flag per word
     run gcc -O2 -std=gnu11 -I "$(native "$C6X")" $(pkg-config --cflags gmodule-2.0) \
         "$(native "$C6X/c6xreplay.c")" "$LIBDIR/c66x_decode.o" "$LIBDIR/c66x_image.o" \
-        "$LIBDIR/c66x_core.o" -o "$TRAINER" -Wl,--stack,67108864 -lm \
+        "$LIBDIR/c66x_core.o" "$LIBDIR/c66x_mem.o" "$LIBDIR/c66x_exec.o" \
+        "$LIBDIR/c66x_step.o" "$LIBDIR/c66x_jit.o" -o "$TRAINER" -Wl,--stack,67108864 -lm \
         $(pkg-config --libs gmodule-2.0) || die "the trainer did not link"
 fi
 if [ "$CLANG" = 1 ]; then

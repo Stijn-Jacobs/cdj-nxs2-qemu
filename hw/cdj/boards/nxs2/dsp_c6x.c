@@ -3,7 +3,7 @@
 #include "cdj_getenv.h"
 /*
  * CDJ_C6X: board glue for the emulated DSP, IC301 (a TMS320C6655), running the
- * program MAIN uploads to it. The core is c6x/c66x_core.c and the peripherals
+ * program MAIN uploads to it. The core is c6x/c66x_*.c and the peripherals
  * c6x/soc_*.c; this file wires them to MAIN:
  *
  *   PTH0   (PHDR bit 0, +0x12E)  DSP reset: low holds it, a rise re-arms the ROM
