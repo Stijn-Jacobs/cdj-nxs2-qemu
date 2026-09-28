@@ -166,14 +166,19 @@ def add_mingw_gcc(runtime):
     folder), the gcc lib directory, the C runtime's import libraries, and of
     its headers the ones the generated code includes."""
     cc = os.path.join(runtime, "cc")
-    mingw = os.path.normpath(host.native("/mingw64"))
+    # The mingw64 of the gcc on PATH, the one that built the QEMUs: not
+    # host.native("/mingw64"), which prefers C:\msys64, and on a CI runner that
+    # is a preinstalled MSYS2 with no gcc (the build's is under D:\a\_temp).
+    gcc = shutil.which("gcc") or sys.exit("no gcc on PATH to package")
+    mingw = os.path.dirname(os.path.dirname(os.path.realpath(gcc)))
 
     def ask_gcc(flag):
-        """A file gcc itself uses, relative to /mingw64. Asked rather than
+        """A file gcc itself uses, relative to mingw64. Asked rather than
         worked out from `gcc -dumpversion`, which need not name gcc's own
-        directory (a major-version-only build prints "15" for 15.2.0)."""
-        out = subprocess.run(["gcc", flag], capture_output=True, text=True, check=True).stdout.strip()
-        path = os.path.normpath(host.native(out)) if out else ""
+        directory (a major-version-only build prints "15" for 15.2.0). A
+        mingw gcc prints native paths."""
+        out = subprocess.run([gcc, flag], capture_output=True, text=True, check=True).stdout.strip()
+        path = os.path.normpath(out) if out else ""
         if not os.path.isfile(path):
             return None
         return os.path.relpath(path, mingw)
@@ -215,7 +220,7 @@ def add_mingw_gcc(runtime):
         shutil.rmtree(work, ignore_errors=True)
     include = os.path.normcase(os.path.join(mingw, "include")) + os.sep
     for dep in deps:
-        path = os.path.normpath(host.native(dep))
+        path = os.path.normpath(dep)
         if os.path.normcase(path).startswith(include):
             _copy(path, os.path.join(cc, os.path.relpath(path, mingw)))
     # Configured with the sysroot /mingw64, which a relocated gcc does not
