@@ -9,8 +9,10 @@
 #   QEMU_BUILD  must be on the same drive as the source (QEMU's tracetool uses
 #               os.path.relpath, which raises across drives on Windows) and on
 #               NTFS (meson's postconf step symlinks the install tree, which
-#               exFAT cannot hold; the error text suggests Developer Mode, which
-#               is not the cause). The two trees take about 2 GB.
+#               exFAT cannot hold). Without Developer Mode or Administrator
+#               rights Windows refuses those symlinks, and our patch to
+#               scripts/symlink-install-tree.py copies the files instead.
+#               The two trees take about 2 GB.
 #   SKIP_PATCH_REGEN
 #               on by default, so a Windows build does not rewrite patches/.
 #   usage: scripts/build/build_windows.sh [main|eb|both]        (default: both)

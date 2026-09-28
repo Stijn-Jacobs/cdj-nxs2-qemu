@@ -35,6 +35,7 @@ FILES=(
     hw/timer/sh_timer.c
     include/hw/sh4/sh_intc.h
     net/socket.c
+    scripts/symlink-install-tree.py
     system/runstate.c
     target/sh4/cpu.c
     target/sh4/cpu.h
@@ -49,8 +50,8 @@ FILES=(
 # captured.
 mapfile -t SEEN < <(git -C "$SRC" diff --name-only -- \
     'accel/tcg/**' 'chardev/**' 'hw/char/**' 'hw/intc/**' 'hw/sh4/**' 'hw/timer/**' \
-    'include/hw/sh4/**' 'net/**' 'system/**' 'target/sh4/**' 'ui/**' 2>/dev/null \
-    | grep -E '\.(c|h|m|build)$|Kconfig$' || true)
+    'include/hw/sh4/**' 'net/**' 'scripts/**' 'system/**' 'target/sh4/**' 'ui/**' 2>/dev/null \
+    | grep -E '\.(c|h|m|build|py)$|Kconfig$' || true)
 for f in "${SEEN[@]:-}"; do
     [ -n "$f" ] || continue
     printf '%s\n' "${FILES[@]}" | grep -qxF "$f" \

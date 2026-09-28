@@ -1,0 +1,38 @@
+diff --git a/scripts/symlink-install-tree.py b/scripts/symlink-install-tree.py
+index 8ed97e3..fcd94ff 100644
+--- a/scripts/symlink-install-tree.py
++++ b/scripts/symlink-install-tree.py
+@@ -4,6 +4,7 @@
+ import errno
+ import json
+ import os
++import shutil
+ import subprocess
+ import sys
+ 
+@@ -27,9 +28,19 @@ def destdir_join(d1: str, d2: str) -> str:
+     try:
+         os.symlink(source, bundle_dest)
+     except BaseException as e:
+-        if not isinstance(e, OSError) or e.errno != errno.EEXIST:
+-            if os.name == 'nt':
+-                print('Please enable Developer Mode to support soft link '
+-                      'without Administrator permission')
+-            print(f'error making symbolic link {dest}', file=sys.stderr)
+-            raise e
++        if isinstance(e, OSError) and e.errno == errno.EEXIST:
++            continue
++        # Windows allows symlinks only with Developer Mode or Administrator
++        # rights (ERROR_PRIVILEGE_NOT_HELD). A copy serves the bundle as well;
++        # build outputs do not exist yet at configure time and are skipped,
++        # since running from the build tree needs only the data files.
++        if os.name == 'nt' and getattr(e, 'winerror', None) == 1314:
++            if not os.path.exists(source):
++                continue
++            if os.path.isdir(source):
++                shutil.copytree(source, bundle_dest, dirs_exist_ok=True)
++            else:
++                shutil.copy2(source, bundle_dest)
++            continue
++        print(f'error making symbolic link {dest}', file=sys.stderr)
++        raise e
