@@ -54,6 +54,7 @@ class Deck:
         self.media_copy = None   # (src, dst)
         self.gui_env = None
         self.gui_respawns = 0
+        self.closed = False        # the screen's window was closed: the deck stops
         self.vnc_port_file = None  # where the app learns this deck's VNC port
         self.vnc_port = None       # the port the GUI QEMU took, once known
         self._plan()
@@ -437,6 +438,13 @@ class Deck:
             return
         if self.main.poll() is not None or self.gui_respawns is None:
             return
+        if self.gui.returncode == 0:
+            # Status 0 is a quit, not a crash: its window was closed (or quit
+            # typed at its monitor). The deck goes with it, and so does the run.
+            self.closed = True
+            chain.say("[%s] the screen's window was closed; stopping" % self.tag)
+            chain.request_stop()
+            return
         tail = _tail(self.gui_log, 8)
         early = time.time() - self.gui_started < self.GUI_EARLY_S
         if early and self.gui_respawns < self.GUI_RESPAWNS:
@@ -453,7 +461,7 @@ class Deck:
             chain.err("[%s]   %s" % (self.tag, line))
 
     def running(self):
-        return self.main.poll() is None or self.gui.poll() is None
+        return not self.closed and (self.main.poll() is None or self.gui.poll() is None)
 
     def stop(self):
         """The exit notifiers print the counters and write a JIT profile.

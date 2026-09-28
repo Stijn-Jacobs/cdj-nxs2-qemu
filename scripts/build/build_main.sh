@@ -93,6 +93,7 @@ if [ "$need_configure" = "1" ]; then
     "$SRC/configure" $CFG_ARGS
     printf '%s' "$CFG_ARGS" > .cdj-cfg-args
 fi
+. "$HERE/no_werror.sh"
 ninja "qemu-system-sh4$EXESUF"
 
 # Capture what was just built. Done after the build rather than before, so the

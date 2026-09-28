@@ -97,6 +97,8 @@ def run_main(name, args):
         os.environ["LAUNCHER_STOP_FILE"] = "%s/cdj-stop-%d" % (host.rig_tmp(), os.getpid())
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: request_stop())
+    if hasattr(signal, "SIGHUP"):
+        signal.signal(signal.SIGHUP, lambda *_: hangup(request_stop))
     try:
         if name in ("live", "live_linked"):
             from . import live
@@ -109,6 +111,18 @@ def run_main(name, args):
 
 def stop_file():
     return os.environ.get("LAUNCHER_STOP_FILE", "")
+
+
+def hangup(stop):
+    """The terminal closed (SIGHUP). Left to its default, it kills this process
+    while the boards, in their own sessions, run on as orphans holding the app's
+    files open (on macOS that makes the next launch of the app fail with -47).
+    Stop in order instead, with output to the gone terminal thrown away: a
+    write there fails and would end the teardown halfway."""
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    os.dup2(devnull, 1)
+    os.dup2(devnull, 2)
+    stop()
 
 
 def request_stop():

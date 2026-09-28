@@ -112,8 +112,9 @@ static void cdj_board_flash(void)
                     d->name, (unsigned)(d->flash_size / (64 * KiB)));
     } else {
         info_report("%s: NOR flash top-boot %u x %u KiB + %u x %u KiB",
-                    d->name, d->flash[0].blocks, d->flash[0].sector / KiB,
-                    d->flash[1].blocks, d->flash[1].sector / KiB);
+                    d->name, d->flash[0].blocks,
+                    (unsigned)(d->flash[0].sector / KiB),
+                    d->flash[1].blocks, (unsigned)(d->flash[1].sector / KiB));
     }
 }
 

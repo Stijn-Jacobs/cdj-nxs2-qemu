@@ -261,7 +261,10 @@ def run(lay, env, launch, bridge, app_cmd):
     os.makedirs(lay.logs, exist_ok=True)
     env["LAUNCHER_STOP_FILE"] = "%s/cdj-stop-%d" % (lay.tmp, os.getpid())
     env = chain.launcher_env(env)
-    signal.signal(signal.SIGINT, lambda *_: open(env["LAUNCHER_STOP_FILE"], "a").close())
+    stop = lambda *_: open(env["LAUNCHER_STOP_FILE"], "a").close()
+    signal.signal(signal.SIGINT, stop)
+    if hasattr(signal, "SIGHUP"):
+        signal.signal(signal.SIGHUP, lambda *_: chain.hangup(stop))
     helpers = []
     try:
         if bridge:
