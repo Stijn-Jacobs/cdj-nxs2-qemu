@@ -1,0 +1,27 @@
+diff --git a/ui/vnc.c b/ui/vnc.c
+index dae5d51..3fe68bb 100644
+--- a/ui/vnc.c
++++ b/ui/vnc.c
+@@ -556,10 +556,19 @@ VncInfo2List *qmp_query_vnc_servers(Error **errp)
+         info->clients = qmp_query_client_list(vd);
+         qmp_query_auth(vd->auth, vd->subauth, &info->auth,
+                        &info->vencrypt, &info->has_vencrypt);
++        /*
++         * CDJ: the boards' graphic consoles have no device (they are made
++         * with graphic_console_init(NULL, ...)), and a text console has no
++         * "device" property at all: either crashed "info vnc", which the
++         * launcher asks to learn the port the VNC server took.
++         */
+         if (vd->dcl.con) {
+-            dev = DEVICE(object_property_get_link(OBJECT(vd->dcl.con),
+-                                                  "device", &error_abort));
+-            info->display = g_strdup(dev->id);
++            Object *obj = object_property_get_link(OBJECT(vd->dcl.con),
++                                                   "device", NULL);
++            dev = obj ? DEVICE(obj) : NULL;
++            if (dev) {
++                info->display = g_strdup(dev->id);
++            }
+         }
+         for (i = 0; vd->listener != NULL && i < vd->listener->nsioc; i++) {
+             info->server = qmp_query_server_entry(
