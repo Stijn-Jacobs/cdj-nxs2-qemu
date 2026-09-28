@@ -54,8 +54,9 @@ echo "installed hw/sh4/cdj/ (board sources)"
 # The TMS320C6655 DSP: the C66x core and the SoC models. The offline tools
 # (runner, tests, image loader) stay out of the machine. It sits under cdj/ so
 # the board's '#include "c6x/c66x.h"' resolves.
-C6X_FILES=(c66x.h c66x_core.c c66x_core_int.h c66x_decode.c c66x_decode.h c66x_ext_table.h)
-C6X_SRCS=(c66x_core.c c66x_decode.c)
+C6X_FILES=(c66x.h c66x_core_int.h c66x_priv.h c66x_decode.c c66x_decode.h c66x_ext_table.h
+           c66x_core.c c66x_mem.c c66x_exec.c c66x_step.c c66x_jit.c)
+C6X_SRCS=(c66x_core.c c66x_mem.c c66x_exec.c c66x_step.c c66x_jit.c c66x_decode.c)
 for f in "$HERE"/../../hw/cdj/c6x/soc_*.[ch]; do
     C6X_FILES+=("${f#$HERE/../../hw/cdj/c6x/}")
     case "$f" in *.c) C6X_SRCS+=("${f#$HERE/../../hw/cdj/c6x/}") ;; esac

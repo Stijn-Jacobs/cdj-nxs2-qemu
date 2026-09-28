@@ -45,6 +45,18 @@ jobs:
       - name: SoC model register sequences
         run: make -C hw/cdj/c6x -f soc.mk -j2 O="$RUNNER_TEMP/c6x-soc" test
 
+  mods:
+    name: display firmware mods
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Each mod's .bin is committed so patching needs no cross tools; this is
+      # what keeps it the assembled .s.
+      - name: Install the SH cross assembler
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends binutils-sh4-linux-gnu
+      - name: Each mod's .bin is its .s assembled
+        run: python3 mods/patch_gui.py --check
+
   lint:
     name: shell and python syntax
     runs-on: ubuntu-latest

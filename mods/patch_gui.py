@@ -4,6 +4,7 @@
 
     usage: patch_gui.py <gui_unpacked.bin> <patched.bin> <mod> [<mod>...]
            patch_gui.py --assemble     rebuild every mod's .bin from its .s
+           patch_gui.py --check        fail if a committed .bin is not its .s assembled
            patch_gui.py --list
 
 Each mod is a routine written in SH-2A assembly (gui_<mod>.s, assembled to
@@ -83,22 +84,46 @@ def patch(data, names):
     return sigpatch.patch(GUI_PROFILE, blob_path, data, MODS, names, tag='patch_gui')
 
 
+def _assemble(name, tmp, out):
+    obj = os.path.join(tmp, name + '.o')
+    subprocess.run(['sh4-linux-gnu-as', '--isa=sh2a', '-big',
+                    '-o', obj, source(name)], check=True)
+    subprocess.run(['sh4-linux-gnu-objcopy', '-O', 'binary', obj, out], check=True)
+
+
 def assemble():
     with tempfile.TemporaryDirectory() as tmp:
         for name in MODS:
-            obj = os.path.join(tmp, name + '.o')
-            subprocess.run(['sh4-linux-gnu-as', '--isa=sh2a', '-big',
-                            '-o', obj, source(name)], check=True)
-            subprocess.run(['sh4-linux-gnu-objcopy', '-O', 'binary',
-                            obj, blob_path(name)], check=True)
+            _assemble(name, tmp, blob_path(name))
             print('patch_gui: wrote %s (%d bytes)'
                   % (blob_path(name), os.path.getsize(blob_path(name))))
+
+
+def check():
+    """Every committed .bin is what its .s assembles to now: a .s edited
+    without --assemble would otherwise ship its old routine."""
+    stale = []
+    with tempfile.TemporaryDirectory() as tmp:
+        for name in MODS:
+            out = os.path.join(tmp, name + '.bin')
+            _assemble(name, tmp, out)
+            with open(out, 'rb') as f, open(blob_path(name), 'rb') as g:
+                same = f.read() == g.read()
+            print('patch_gui: %s %s' % (os.path.basename(blob_path(name)),
+                                        'matches its .s' if same else 'is STALE'))
+            if not same:
+                stale.append(name)
+    if stale:
+        raise SystemExit('patch_gui: rebuild with patch_gui.py --assemble: %s' % ' '.join(stale))
 
 
 def main():
     args = sys.argv[1:]
     if args == ['--assemble']:
         assemble()
+        return
+    if args == ['--check']:
+        check()
         return
     if args == ['--list']:
         for name, mod in MODS.items():

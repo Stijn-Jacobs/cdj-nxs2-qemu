@@ -7,8 +7,8 @@ packet counts, the idle head and the mapped RAM). Output: one C file of
 regions and the shared object gcc builds from it, loaded by the core with
 C66X_JIT=<so>.
 
-A region reproduces the interpreter's fast loop (c66x_core.c, fast_cycles,
-fop_run and exec_insn) cycle for cycle, with the pipeline resolved at compile
+A region reproduces the interpreter's fast loop (fast_cycles in c66x_step.c,
+fop_run and exec_insn in c66x_exec.c) cycle for cycle, with the pipeline resolved at compile
 time: every write's landing cycle, the branches in flight and the NOP cycles
 are part of a static state, so a write lands as an assignment instead of going
 through the ring. What is dynamic -- a conditional instruction, a conditional
@@ -209,8 +209,8 @@ class Decoder:
 
 @functools.lru_cache(maxsize=None)
 def handler_number(name):
-    """A handler's number in c66x_core.c's enum hid (the profile records kinds by number)."""
-    src = open(os.path.join(CORE_DIR, "c66x_core.c")).read()
+    """A handler's number in c66x_priv.h's enum hid (the profile records kinds by number)."""
+    src = open(os.path.join(CORE_DIR, "c66x_priv.h")).read()
     body = src[src.index("enum hid {") + len("enum hid {"):]
     body = body[:body.index("};")]
     names = []
@@ -2001,7 +2001,7 @@ def main():
     ap.add_argument("--loop-only", dest="loop_only", type=lambda s: int(s, 0), action="append",
                     help="compile just these loops (SPLOOP addresses)")
     ap.add_argument("--kind-w", dest="kind_w", type=int, default=-1,
-                    help="handler number of SPLOOPW (default: read from c66x_core.c)")
+                    help="handler number of SPLOOPW (default: read from c66x_priv.h)")
     ap.add_argument("--census", type=int, default=0, help="print the top N uncompilable reasons and stop")
     ap.add_argument("--idle-head", dest="idle_head", type=lambda x: int(x, 0), default=None,
                     help="the busy-wait head regions stop at (the machine's CDJ_C6X_IDLE, 0x80076F00)")

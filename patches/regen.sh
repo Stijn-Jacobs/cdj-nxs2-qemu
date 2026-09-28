@@ -44,6 +44,7 @@ FILES=(
     target/sh4/op_helper.c
     target/sh4/translate.c
     ui/cocoa.m
+    ui/vnc.c
 )
 
 # Warn about edits to files not on the list: they would be built but never

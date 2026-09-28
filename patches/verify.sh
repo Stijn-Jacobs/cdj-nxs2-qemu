@@ -44,7 +44,7 @@ while IFS= read -r f; do
 done < <(find "$HERE/../hw/cdj" -path "$HERE/../hw/cdj/c6x" -prune -o -type f \( -name '*.[ch]' -o -name meson.build \) -print | sort)
 check_copy "$HERE/include_exec_cdj-pcring.h"   "$SRC/include/exec/cdj-pcring.h"
 # The C6655 DSP core, installed as whole files like the board.
-for f in "$HERE"/../hw/cdj/c6x/c66x_core.c "$HERE"/../hw/cdj/c6x/c66x_decode.[ch]          "$HERE"/../hw/cdj/c6x/c66x.h "$HERE"/../hw/cdj/c6x/c66x_ext_table.h          "$HERE"/../hw/cdj/c6x/soc_*.[ch] "$HERE"/../hw/cdj/c6x/binutils/*.h; do
+for f in "$HERE"/../hw/cdj/c6x/c66x_{core,mem,exec,step,jit}.c "$HERE"/../hw/cdj/c6x/c66x_priv.h "$HERE"/../hw/cdj/c6x/c66x_core_int.h "$HERE"/../hw/cdj/c6x/c66x_decode.[ch]          "$HERE"/../hw/cdj/c6x/c66x.h "$HERE"/../hw/cdj/c6x/c66x_ext_table.h          "$HERE"/../hw/cdj/c6x/soc_*.[ch] "$HERE"/../hw/cdj/c6x/binutils/*.h; do
     check_copy "$f" "$CDJ/c6x/${f#$HERE/../hw/cdj/c6x/}"
 done
 # A copy left by the old flat layout would not be built but would confuse
