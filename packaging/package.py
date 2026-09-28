@@ -15,8 +15,9 @@ it is unzipped, with nothing to install, and its archive.
                              mido and python-rtmidi
       runtime/qemu/          the two QEMUs from this machine's build trees,
                              their libraries, and libc66x.so
-      runtime/share/qemu/    QEMU's keymaps, without which its VNC server
-                             (the virtual deck app's screen) will not start
+      runtime/share/qemu/    QEMU's keymaps (in runtime/qemu/share/ on Windows),
+                             without which its VNC server (the virtual deck
+                             app's screen) will not start
       runtime/zig/ or cc/    the C compiler the DSP's run-time JIT uses
       runtime/portable.txt   what went in (launcher.layout looks for it)
 
@@ -283,15 +284,27 @@ def add_qemu(runtime, lay):
         _bundle_dylibs(q, [os.path.join(q, os.path.basename(f)) for f in bins + [lib]])
     else:
         _bundle_sos(q, [os.path.join(q, os.path.basename(f)) for f in bins + [lib]])
-    add_keymaps(runtime, host.native(eb_dir))
+    add_keymaps(os.path.join(q, os.path.basename(bins[1])), host.native(eb_dir))
     return _source_stamp(lay)
 
 
-def add_keymaps(runtime, eb_dir):
+def qemu_data_dir(exe):
+    """Where this QEMU looks for its data files, as it says itself: the last
+    of `-L help`'s lines, its datadir relative to its own folder. That is
+    ../share/qemu for a macOS or Linux build, share/ beside the .exe for a
+    Windows one."""
+    out = subprocess.run([exe, "-L", "help"], capture_output=True, text=True, check=True).stdout
+    lines = [line.strip() for line in out.splitlines() if line.strip()]
+    if not lines:
+        sys.exit("%s -L help names no data directory" % exe)
+    return os.path.normpath(host.native(lines[-1]))
+
+
+def add_keymaps(exe, eb_dir):
     """QEMU's VNC server will not start without its keymap files, and the
     virtual deck app's screen is that VNC server. A QEMU run from its build
     tree finds them in qemu-bundle/ (links into the source tree); a packaged
-    one looks in ../share/qemu beside its own folder."""
+    one looks in its datadir, relative to its own folder."""
     import glob
 
     # A build with xkbcommon (Linux) generates its keymaps, and its bundle's
@@ -307,7 +320,7 @@ def add_keymaps(runtime, eb_dir):
                 maps[n] = path
     if "en-us" not in maps:
         sys.exit("no QEMU keymap en-us in %s" % " or ".join(dirs))
-    dst = os.path.join(runtime, "share", "qemu", "keymaps")
+    dst = os.path.join(qemu_data_dir(exe), "keymaps")
     os.makedirs(dst)
     for n, path in maps.items():
         shutil.copyfile(path, os.path.join(dst, n))
