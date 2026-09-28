@@ -15,6 +15,8 @@ it is unzipped, with nothing to install, and its archive.
                              mido and python-rtmidi
       runtime/qemu/          the two QEMUs from this machine's build trees,
                              their libraries, and libc66x.so
+      runtime/share/qemu/    QEMU's keymaps, without which its VNC server
+                             (the virtual deck app's screen) will not start
       runtime/zig/ or cc/    the C compiler the DSP's run-time JIT uses
       runtime/portable.txt   what went in (launcher.layout looks for it)
 
@@ -163,12 +165,30 @@ def add_mingw_gcc(runtime):
     folder), the gcc lib directory, the C runtime's import libraries, and of
     its headers the ones the generated code includes."""
     cc = os.path.join(runtime, "cc")
-    mingw = host.native("/mingw64")
-    version = subprocess.run(["gcc", "-dumpversion"], capture_output=True, text=True, check=True).stdout.strip()
-    gcclib = os.path.join("lib", "gcc", "x86_64-w64-mingw32", version)
+    mingw = os.path.normpath(host.native("/mingw64"))
+
+    def ask_gcc(flag):
+        """A file gcc itself uses, relative to /mingw64. Asked rather than
+        worked out from `gcc -dumpversion`, which need not name gcc's own
+        directory (a major-version-only build prints "15" for 15.2.0)."""
+        out = subprocess.run(["gcc", flag], capture_output=True, text=True, check=True).stdout.strip()
+        path = os.path.normpath(host.native(out)) if out else ""
+        if not os.path.isfile(path):
+            return None
+        return os.path.relpath(path, mingw)
+
+    gcclib = os.path.dirname(ask_gcc("-print-libgcc-file-name") or sys.exit("gcc names no libgcc.a"))
+    tools = [("bin/gcc.exe", "bin")]
+    for prog in ("cc1", "collect2"):
+        rel = ask_gcc("-print-prog-name=" + prog) or sys.exit("gcc finds no %s under %s" % (prog, mingw))
+        tools.append((rel, os.path.dirname(rel)))
     # gcc looks for as and ld beside cc1 before it looks on PATH.
-    tools = [("bin/gcc.exe", "bin"), ("bin/as.exe", gcclib), ("bin/ld.exe", gcclib)] + [
-        (os.path.join(gcclib, t), gcclib) for t in ("cc1.exe", "collect2.exe", "liblto_plugin.dll")]
+    progdir = tools[1][1]
+    tools += [("bin/as.exe", progdir), ("bin/ld.exe", progdir)]
+    # The LTO plugin is only loaded for -flto, which the JIT never passes.
+    lto = ask_gcc("-print-prog-name=liblto_plugin.dll")
+    if lto:
+        tools.append((lto, os.path.dirname(lto)))
     for tool, dest in tools:
         _copy(os.path.join(mingw, tool), os.path.join(cc, dest, os.path.basename(tool)))
         for dll in _dll_closure(os.path.join(mingw, tool)):
@@ -213,6 +233,8 @@ def _prelude():
 
 
 def _copy(src, dst):
+    if not os.path.isfile(src):
+        sys.exit("cannot package %s: it is not there" % src)
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     shutil.copy2(src, dst)
 
@@ -261,7 +283,44 @@ def add_qemu(runtime, lay):
         _bundle_dylibs(q, [os.path.join(q, os.path.basename(f)) for f in bins + [lib]])
     else:
         _bundle_sos(q, [os.path.join(q, os.path.basename(f)) for f in bins + [lib]])
+    add_keymaps(runtime, host.native(eb_dir))
     return _source_stamp(lay)
+
+
+def add_keymaps(runtime, eb_dir):
+    """QEMU's VNC server will not start without its keymap files, and the
+    virtual deck app's screen is that VNC server. A QEMU run from its build
+    tree finds them in qemu-bundle/ (links into the source tree); a packaged
+    one looks in ../share/qemu beside its own folder."""
+    import glob
+
+    found = glob.glob(os.path.join(eb_dir, "qemu-bundle", "**", "share", "qemu", "keymaps"), recursive=True)
+    src = found[0] if found else os.path.join(EMU, "qemu-src", "pc-bios", "keymaps")
+    names = [n for n in os.listdir(src) if "." not in n] if os.path.isdir(src) else []
+    if "en-us" not in names:
+        sys.exit("no QEMU keymaps (en-us) in %s: build the display QEMU first (./build.sh display)" % src)
+    dst = os.path.join(runtime, "share", "qemu", "keymaps")
+    os.makedirs(dst)
+    for n in names:
+        shutil.copyfile(os.path.join(src, n), os.path.join(dst, n))    # follows the links
+
+
+def check_display_qemu(runtime):
+    """Start the packaged display QEMU with a VNC server, as the virtual deck
+    app has it, and fail the build if it does not stay up: a missing data
+    file (the keymaps) or library otherwise only shows on a user's machine,
+    as a deck that waits for its screen forever."""
+    exe = os.path.join(runtime, "qemu", "qemu-system-sh4eb" + host.exe_suffix())
+    p = subprocess.Popen([exe, "-M", "none", "-display", "vnc=127.0.0.1:40,to=99", "-monitor", "none",
+                          "-serial", "none"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    try:
+        out, _ = p.communicate(timeout=3)
+    except subprocess.TimeoutExpired:
+        p.kill()
+        p.wait()
+        return
+    sys.exit("the packaged display QEMU did not start its VNC server (exit %s):\n%s"
+             % (p.returncode, out.decode("utf-8", "replace")))
 
 
 def _bundle_dylibs(q, files):
@@ -464,6 +523,7 @@ def main():
     add_app(app)
     add_python(runtime, pbs, a.cache)
     stamp = add_qemu(runtime, lay)
+    check_display_qemu(runtime)
     cc = add_zig(runtime, zig_target, a.cache) if cc_kind == "zig" else add_mingw_gcc(runtime)
     check_compiler(runtime, cc, app)
     with open(os.path.join(runtime, "portable.txt"), "w", newline="\n") as f:
