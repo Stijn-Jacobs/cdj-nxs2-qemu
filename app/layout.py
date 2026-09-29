@@ -40,6 +40,10 @@ RED = (255, 30, 30)
 CYAN = (70, 220, 255)
 YELLOW = (240, 235, 40)
 WHITE = (235, 240, 255)
+PALE_CYAN = (205, 230, 255)             # the USB port frame's lit colour
+
+USB_PORT = (18, 68, 80, 126)            # the port's outer bezel, from art.py's
+                                         # _left_column; also its lit frame
 
 
 @dataclass
@@ -98,6 +102,12 @@ def _pad(letter, y, color):
 KEYS = [
     # Left column.
     Key("usb_stop", "cdome", None, circle=(101, 141, 13)),
+    # The USB port indicator (Operating Instructions p.13 item i): steady
+    # while a medium is mounted. On the real unit it is the lit frame
+    # around the port opening itself, not a separate LED -- confirmed
+    # against a product photo.
+    Key("usb_indicator", "frame", None, box=USB_PORT, color=PALE_CYAN,
+        lamp="usb_indicator"),
     _pad("a", 316, RED), _pad("b", 390, CYAN), _pad("c", 464, YELLOW),
     _pad("d", 540, BLUE),
     # BANK and the hot cue CALL/DELETE: no report bits are known for them.
@@ -120,14 +130,15 @@ KEYS = [
 
     # The display panel: sources, browse keys, time mode and quantize.
     Key("pc", "src", "dev_rekordbox", box=(168, 55, 208, 74), label="PC",
-        color=WHITE, font=9, keycap="R"),
+        color=WHITE, font=9, keycap="R", lamp="source_pc"),
     Key("link", "src", "dev_link", box=(168, 99, 208, 120), label="LINK",
-        color=BLUE, keycap="L"),
+        color=BLUE, keycap="L", lamp="source_link"),
     Key("usb", "src", "dev_usb", box=(168, 144, 208, 165), label="USB",
-        keycap="U"),
-    Key("sd", "src", "dev_sd", box=(168, 189, 208, 210), label="SD"),
+        keycap="U"),  # lamp not wired yet -- USB's real pnl signal is unmeasured
+    Key("sd", "src", "dev_sd", box=(168, 189, 208, 210), label="SD",
+        lamp="source_sd"),
     Key("disc", "src", "dev_disc", box=(168, 234, 208, 255), label="DISC",
-        keycap="D"),
+        keycap="D", lamp="source_disc"),
     Key("time_mode", "cdome", "time_a_cue", circle=(188, 302, 12)),
     Key("quantize", "dome", None, circle=(188, 357, 12), dot=RED),
     Key("browse", "top", "browse", box=(280, 55, 368, 74), label="BROWSE",
@@ -157,7 +168,8 @@ KEYS = [
         keycap="P"),
     Key("master_tempo", "cdome", "master_tempo", circle=(900, 773, 12),
         dot=RED, lamp="master_tempo", keycap="K"),
-    Key("tempo_reset", "dome", "tempo_reset", circle=(803, 1000, 15)),
+    Key("tempo_reset", "dome", "tempo_reset", circle=(803, 1000, 15),
+        lamp="tempo_reset"),
 
     # Under the screen: the loop section, cue/loop call, delete, memory.
     Key("loop_in", "loop", "loop_in", circle=(180, 468, 25), color=ORANGE,

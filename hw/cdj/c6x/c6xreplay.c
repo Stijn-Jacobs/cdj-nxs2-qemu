@@ -16,6 +16,16 @@
  * REPLAY_PCM=<file>:<addr>:<len> appends, at every recorded state hash, the
  * cycle (u64) and <len> bytes of guest RAM from <addr>: a sampled view of an
  * output buffer, e.g. the McBSP0 ping-pong, whose words the audio model plays.
+ *
+ * REPLAY_WINDOW=<cycles> prints one line per window of that many core cycles
+ * (executed + idle-skipped): the executed cycles and host seconds in it. The
+ * whole-run rate mixes boot, load and playback; a window isolates one phase.
+ *
+ * REPLAY_IDLE=1 arms the core's busy-wait skip the way the machine does (head
+ * 0x80076F00, stack 0x008AC668..0x008BC670). The recording machine ran with
+ * it, so the core
+ * stops exactly at the recorded skips, and the replay then pays the same
+ * idle-tracking cost the machine pays, which it otherwise does not.
  */
 #include "c66x.h"
 
@@ -44,6 +54,7 @@ static uint64_t n_read, n_write, bad_write, n_hash, bad_hash, n_irq, n_store, n_
 static uint64_t write_hash = 1469598103934665603ull;
 static int stop_now;
 static uint64_t n_steps, step_hist[64];     /* c66x_step calls by log2 budget */
+static int replay_idle;
 
 static uint32_t u32(const uint8_t *p) { uint32_t v; memcpy(&v, p, 4); return v; }
 static uint64_t u64(const uint8_t *p) { uint64_t v; memcpy(&v, p, 8); return v; }
@@ -241,8 +252,27 @@ int main(int argc, char **argv)
     for (size_t k = NR; k-- > 0;)
         nb[k] = R[k].inline_ ? nb[k + 1] : k;
 
+    const char *ie = getenv("REPLAY_IDLE");
+    replay_idle = ie && strcmp(ie, "0");
+    uint64_t idle_stuck = 0;
+    const char *we = getenv("REPLAY_WINDOW");
+    uint64_t win = we ? strtoull(we, NULL, 0) : 0, win_end = win, win_exec0 = 0;
+    double win_host0 = 0;
+
     while (I < NR && !stop_now) {
         size_t b = nb[I];
+        if (win && C && base_cycles + c66x_get_cycle(C) >= win_end) {
+            uint64_t tot = base_cycles + c66x_get_cycle(C), ex = tot - skipped;
+            double h = host_s - win_host0;
+            fprintf(stderr, "window %llu: cycles %llu executed %llu host %.3f s %.1f M/s\n",
+                    (unsigned long long)(win_end / win - 1), (unsigned long long)tot,
+                    (unsigned long long)(ex - win_exec0), h,
+                    h > 0 ? (ex - win_exec0) / h / 1e6 : 0);
+            win_exec0 = ex;
+            win_host0 = host_s;
+            while (win_end <= tot)
+                win_end += win;
+        }
         if (C && (b == NR || (R[b].type != 'N' && R[b].type != 'M' && R[b].type != 'P'))) {
             uint64_t cur = c66x_get_cycle(C);
             /* Past the last boundary, run until the trailing reads are done. */
@@ -252,7 +282,15 @@ int main(int argc, char **argv)
                     break;
                 uint64_t n;
                 t0 = now_s();
-                c66x_step(C, target - cur, &n);
+                c66x_stop st = c66x_step(C, target - cur, &n);
+                /* With REPLAY_IDLE the core stops where the recorded run did,
+                 * right at its skip; a stop anywhere else never makes progress. */
+                if (st == C66X_STOP_IDLE && !n && ++idle_stuck > 1000) {
+                    die_at("an idle stop the recorded run did not make");
+                    break;
+                }
+                if (n)
+                    idle_stuck = 0;
                 n_steps++;
                 step_hist[63 - __builtin_clzll((target - cur) | 1)]++;
                 host_s += now_s() - t0;
@@ -282,6 +320,8 @@ int main(int argc, char **argv)
             }
             C = c66x_new(&bus);
             nmap = 0;
+            if (replay_idle)
+                c66x_set_idle_loop(C, 0x80076F00, 0x008AC668, 0x008BC670, 0);
             break;
         case 'M': {
             uint32_t base = u32(r->p + 9), size = u32(r->p + 13), id = u32(r->p + 17);

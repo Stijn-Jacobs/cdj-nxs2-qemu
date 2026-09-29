@@ -1,13 +1,15 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
-#include "cdj.h"
+#include "cdj_ether.h"
 #include "cdj_getenv.h"
+#include "net/net.h"
 /*
- * SH7724 EtherMAC: E-DMAC at 0x04600000, EtherC at 0x04600100. The E-DMAC
- * walks the firmware's own descriptor rings and passes frames to a QEMU netdev,
- * so Pro DJ Link works between decks. PIR (0x04600120) is the MDIO bit-bang
- * port to the PHY; the firmware talks to a PHY at addresses 0, 1 and 5.
- * Registers are backed because a read-modify-write bit-bang port that reads
- * back zero never converges.
+ * SH7724-family EtherMAC: E-DMAC + EtherC, register layout shared by the
+ * CDJ-2000NXS2 (0x04600000) and the CDJ-2000/CDJ-2000NXS (0xFEF00000, the
+ * SH7763's fast EtherC). The E-DMAC walks the firmware's own descriptor
+ * rings and passes frames to a QEMU netdev, so Pro DJ Link works between
+ * decks. PIR is the MDIO bit-bang port to the PHY; the firmware talks to a
+ * PHY at addresses 0, 1 and 5. Registers are backed because a
+ * read-modify-write bit-bang port that reads back zero never converges.
  *
  *   CDJ_ETHER_DEBUG=1      log MDIO frames and the first accesses to each
  *                          register; totals print at exit
@@ -19,9 +21,8 @@
  *   CDJ_ETHER_NOLINK=1     PSR reports the cable unplugged
  *   CDJ_ETHER_NOLCHNG=1    never assert ECSR.LCHNG
  */
-#define CDJ_ETHER_BASE 0x04600000
 #define CDJ_ETHER_SIZE 0x10000
-#define CDJ_ETHER_PIR  0x0120        /* EtherC PIR, absolute 0x04600120 */
+#define CDJ_ETHER_PIR  0x0120        /* EtherC PIR */
 
 #define CDJ_ETHER_EDMR  0x0000
 #define CDJ_ETHER_EDTRR 0x0008
@@ -33,7 +34,7 @@
 #define CDJ_ETHER_RMFCR 0x0040
 #define CDJ_ETHER_TFUCR 0x0064
 #define CDJ_ETHER_RFOCR 0x0068
-#define CDJ_ETHER_ECMR  0x0100       /* EtherC, absolute 0x04600100 */
+#define CDJ_ETHER_ECMR  0x0100       /* EtherC */
 #define CDJ_ETHER_ECSR  0x0110
 #define CDJ_ETHER_ECSIPR 0x0118
 #define CDJ_ETHER_PSR   0x0128
@@ -122,6 +123,8 @@ typedef struct {
     unsigned nbits;
     uint32_t out;                    /* read data being shifted back out */
     unsigned out_bits;
+    unsigned mdio_ta;                /* this board's read turnaround, see
+                                       * cdj_ether_mdio_ta()                */
     unsigned wr_reg;                 /* register a write frame is aimed at */
     unsigned wr_phyad;               /* ...and the PHY address it named */
     bool wr_pending;
@@ -236,16 +239,18 @@ static const char *cdj_ether_regname(hwaddr off)
 #define MII_ANLPAR  5
 
 /*
- * Lead-in bits driven before a read's 16 data bits. The driver has already
- * clocked past the turnaround when it starts sampling, so the default is 0;
- * with 2 it reads every register shifted right by two.
- * CDJ_ETHER_MDIO_TA=<n> overrides it.
+ * Lead-in bits driven before a read's 16 data bits, once the driver has
+ * switched MMD to read: the NXS2's read routine needs none (it spends its
+ * turnaround time before that switch, driving one bit itself), the SH7763
+ * boards' (CDJ-2000, CDJ-2000NXS) needs one -- confirmed only by the
+ * survey's static trace of both drivers, not by a live MDIO read, so
+ * CDJ_ETHER_MDIO_TA=<n> can still override either board's default.
  */
-static unsigned cdj_ether_mdio_ta(void)
+static unsigned cdj_ether_mdio_ta(const CdjEtherState *s)
 {
     const char *e = getenv("CDJ_ETHER_MDIO_TA");
 
-    return e ? (unsigned)strtoul(e, NULL, 0) : 0;
+    return e ? (unsigned)strtoul(e, NULL, 0) : s->mdio_ta;
 }
 
 static uint16_t cdj_ether_phy_read(CdjEtherState *s, unsigned reg)
@@ -313,8 +318,8 @@ static void cdj_ether_mdio_bit(CdjEtherState *s, bool bit)
         }
         if (op == 0x2) {
             s->out = cdj_ether_phy_read(s, regad);
-            /* 16 data bits preceded by CDJ_ETHER_MDIO_TA lead-in bits. */
-            s->out_bits = 16 + cdj_ether_mdio_ta();
+            /* 16 data bits preceded by this board's MDIO_TA lead-in bits. */
+            s->out_bits = 16 + cdj_ether_mdio_ta(s);
         } else {
             s->wr_reg = regad;
             s->wr_phyad = phyad;
@@ -906,15 +911,17 @@ static void cdj_ether_dump(Notifier *n, void *unused)
  *   -netdev socket,id=djlink,mcast=230.0.0.1:50000
  *
  * Without it the link comes up but frames go nowhere. */
-void cdj_ether_init(MemoryRegion *sysmem, qemu_irq irq)
+void cdj_ether_init(MemoryRegion *sysmem, const char *name, hwaddr base,
+                    qemu_irq irq, unsigned mdio_ta_default)
 {
     CdjEtherState *s = g_new0(CdjEtherState, 1);
     const char *id = getenv("CDJ_ETHER_NETDEV");
     NetClientState *peer;
 
-    memory_region_init_io(&s->iomem, NULL, &cdj_ether_ops, s, "sh7724.ether",
+    s->mdio_ta = mdio_ta_default;
+    memory_region_init_io(&s->iomem, NULL, &cdj_ether_ops, s, name,
                           CDJ_ETHER_SIZE);
-    memory_region_add_subregion_overlap(sysmem, CDJ_ETHER_BASE, &s->iomem, 1);
+    memory_region_add_subregion_overlap(sysmem, base, &s->iomem, 1);
     s->exit.notify = cdj_ether_dump;
     qemu_add_exit_notifier(&s->exit);
     s->irq = irq;
@@ -922,16 +929,15 @@ void cdj_ether_init(MemoryRegion *sysmem, qemu_irq irq)
 
     peer = qemu_find_netdev(id && *id ? id : "djlink");
     if (!peer) {
-        info_report("cdj2000nxs2: no '%s' netdev -- the EtherMAC will bring "
+        info_report("%s: no '%s' netdev -- the EtherMAC will bring "
                     "its link up but no frame will leave the machine",
-                    id && *id ? id : "djlink");
+                    cdj_board->name, id && *id ? id : "djlink");
         return;
     }
     s->conf.peers.ncs[0] = peer;
     s->conf.peers.queues = 1;
     s->nic = qemu_new_nic(&cdj_ether_net_info, &s->conf, "cdj.ether",
                           "ether", &s->reentrancy_guard, s);
-    info_report("cdj2000nxs2: EtherMAC attached to netdev '%s'",
-                id && *id ? id : "djlink");
+    info_report("%s: EtherMAC attached to netdev '%s'",
+                cdj_board->name, id && *id ? id : "djlink");
 }
-

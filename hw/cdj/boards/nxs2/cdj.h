@@ -39,6 +39,8 @@
 #include "ui/surface.h"
 #include "ui/vgafont.h"
 #include "cdj_panelkeys.h"
+#include "cdj_ether.h"
+#include "cdj_ata.h"
 #include "c6x/c66x.h"
 #include "c6x/soc_c6655.h"
 #ifdef _WIN32
@@ -593,13 +595,11 @@ void cdj_capture_write(FILE **fp, const char *suffix,
 void cdj_dsp_take(const uint8_t *in, unsigned words);
 void cdj_msiof(MemoryRegion *sysmem, const char *name, hwaddr addr,
                       bool dsp);
-void cdj_ata_init(MemoryRegion *sysmem);
 uint64_t cdj_dsp_i2c_tx_bytes(void);
 void cdj_iic(MemoryRegion *sysmem, const char *name, hwaddr addr,
                     unsigned ch, qemu_irq *irq);
 void cdj_pnl_init(MemoryRegion *sysmem, hwaddr addr);
 void cdj_usb_init(MemoryRegion *sysmem, qemu_irq irq);
-void cdj_ether_init(MemoryRegion *sysmem, qemu_irq irq);
 void cdj_hpb_probe_init(MemoryRegion *sysmem);
 extern struct intc_desc cdj_intc;
 void cdj_intc_init(MemoryRegion *sysmem, SuperHCPU *cpu);

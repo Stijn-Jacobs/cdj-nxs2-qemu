@@ -234,8 +234,9 @@ static inline void store_word_fast(c66x_core *c, uint32_t ea, uint32_t v)
         && ea - rr->base <= rr->size - 4 && rr->size >= 4) {
         uint8_t *m = rr->host + (ea - rr->base);
         m[0] = v; m[1] = v >> 8; m[2] = v >> 16; m[3] = v >> 24;
-        if (rr->codepage[(ea - rr->base) >> FP_PAGE_SHIFT])
-            invalidate_code(c, ea, 4);
+        uint8_t cp = rr->codepage[(ea - rr->base) >> FP_PAGE_SHIFT];
+        if (cp)
+            page_stored(c, cp, ea, 4);
         return;
     }
     store_defer(c, ea, v, 4);
@@ -303,8 +304,9 @@ int fop_run(c66x_core *c, const c66x_insn *in, uint32_t next_pc)
                 m[0] = v;
                 if (n > 1) m[1] = v >> 8;
                 if (n > 2) { m[2] = v >> 16; m[3] = v >> 24; }
-                if (rr->codepage[(ea - rr->base) >> FP_PAGE_SHIFT])
-                    invalidate_code(c, ea, n);
+                uint8_t cp = rr->codepage[(ea - rr->base) >> FP_PAGE_SHIFT];
+                if (cp)
+                    page_stored(c, cp, ea, n);
                 return 0;
             }
             store_defer(c, ea, v, n);

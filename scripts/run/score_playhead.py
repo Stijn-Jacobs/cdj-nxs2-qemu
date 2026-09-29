@@ -24,9 +24,11 @@ Verdicts:
   STATIC    healthy frames, strip hash identical throughout
 
 usage: score_playhead.py <tag> [tag ...]    reads /tmp/<tag>/z89-<tag>-*-f*.ppm
+       FRAMES_ROOT=<dir> overrides /tmp (a native Python reads /tmp as C:/tmp)
 """
 import glob
 import hashlib
+import os
 import sys
 
 from PIL import Image
@@ -86,7 +88,8 @@ def full_count(img):
 
 def main():
     for tag in sys.argv[1:]:
-        frames = sorted(glob.glob("/tmp/%s/z89-%s-*-f*.ppm" % (tag, tag)))
+        root = os.environ.get("FRAMES_ROOT", "/tmp")
+        frames = sorted(glob.glob("%s/%s/z89-%s-*-f*.ppm" % (root, tag, tag)))
         print("=" * 70)
         print("%s   %d frames" % (tag, len(frames)))
         if not frames:

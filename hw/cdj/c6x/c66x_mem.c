@@ -42,6 +42,7 @@ void invalidate_code(c66x_core *c, uint32_t a, uint32_t n)
 }
 
 static void idle_dma_store(c66x_core *c, uint32_t addr, uint32_t len);
+static void idle_rs_follow(c66x_core *c, uint32_t a, uint32_t n);
 
 void c66x_invalidate(c66x_core *c, uint32_t addr, uint32_t len)
 {
@@ -56,8 +57,10 @@ void c66x_invalidate(c66x_core *c, uint32_t addr, uint32_t len)
     }
     if (len)
         invalidate_code(c, addr, len);
-    if (len && c->idle_armed)
+    if (len && (c->idle_armed || c->idle_isr_disarmed)) {
         idle_dma_store(c, addr, len);
+        idle_rs_follow(c, addr, len);
+    }
 }
 
 
@@ -67,7 +70,37 @@ static inline unsigned idle_rs_slot(uint32_t key)
     return (key * 2654435761u) >> (32 - 11) & (IDLE_RS_SLOTS - 1);
 }
 
-static void idle_rs_add_word(c66x_core *c, uint32_t w)
+static uint32_t ram_word(c66x_core *c, uint32_t w)
+{
+    const uint8_t *p = ram_ptr(c, w, 4);
+    return p ? p[0] | (p[1] << 8) | (p[2] << 16) | ((uint32_t)p[3] << 24) : 0;
+}
+
+/* A RAM word joins the read set: keep the value the loop read and mark its
+ * page, so a handler store there reaches idle_page_stored. */
+static void idle_rs_keep(c66x_core *c, unsigned h, uint32_t w)
+{
+    if (!ram_ptr(c, w, 4)) {
+        c->idle_rs_pgover = 1;
+        return;
+    }
+    ramreg *r = &c->ram[c->last_ram];
+    uint32_t page = (w - r->base) >> FP_PAGE_SHIFT, bit = ((w - r->base) >> 2) & (IDLE_RS_BLOOM - 1);
+    c->idle_rs_val[h] = ram_word(c, w);
+    c->idle_rs_ram[h] = 1;
+    c->idle_rs_bloom[bit / 32] |= 1u << (bit % 32);
+    if (r->codepage[page] & CP_IDLE)
+        return;
+    if (c->idle_rs_npg == IDLE_RS_PAGES) {
+        c->idle_rs_pgover = 1;
+        return;
+    }
+    c->idle_rs_pg[c->idle_rs_npg].cp = r->codepage;
+    c->idle_rs_pg[c->idle_rs_npg++].page = page;
+    r->codepage[page] |= CP_IDLE;
+}
+
+static void idle_rs_add_word(c66x_core *c, uint32_t w, int ram)
 {
     uint32_t key = w | 1;
     if (c->idle_rs_full)
@@ -82,9 +115,89 @@ static void idle_rs_add_word(c66x_core *c, uint32_t w)
             }
             c->idle_rs[h] = key;
             c->idle_rs_n++;
+            c->idle_rs_ram[h] = 0;
+            if (ram && c->idle_isr_fast)
+                idle_rs_keep(c, h, w);
             return;
         }
     }
+}
+
+static int idle_rs_find(const c66x_core *c, uint32_t w)
+{
+    uint32_t key = w | 1;
+    for (unsigned h = idle_rs_slot(key);; h = (h + 1) & (IDLE_RS_SLOTS - 1)) {
+        if (c->idle_rs[h] == key)
+            return (int)h;
+        if (!c->idle_rs[h])
+            return -1;
+    }
+}
+
+/* Whether [a, a + n) can hold a kept word of any mapping; leaves last_ram on
+ * a's mapping. */
+static int idle_rs_maybe(c66x_core *c, uint32_t a, uint32_t n)
+{
+    if (!c->idle_rs_n || c->idle_rs_full || !ram_ptr(c, a, 1))
+        return 0;
+    uint32_t off = a - c->ram[c->last_ram].base;
+    for (uint32_t w = off >> 2; w <= (off + n - 1) >> 2; w++) {
+        uint32_t bit = w & (IDLE_RS_BLOOM - 1);
+        if (c->idle_rs_bloom[bit / 32] & (1u << (bit % 32)))
+            return 1;
+    }
+    return 0;
+}
+
+/* [a, a + n) changed. idle_isr_store matches a store by its address and
+ * compares it with the bytes it overwrites; the kept values stand in for those
+ * bytes, so they follow every change that check does not count: the same bytes
+ * through the other L2 mapping, DMA stores, stores while nothing is armed. */
+static void idle_rs_follow(c66x_core *c, uint32_t a, uint32_t n)
+{
+    if (!idle_rs_maybe(c, a, n))
+        return;
+    const ramreg *r = &c->ram[c->last_ram];
+    for (unsigned j = 0; j < c->nram; j++) {
+        const ramreg *m = &c->ram[j];
+        if (m->host != r->host || m->size != r->size)
+            continue;
+        uint32_t b = a - r->base + m->base;
+        for (uint32_t w = b & ~3u; w - (b & ~3u) < (b & 3) + n; w += 4) {
+            int h = idle_rs_find(c, w);
+            if (h >= 0 && c->idle_rs_ram[h])
+                c->idle_rs_val[h] = ram_word(c, w);
+        }
+    }
+}
+
+/* A RAM store landed on a read-set page. While a handler runs with idle_armed
+ * down this is idle_isr_store's check, after the fact: the kept value is what
+ * the bytes held before the store, since every earlier change to them was a
+ * hit already or followed by idle_rs_follow. */
+static void idle_page_stored(c66x_core *c, uint32_t a, uint32_t n)
+{
+    if (!idle_rs_maybe(c, a, n))
+        return;
+    if (c->idle_isr_disarmed && !c->idle_fx) {
+        for (uint32_t w = a & ~3u; w - (a & ~3u) < (a & 3) + n; w += 4) {
+            int h = idle_rs_find(c, w);
+            if (h >= 0 && c->idle_rs_ram[h] && ram_word(c, w) != c->idle_rs_val[h]) {
+                c->idle_isr_hit = 1;
+                c->idle_fp = 0;
+                break;
+            }
+        }
+    }
+    idle_rs_follow(c, a, n);
+}
+
+void page_stored(c66x_core *c, uint8_t cp, uint32_t a, uint32_t n)
+{
+    if (cp & CP_CODE)
+        invalidate_code(c, a, n);
+    if (cp & CP_IDLE)
+        idle_page_stored(c, a, n);
 }
 
 static int idle_rs_has_word(const c66x_core *c, uint32_t w)
@@ -106,15 +219,21 @@ void idle_rs_clear(c66x_core *c)
         memset(c->idle_rs, 0, sizeof c->idle_rs);
     c->idle_rs_n = 0;
     c->idle_rs_full = 0;
+    for (unsigned i = 0; i < c->idle_rs_npg; i++)
+        c->idle_rs_pg[i].cp[c->idle_rs_pg[i].page] &= ~CP_IDLE;
+    if (c->idle_rs_npg)
+        memset(c->idle_rs_bloom, 0, sizeof c->idle_rs_bloom);
+    c->idle_rs_npg = 0;
+    c->idle_rs_pgover = 0;
 }
 
 static void idle_loop_read(c66x_core *c, uint32_t a, unsigned n, int ram)
 {
     if (c->isr_depth || c->idle_fx || (ram && a >= c->idle_slo && a < c->idle_shi))
         return;
-    idle_rs_add_word(c, a & ~3u);
+    idle_rs_add_word(c, a & ~3u, ram);
     if ((a & 3) + n > 4)
-        idle_rs_add_word(c, (a & ~3u) + 4);
+        idle_rs_add_word(c, (a & ~3u) + 4, ram);
 }
 
 static void idle_isr_store(c66x_core *c, uint32_t a, unsigned n)
@@ -182,7 +301,8 @@ void mem_write(c66x_core *c, uint32_t a, uint32_t v, unsigned n, int in_isr, uin
     uint8_t *p = ram_ptr(c, a, n);
     /* The app republishes its status block (0x008C8950..) on every pass, so
      * storing the value already there is not a side effect. */
-    if (c->idle_armed && !c->idle_fx && !(p && a >= c->idle_slo && a < c->idle_shi)) {
+    if ((c->idle_armed || c->idle_isr_disarmed) && !c->idle_fx
+        && !(p && a >= c->idle_slo && a < c->idle_shi)) {
         uint32_t old = p ? (p[0] | (n > 1 ? p[1] << 8 : 0)
                             | (n > 2 ? (p[2] << 16) | ((uint32_t)p[3] << 24) : 0)) : ~v;
         uint32_t m = n == 4 ? 0xffffffffu : (1u << (8 * n)) - 1;
@@ -202,8 +322,9 @@ void mem_write(c66x_core *c, uint32_t a, uint32_t v, unsigned n, int in_isr, uin
         if (n > 1) p[1] = v >> 8;
         if (n > 2) { p[2] = v >> 16; p[3] = v >> 24; }
         ramreg *r = &c->ram[c->last_ram];
-        if (r->codepage[(a - r->base) >> FP_PAGE_SHIFT])
-            invalidate_code(c, a, n);
+        uint8_t cp = r->codepage[(a - r->base) >> FP_PAGE_SHIFT];
+        if (cp)
+            page_stored(c, cp, a, n);
         return;
     }
     /* Before the call: a store the write causes synchronously follows it. */
@@ -424,7 +545,7 @@ c66x_insn *fetch_insn(c66x_core *c, uint32_t a)
     fpblk **pg = r->fpp[off >> FP_PAGE_SHIFT];
     if (!pg) {
         pg = r->fpp[off >> FP_PAGE_SHIFT] = calloc(1u << (FP_PAGE_SHIFT - 5), sizeof(fpblk *));
-        r->codepage[off >> FP_PAGE_SHIFT] = 1;
+        r->codepage[off >> FP_PAGE_SHIFT] |= CP_CODE;
     }
     fpblk **bp = &pg[(off >> 5) & ((1u << (FP_PAGE_SHIFT - 5)) - 1)];
     if (!*bp)

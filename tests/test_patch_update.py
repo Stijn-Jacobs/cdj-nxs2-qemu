@@ -19,6 +19,7 @@ import gui_encode
 import lzss_decode
 import lzss_encode
 import patch_gui
+import patch_main
 import patch_update
 import sigpatch
 from helpers import path, run_script
@@ -257,13 +258,13 @@ def build_upd(*sections):
 
 def test_registry_only_lists_firmware_patchable_mods():
     reg = patch_update.registry()
-    assert set(reg) == set(patch_gui.MODS)          # wave3, and only wave3
+    assert set(reg) == set(patch_gui.MODS) | set(patch_main.MODS)
     # the emulator-only knobs from mods.conf must never appear here
     conf = open(path("mods", "mods.conf"), encoding="utf-8").read()
     knob_names = re.findall(r"^(\w+)\|", conf, re.M)
     assert "high_fps" not in reg and "live_clock" not in reg
-    assert "three_band" not in reg          # that row's key, not the mod name
-    assert knob_names == ["high_fps", "live_clock", "three_band"]
+    assert "three_band" not in reg          # that row's key, not the mod names
+    assert knob_names == ["high_fps", "live_clock", "three_band", "osc_beat"]
 
 
 def test_list_cli_shows_target_and_versions():
@@ -381,7 +382,12 @@ def test_patch_update_patches_two_targets_in_one_run(tmp_path, monkeypatch):
     fake_gui = FakeTarget(gui_profile, gui_mods, gui_bp)
     fake_main = FakeTarget(main_profile, main_mods, main_bp)
     monkeypatch.setitem(patch_update.TARGETS, "gui", (gui_decode.decode, gui_encode.encode, fake_gui))
-    monkeypatch.setitem(patch_update.TARGETS, "main", (gui_decode.decode, gui_encode.encode, fake_main))
+    # main() calls a 'main' target's encode with the whole original section
+    # (the real main_encode.encode() needs it, to carry its bootloader/
+    # emergency-updater S-records forward unchanged); this fake only needs
+    # gui_decode/gui_encode's flat-blob shape, so it slices the header itself.
+    monkeypatch.setitem(patch_update.TARGETS, "main",
+                        (gui_decode.decode, lambda section, image: gui_encode.encode(section[:32], image), fake_main))
     monkeypatch.setitem(patch_update.SECTION_OF, "main", 2)
 
     src = tmp_path / "in.UPD"

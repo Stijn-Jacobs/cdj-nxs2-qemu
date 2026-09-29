@@ -13,7 +13,9 @@ from helpers import path
 
 MAPPINGS = sorted(glob.glob(path("midi", "mappings", "*.json")))
 CONTROLLERS = sorted(glob.glob(path("midi", "controllers", "*.json")))
-LAMP_ROLES = {"play", "cue", "slip", "master_tempo", "ring"}   # leds.LAMPS, no mido import
+LAMP_ROLES = {"play", "cue", "slip", "master_tempo", "ring",   # leds.ROLE_NAMES, no mido import
+              "source_sd", "source_link", "source_disc", "source_pc", "tempo_reset",
+              "usb_indicator"}
 # learn.py writes the first five; mode_select is set by hand for the DJ-202 pad
 # mode buttons, whose velocity names the mode (the bridge reads any note as a button).
 BEHAVIOURS = {"button", "absolute", "relative", "relative_offset", "relative_signbit",

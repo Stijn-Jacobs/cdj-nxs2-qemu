@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "sh7763.h"
 #include "cdj_getenv.h"
+#include "cdj_ether.h"
+#include "cdj_ata.h"
 /*
  * Pioneer CDJ-2000 and CDJ-2000NXS MAIN board (Renesas SH7763) -- bring-up.
  *
@@ -132,19 +134,57 @@ static void sh7763_board_init(MachineState *machine, const CdjBoardDesc *desc,
     cdj_scif(sysmem, "scif1", 0xFFE10000,
              serial_hd(1) ?: qemu_chr_new("scif1-null", "null", NULL));
     /* The DMA-fed port to the front-panel microcontroller (M16C). */
-    cdj_unimp("sh7763.scif2-panel", 0xFFE20000, 0x1000);
+    cdj2000_panel_init(sysmem, 0xFFE20000);
+    /* The BF531 display processor, its own window; off unless asked for. */
+    cdj2000_display_init();
 
-    cdj_unimp("sh7763.ether", 0xFEF00000, 0x10000);
-    cdj_unimp("sh7763.sdhi",  0xFFE40000, 0x1000);
-    cdj_unimp("sh7763.gpio",  0xFFF00000, 0x20000);
+    /* Same SH7724 fast-EtherC/E-DMAC layout as the NXS2's, at this SoC's own
+     * base; its MDIO read routine needs one extra turnaround lead-in bit
+     * (static trace only, not yet confirmed against a live MDIO read). */
+    cdj_ether_init(sysmem, "sh7763.ether", 0xFEF00000,
+                  cdj_count_irq(irq[S63_GETHER0], "GETHER0"), 1);
+    /* SDHI (TMIO-style): Sd_Test_Init 0x041FEE38 only reads SOFT_RST/INFO1/
+     * INFO2 back before deciding there is no card; a backed register file
+     * answers that with card-detect and every status bit clear, which is
+     * enough for SD init to return without a card fitted. */
+    cdj_regs(sysmem, "sh7763.sdhi", 0xFFE40000, 0x1000, NULL);
+    /* The ATAPI (CD drive) task file and control block, not GPIO: the
+     * IDENTIFY sequence (0x042971EC) programs this range with the SH7724
+     * ATAPI_CONTROL* layout, offset for offset. GPIO/PFC is the next 64 KiB. */
+    cdj_ata_init(sysmem, "sh7763.atapi", 0xFFF00000);
+    cdj_unimp("sh7763.gpio",  0xFFF10000, 0x10000);
     cdj2000_latch_init(sysmem, dsp);
-    cdj_unimp("sh7763.blk-ff40", 0xFF400000, 0x10000);
-    cdj_unimp("sh7763.blk-ff50", 0xFF500000, 0x10000);
+    /* On-chip USB host (the front stick port), driven by the same HCD as the
+     * NXS2's usb_r8a66597.c at its own base. A full boot trace of usbh_load()
+     * is one straight-line init pass at the same offsets that file's register
+     * layout names -- SYSCFG0 (+0x00), CFIFOSEL/D0FIFOSEL/D1FIFOSEL (+0x20/
+     * +0x28/+0x2C), INTENB0/1 (+0x30/+0x32), BRDYENB/NRDYENB/BEMPENB (+0x36/
+     * +0x38/+0x3A), then PIPESEL/PIPEBUF (+0x64/+0x6A) per pipe -- with every
+     * read immediately followed by a write to the same offset (read-modify-
+     * write) and no repeated read at one offset, so nothing here is a
+     * read-dependent poll. A plain read-back register file satisfies it. */
+    cdj_regs(sysmem, "sh7763.usbh", 0xFE400000, 0x1000, NULL);
+    /* Two identical 4 KB windows 1 MB apart (0xFF401000, 0xFF501000): a
+     * driver at 0x042A38FC (forced-disassembled, unreached by auto-analysis)
+     * writes both with the same offsets (0x08, 0x10, 0x18, 0x28, 0x40, 0x50)
+     * in lockstep, then a fixed-count software delay, never branching on
+     * what it reads back. 0x08/0x10/0x18 match the published sh_mmcif
+     * CE_ARG/CE_CMD_CTRL/CE_CLK_CTRL offsets, but 0x28 is read-modify-written
+     * where that layout has a read-only CE_RESP1, so the identity is not
+     * settled. A plain read-back register file satisfies every access seen. */
+    cdj_regs(sysmem, "sh7763.blk-ff40", 0xFF400000, 0x10000, NULL);
+    cdj_regs(sysmem, "sh7763.blk-ff50", 0xFF500000, 0x10000, NULL);
     cdj_unimp("sh7763.blk-ffd3", 0xFFD30000, 0x10000);
     cdj_unimp("sh7763.blk-ff2f", 0xFF2F0000, 0x10000);
-    /* An R8A66597 USB controller on the external bus, by its register
-     * offsets: the NXS2's USB chip, a candidate for the shared model. */
-    cdj_unimp("r8a66597.usb", 0x01000000, 0x1000);
+    /* The rear USB-B function chip (MIDI/HID/audio class), not the NXS2's
+     * R8A66597 host controller: its register layout past +0x0E does not
+     * match that chip (+0x10 is an interrupt-enable register, not DMA0CFG).
+     * The probe (0x042399C8) writes 1 to +0x000 and polls it for bit 0 up to
+     * 256 times; a plain read-back register file answers that with nothing
+     * behind it, which is enough for the boot (a failed probe only parks the
+     * USB task, it does not stop MAIN). The USB host itself is on-chip at
+     * 0xFE400000 (see below). */
+    cdj_regs(sysmem, "cdj2000.usbf", 0x01000000, 0x1000, NULL);
 
     cdj_board_load(machine);
     cdj_board_start(cpu);

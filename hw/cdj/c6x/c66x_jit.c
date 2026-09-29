@@ -29,7 +29,13 @@ static const char *const fop_names[] = {
 static uint32_t api_mem_read(c66x_core *c, uint32_t a, unsigned n) { return mem_read(c, a, n); }
 static void api_store_defer(c66x_core *c, uint32_t a, uint32_t v, unsigned n) { store_defer(c, a, v, n); }
 static void api_flush_stores(c66x_core *c) { flush_stores(c); }
-static void api_invalidate_code(c66x_core *c, uint32_t a, uint32_t n) { invalidate_code(c, a, n); }
+/* Compiled stores call this after landing in a page codepage marks. */
+static void api_invalidate_code(c66x_core *c, uint32_t a, uint32_t n)
+{
+    const ramreg *r = &c->ram[c->last_ram];
+    uint8_t cp = a - r->base < r->size ? r->codepage[(a - r->base) >> FP_PAGE_SHIFT] : CP_CODE;
+    page_stored(c, cp, a, n);
+}
 static void api_ctrl_write(c66x_core *c, unsigned crlo, uint32_t v) { ctrl_write_now(c, crlo, v); }
 static c66x_insn *api_insn_at(c66x_core *c, uint32_t addr) { return fetch_insn(c, addr); }
 
@@ -660,7 +666,8 @@ static const char *jit_env(const char *name, const char *dflt)
     return v && *v ? v : dflt;
 }
 
-/* C66X_JIT=<a.so>[:<b.so>...] loads compiled regions; C66X_JIT_PROFILE=<dir>
+/* C66X_JIT=<a.so>[:<b.so>...] (';' on Windows, where ':' follows the drive
+ * letter) loads compiled regions; C66X_JIT_PROFILE=<dir>
  * counts packets and writes the generator's input when the core is freed;
  * C66X_JIT_AUTO=<dir> compiles while running (jit_auto_poll). */
 void jit_init(c66x_core *c)
@@ -670,7 +677,8 @@ void jit_init(c66x_core *c)
     if (mods && *mods) {
         char *list = strdup(mods);
         char *save = NULL;
-        for (char *t = strtok_r(list, ":", &save); t; t = strtok_r(NULL, ":", &save))
+        for (char *t = strtok_r(list, G_SEARCHPATH_SEPARATOR_S, &save); t;
+             t = strtok_r(NULL, G_SEARCHPATH_SEPARATOR_S, &save))
             jit_load(c, t);
         free(list);
     }

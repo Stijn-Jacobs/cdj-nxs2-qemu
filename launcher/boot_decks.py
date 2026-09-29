@@ -106,9 +106,11 @@ def main(argv):
     running = []
     for i in range(1, n + 1):
         running.append(launch("%s%d" % (prefix, i), dur))
-        # LAUNCH_STAGGER (s): spread the launches so the QEMUs do not all race
-        # to bind their sockets at once.
-        chain.sleep(float(nonempty(env, "LAUNCH_STAGGER", "4")))
+        if i < n:
+            # LAUNCH_STAGGER (s): spread the launches so the QEMUs do not all
+            # race to bind their sockets at once. The last launch has nothing
+            # after it to protect, so it skips the wait.
+            chain.sleep(float(nonempty(env, "LAUNCH_STAGGER", "4")))
         while sum(p.poll() is None for p in running) >= jobs:
             time.sleep(0.3)
     for p in running:

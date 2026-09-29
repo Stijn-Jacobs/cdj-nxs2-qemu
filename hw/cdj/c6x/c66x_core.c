@@ -171,6 +171,10 @@ c66x_core *c66x_new(const c66x_bus *bus)
     }
     c66x_reset(c, 0);
     jit_init(c);
+    /* C66X_IDLE_ISR_FAST=1: handlers keep the fast store paths while the
+     * busy-wait skip is armed (idle_page_stored). */
+    const char *isrf = getenv("C66X_IDLE_ISR_FAST");
+    c->idle_isr_fast = isrf && strcmp(isrf, "0");
     return c;
 }
 
@@ -341,6 +345,10 @@ void c66x_reset(c66x_core *c, uint32_t pc)
     c->branch_block = 0;
     c->npst = 0;
     c->isr_depth = 0;
+    if (c->idle_isr_disarmed) {
+        c->idle_isr_disarmed = 0;
+        c->idle_armed = 1;
+    }
     c->idle_fp = 0;
     c->idle_ret_pending = 0;
 }
@@ -396,6 +404,7 @@ void c66x_set_idle_loop(c66x_core *c, uint32_t head_pc, uint32_t stack_lo,
     c->idle_shi = stack_hi;
     c->idle_allow_reads = allow_bus_reads;
     c->idle_armed = 0;
+    c->idle_isr_disarmed = 0;
     c->idle_fx = 0;
     c->idle_fp = 0;
     c->idle_isr_hit = 0;
@@ -461,6 +470,7 @@ int idle_check(c66x_core *c)
         idle_rs_clear(c);
     c->idle_fp = idle;
     c->idle_armed = 1;
+    c->idle_isr_disarmed = 0;
     c->idle_fx = 0;
     c->idle_isr_hit = 0;
     c->idle_head_cycle = c->cycle;

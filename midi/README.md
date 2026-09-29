@@ -227,7 +227,41 @@ second and throttled to 50 Hz:
 | byte 1 bit 2 | MASTER TEMPO | getter `0x084DC628` |
 | byte 2 bits 3:2, 1:0 | jog ring light, two 2-bit levels | slots `0x0B54C09C` / `0x0B54C0A0`, set from JOG BRIGHTNESS (`0x0A35F6E0`) |
 | byte 9 | centre jog display pointer, 135 positions | `0x08450270` |
-| bytes 0x16–0x18 | RGB media-slot lamp | `0x084DC0E8` / `0x084DC1C0` |
+| byte 2 bit 0x10 | TEMPO RESET indicator | not yet traced |
+| byte 3 bit 0x02 | SD source lamp | `0x084DC1C0` family |
+| byte 3 bit 0x20 | LINK source lamp | `0x084DC1C0` family |
+| byte 3 bit 0x80 | rekordbox (PC) source lamp | not yet traced |
+| byte 4 bit 0x80 | DISC source lamp | `0x084DC0E8` family |
+| byte 5 bits 0x80 \| 0x20 | USB port indicator (steady while mounted) | `0x084DC0E8`/`0x084DC1C0` family |
+
+Each of those four source bits is steady on exactly while its source is
+selected, and off otherwise -- pressing one clears whichever of the other
+three was set. USB's own signal is not yet measured -- "none of the other
+four are lit" was tried and shipped once, then retracted, since that is an
+inference, not something the firmware was seen to send.
+
+The operating instructions (Pioneer, CDJ-2000NXS2, "Part names and
+functions" > "Control panel", p.13) describe two more lamps: a USB
+indicator and an SD memory card indicator, each next to its slot (not the
+source-select button), steady while a medium is mounted and flashing only
+while ejecting. No SD hardware is modelled in this emulator, so the SD
+indicator cannot be measured here. For USB, byte 5: pressing dev_usb/
+BROWSE/TAG LIST -- the only three keys that touch the one real, mounted USB
+medium -- moves it every time (9/9 across two sessions), and it never moves
+for dev_sd/dev_disc/dev_link/idle (0/0 across the same sessions). Sampled
+every ~20 ms for 4 s right after each press, it makes exactly one
+transition (within 20-184 ms of the key) and then holds that value with
+zero further change -- steady, not flashing, matching the real unit's own
+behaviour. Wired as `usb_indicator`.
+
+`0x084DC0E8`/`0x084DC1C0` (decompiled: each copies a 3-byte colour row from
+one of two tables, chosen by whether a device is present, through a
+destination pointer set elsewhere in the frame builder) also drive an RGB
+triple at bytes 0x16-0x18. It does not track a specific key: across several
+sessions it churns continuously once BROWSE or TAG LIST has been opened at
+least once, in every idle window as well as every key press, and stays
+quiet before that -- a screen/navigation state, not tied to any one button,
+and not pinned down further. Not treated as a lamp.
 
 The frame is built by `0x0844F808`. `midi/leds.py` renders it, with roles
 bound in the mapping's `"leds"`:
@@ -239,6 +273,8 @@ bound in the mapping's `"leds"`:
 | slip | SLIP | the NXS2's SLIP lamp |
 | master_tempo | KEY LOCK | the NXS2's MASTER TEMPO lamp |
 | ring | headphone CUE | the jog ring light, lit at any level |
+| source_sd, source_disc, source_link, source_pc | (virtual-deck app face only; no DJ-202 control bound) | which of SD/DISC/LINK/rekordbox is selected |
+| tempo_reset | (virtual-deck app face only; no DJ-202 control bound) | the NXS2's TEMPO RESET indicator |
 | beat | FX 1, FX 2, FX 3, TAP | the firmware's beat in the bar; in the last bar of a phrase they fill 1, 1-2, 1-2-3, all |
 | (pads) | every pad with a binding | lit, so the unit shows what it can do |
 

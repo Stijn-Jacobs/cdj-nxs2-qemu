@@ -372,6 +372,13 @@ listed in `mods/mods.conf`:
 | `high_fps` | Draw the zoomed-in waveform about twice as often (~70 fps instead of ~33). | on |
 | `live_clock` | Repaint the REMAIN clock every frame instead of about three times a second. | on |
 | `three_band` | Draw the RGB centre waveform as three bands (low blue, mid amber, high white), CDJ-3000 style. Needs a track with rekordbox's colour waveform. | off |
+| `osc_beat` | Send each beat as an OSC message (`/cdj/beat`, four int32: player, beat in bar, BPM x 100, pitch) to UDP broadcast port 50010, next to the Pro DJ Link beat packet, so lighting desks and scripts can follow the deck without decoding Pro DJ Link. | off |
+
+On a real deck any OSC app on the deck's network receives `osc_beat` on port
+50010. The emulated decks' network is QEMU's multicast segment, which OSC apps
+cannot read, so relay it to your own machine while the deck runs:
+`python3 scripts/net/osc_relay.py` (sends to `127.0.0.1:50010`; give another
+`host:port` as the second argument).
 
 `./setup.sh` shows the defaults (step 7) and either takes them or asks about
 each one, and saves your answers to `cdj.conf`; `./setup.sh --reconfigure`
@@ -394,6 +401,17 @@ away on exit:
 python mods/patch_update.py C2KNXS2.UPD C2KNXS2-wave3.UPD wave3
 ```
 
+The MAIN application takes the same path through `mods/patch_main.py`: the
+launcher applies a `CDJ_MAIN_<NAME>=1` mod to a copy of `main_unpacked.bin` for
+a `-kernel` boot, or to a copy of `extract/flash.bin`'s own packed MAIN image
+for `MAIN_BOOT=flash`, and `patch_update.py` reaches the same mod inside a
+real `.UPD`'s MAIN section (Motorola S-records wrapping the same LZSS codec as
+the display section). MAIN has no scatter-load table of its own — it runs in
+place, so a mod's routine goes straight into a run of erased flash inside its
+own address space rather than being copied out to RAM the way a display patch
+is. No MAIN mod ships yet; this is the mechanism the first one (reading
+rekordbox's phrase analysis) will use.
+
 Only a mod that is an actual firmware code patch is offered this way — an
 emulator-only knob such as `high_fps` or `live_clock` has nothing to
 write into a real update, and does not appear. `python mods/patch_update.py
@@ -402,11 +420,11 @@ against; a mismatched version is refused unless you pass `--force-version`.
 
 **This is untested on real hardware.** The container repacking and the LZSS
 re-encoding have been checked against the real update file byte for byte, and
-the patched image has been checked against `patch_gui.py`'s own output (see
-`tests/`), but nobody has flashed a patched update into an actual player.
-Flashing a modified firmware update is entirely at your own risk — keep the
-original file, and expect that a mistake here could mean a trip through
-service mode's recovery path, or worse.
+the patched image has been checked against `patch_gui.py`'s/`patch_main.py`'s
+own output (see `tests/`), but nobody has flashed a patched update into an
+actual player. Flashing a modified firmware update is entirely at your own
+risk — keep the original file, and expect that a mistake here could mean a
+trip through service mode's recovery path, or worse.
 
 ## 🔧 Service mode
 
@@ -533,7 +551,7 @@ machine: the update file, and anything built from it, is Pioneer's.
 | `hw/cdj/common/` | what every board shares: the boot (DRAM, NOR flash, image, reset vector), the SH-4 core blocks and the board descriptor (`cdj_common.h`) |
 | `hw/cdj/boards/nxs2/` | the CDJ-2000NXS2: its MAIN board, one file per device, and the display board (`sh7269gui.c`); `diag/` holds the diagnostic hooks, `standin/` historical models that are off by default |
 | `hw/cdj/boards/cdj2000/` | the CDJ-2000 and CDJ-2000NXS MAIN board (Renesas SH7763), in bring-up |
-| `mods/` | the [mods](#mods) registry and the display-firmware patches behind them |
+| `mods/` | the [mods](#mods) registry and the display- and MAIN-firmware patches behind them |
 | `models/` | one profile per player, read by the firmware and launch scripts (see `models/README.md`) |
 | `hw/cdj/c6x/` | the C66x DSP core, its SoC peripherals, the JIT generator (`tools/`) and unit tests |
 | `patches/` | the changes to QEMU 9.1.0 itself |
