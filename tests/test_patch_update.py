@@ -264,7 +264,7 @@ def test_registry_only_lists_firmware_patchable_mods():
     knob_names = re.findall(r"^(\w+)\|", conf, re.M)
     assert "high_fps" not in reg and "live_clock" not in reg
     assert "three_band" not in reg          # that row's key, not the mod names
-    assert knob_names == ["high_fps", "live_clock", "three_band", "osc_beat"]
+    assert knob_names == ["high_fps", "live_clock", "three_band", "osc_beat", "ableton_link"]
 
 
 def test_list_cli_shows_target_and_versions():

@@ -10,12 +10,17 @@ QEMU's `-netdev socket,mcast=` backend carries one raw Ethernet frame per UDP
 datagram, so any ordinary multicast socket can read and write the segment: no
 root, tap or bridge needed. capture_link.py uses the read side.
 
+With `tap:<ip>` the deck is on a host adapter that owns <ip> (DJLINK=tap:), so
+the server is an ordinary UDP socket on <ip>:67. The deck's MAC is not visible
+there: a reply goes to the address being leased, which the host reaches through
+a static neighbour entry, or to the broadcast address when the client asked.
+
 Our own frames loop back, so every frame with our source MAC is dropped.
 
 This is not a general DHCP server: it answers DISCOVER with OFFER and REQUEST
 with ACK for one address per client, and ignores everything else.
 
-  usage: python3 scripts/net/dhcp_server.py <group:port> [seconds]
+  usage: python3 scripts/net/dhcp_server.py <group:port | tap:ip> [seconds]
   env:   DHCP_NET=192.168.50   the /24 to hand out (deck .10, server .1)
 
 Exits cleanly on SIGTERM and always prints its counters.
@@ -71,29 +76,33 @@ def parse_dhcp(frame):
     sport, dport = struct.unpack_from('>HH', frame, udp)
     if (sport, dport) != (68, 67):
         return None
-    bootp = udp + 8
-    if frame[bootp:bootp + 4] != b'\x01\x01\x06\x00':   # BOOTREQUEST, eth, 6
+    got = parse_bootp(frame[udp + 8:])
+    return got and got + (frame[6:12],)
+
+
+def parse_bootp(bootp):
+    """Return (xid, client_mac, msg_type, requested_ip, flags) or None."""
+    if len(bootp) < 240 or bootp[0:4] != b'\x01\x01\x06\x00':   # BOOTREQUEST, eth, 6
         return None
-    xid = frame[bootp + 4:bootp + 8]
-    flags = frame[bootp + 10:bootp + 12]
-    chaddr = frame[bootp + 28:bootp + 34]
-    ethsrc = frame[6:12]
-    if frame[bootp + 236:bootp + 240] != MAGIC:
+    xid = bootp[4:8]
+    flags = bootp[10:12]
+    chaddr = bootp[28:34]
+    if bootp[236:240] != MAGIC:
         return None
 
     msg_type, requested = None, None
-    i = bootp + 240
-    while i < len(frame):
-        opt = frame[i]
+    i = 240
+    while i < len(bootp):
+        opt = bootp[i]
         if opt == 255:
             break
         if opt == 0:
             i += 1
             continue
-        if i + 1 >= len(frame):
+        if i + 1 >= len(bootp):
             break
-        ln = frame[i + 1]
-        val = frame[i + 2:i + 2 + ln]
+        ln = bootp[i + 1]
+        val = bootp[i + 2:i + 2 + ln]
         if opt == 53 and ln == 1:
             msg_type = val[0]
         elif opt == 50 and ln == 4:
@@ -101,7 +110,7 @@ def parse_dhcp(frame):
         i += 2 + ln
     if msg_type is None:
         return None
-    return xid, chaddr, msg_type, requested, flags, ethsrc
+    return xid, chaddr, msg_type, requested, flags
 
 
 def build_reply(kind, xid, client_mac, client_ip, server_ip, mask, router,
@@ -119,6 +128,26 @@ def build_reply(kind, xid, client_mac, client_ip, server_ip, mask, router,
     # chaddr the firmware wrote, which is not unique across decks.
     eth_dst = (b'\xff' * 6 if (flags[0] & 0x80)
                else (eth_to or client_mac))
+    payload = build_bootp(kind, xid, client_mac, client_ip, server_ip, mask,
+                          router, flags)
+
+    udp_len = 8 + len(payload)
+    pseudo = server_ip + b'\xff\xff\xff\xff' + bytes([0, 17]) + \
+        struct.pack('>H', udp_len)
+    udp = struct.pack('>HHHH', 67, 68, udp_len, 0) + payload
+    ck = checksum(pseudo + udp)
+    udp = udp[:6] + struct.pack('>H', ck or 0xFFFF) + udp[8:]
+
+    total = 20 + udp_len
+    ip = bytearray(struct.pack('>BBHHHBBH', 0x45, 0, total, 0, 0, 64, 17, 0))
+    ip += server_ip + b'\xff\xff\xff\xff'
+    ip[10:12] = struct.pack('>H', checksum(bytes(ip)))
+
+    return eth_dst + SERVER_MAC + b'\x08\x00' + bytes(ip) + udp
+
+
+def build_bootp(kind, xid, client_mac, client_ip, server_ip, mask, router,
+                flags):
     opts = bytearray(MAGIC)
     opts += bytes([53, 1, kind])
     opts += bytes([54, 4]) + server_ip          # server identifier
@@ -137,32 +166,22 @@ def build_reply(kind, xid, client_mac, client_ip, server_ip, mask, router,
     bootp[16:20] = client_ip                    # yiaddr
     bootp[20:24] = server_ip                    # siaddr
     bootp[28:34] = client_mac
-    payload = bytes(bootp) + bytes(opts)
-
-    udp_len = 8 + len(payload)
-    pseudo = server_ip + b'\xff\xff\xff\xff' + bytes([0, 17]) + \
-        struct.pack('>H', udp_len)
-    udp = struct.pack('>HHHH', 67, 68, udp_len, 0) + payload
-    ck = checksum(pseudo + udp)
-    udp = udp[:6] + struct.pack('>H', ck or 0xFFFF) + udp[8:]
-
-    total = 20 + udp_len
-    ip = bytearray(struct.pack('>BBHHHBBH', 0x45, 0, total, 0, 0, 64, 17, 0))
-    ip += server_ip + b'\xff\xff\xff\xff'
-    ip[10:12] = struct.pack('>H', checksum(bytes(ip)))
-
-    return eth_dst + SERVER_MAC + b'\x08\x00' + bytes(ip) + udp
+    return bytes(bootp) + bytes(opts)
 
 
 def main(argv):
     if len(argv) < 2:
         sys.exit(__doc__)
-    group, _, port = argv[1].partition(':')
-    port = int(port)
+    tap = argv[1].startswith('tap:')
+    if tap:
+        group, port = argv[1][4:], 67           # group is the host's own address
+    else:
+        group, _, port = argv[1].partition(':')
+        port = int(port)
     seconds = float(argv[2]) if len(argv) > 2 else 0.0
 
-    net = os.environ.get('DHCP_NET', '192.168.50')
-    server_ip = socket.inet_aton('%s.1' % net)
+    net = group.rpartition('.')[0] if tap else os.environ.get('DHCP_NET', '192.168.50')
+    server_ip = socket.inet_aton(group if tap else '%s.1' % net)
     # MAC -> address. Handing every client the same address is fine for one
     # deck and useless for two, which is the whole point of a shared segment.
     leases = {}
@@ -186,13 +205,36 @@ def main(argv):
     # socket on it sets that.
     if sys.platform == 'darwin':
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-    sock.bind(('', port))
-    sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP,
-                    struct.pack('4s4s', socket.inet_aton(group),
-                                socket.inet_aton('0.0.0.0')))
-    sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 1)
+    if tap:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        # A TAP adapter's address only becomes bindable once QEMU has opened
+        # the adapter, which happens after this server is started.
+        deadline = time.time() + 120
+        while True:
+            try:
+                sock.bind((group, port))
+                break
+            except OSError:
+                if time.time() > deadline:
+                    raise
+                time.sleep(0.5)
+    else:
+        sock.bind(('', port))
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP,
+                        struct.pack('4s4s', socket.inet_aton(group),
+                                    socket.inet_aton('0.0.0.0')))
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 1)
     sock.settimeout(0.5)
     dest = (group, port)
+
+    def send_reply(kind, xid, chaddr, client_ip, flags, ethsrc):
+        if not tap:
+            sock.sendto(build_reply(kind, xid, chaddr, client_ip, server_ip,
+                                    mask, router, flags, ethsrc), dest)
+            return
+        to = '255.255.255.255' if flags[0] & 0x80 else socket.inet_ntoa(client_ip)
+        sock.sendto(build_bootp(kind, xid, chaddr, client_ip, server_ip, mask,
+                                router, flags), (to, 68))
 
     seen = offers = acks = 0
     t0 = time.time()
@@ -205,9 +247,13 @@ def main(argv):
             continue
         except OSError:
             break
-        if len(frame) >= 12 and frame[6:12] == SERVER_MAC:
-            continue                            # our own, looped back
-        got = parse_dhcp(frame)
+        if tap:
+            got = parse_bootp(frame)
+            got = got and got + (got[1],)       # no Ethernet header: chaddr stands in
+        else:
+            if len(frame) >= 12 and frame[6:12] == SERVER_MAC:
+                continue                        # our own, looped back
+            got = parse_dhcp(frame)
         if got and got[5] == SERVER_MAC:
             # Only reachable if SERVER_MAC is inside the deck range.
             print('dhcp_server: a CLIENT is using the server MAC %s -- it will '
@@ -221,15 +267,13 @@ def main(argv):
         # client's own xid and chaddr.
         client_ip = lease_for(ethsrc)
         if msg_type == DISCOVER:
-            sock.sendto(build_reply(OFFER, xid, chaddr, client_ip, server_ip,
-                                    mask, router, flags, ethsrc), dest)
+            send_reply(OFFER, xid, chaddr, client_ip, flags, ethsrc)
             offers += 1
             print('dhcp_server: DISCOVER from %s (chaddr %s) -> OFFER %s'
                   % (ethsrc.hex(':'), chaddr.hex(':'),
                      socket.inet_ntoa(client_ip)), flush=True)
         elif msg_type == REQUEST:
-            sock.sendto(build_reply(ACK, xid, chaddr, client_ip, server_ip,
-                                    mask, router, flags, ethsrc), dest)
+            send_reply(ACK, xid, chaddr, client_ip, flags, ethsrc)
             acks += 1
             print('dhcp_server: REQUEST from %s (chaddr %s) -> ACK %s'
                   % (ethsrc.hex(':'), chaddr.hex(':'),

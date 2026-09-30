@@ -70,7 +70,40 @@ BEAT_SEND = dict(
     end=11,
 )
 
+# The Pro DJ Link receive task, right after udp_rcv_dat has filled its 128-byte
+# buffer (r10) and the call that takes a memory block for the datagram: the
+# block call with its delay slot and the fpscr read that follows it. r0 still
+# holds the block call's result, r14 the datagram length, *(r15) the block and
+# r15+12 the sender's address; the stock test of r0 after the span loops back
+# to the receive when it is non-zero, so a hook that sets r0 swallows the
+# datagram.
+LINK_RECEIVE = dict(
+    sig=[0x26C9, 0xAFE4, 0x466A, 0xD25C, 0x65F3, 0xD75C, 0xE6FF, 0x470B,
+         0x6422, 0x016A, 0x2008, 0x21C9, 0x8FD9, 0x416A, 0xD758, 0xE500,
+         0x64F2, 0x470B],
+    start=3,
+    end=10,
+)
+
 MODS = {
+    'abletonlink': Mod(
+        what='Ableton Link announcements (UDP 20808)',
+        target='main',
+        fw_versions=('1.87',),
+        args=[],
+        literal=False,
+        hook=True,
+        **BEAT_SEND,
+    ),
+    'abletonlinkpong': Mod(
+        what='Ableton Link measurement replies (UDP 50000)',
+        target='main',
+        fw_versions=('1.87',),
+        args=[],
+        literal=False,
+        hook=True,
+        **LINK_RECEIVE,
+    ),
     'oscbeat': Mod(
         what='OSC beat output (UDP 50010)',
         target='main',
@@ -115,7 +148,7 @@ def assemble():
     with tempfile.TemporaryDirectory() as tmp:
         for name in MODS:
             obj = os.path.join(tmp, name + '.o')
-            subprocess.run(['sh4-linux-gnu-as', '--isa=sh4', '-little',
+            subprocess.run(['sh4-linux-gnu-as', '--isa=sh4', '-little', '-I', HERE,
                             '-o', obj, source(name)], check=True)
             subprocess.run(['sh4-linux-gnu-objcopy', '-O', 'binary',
                             obj, blob_path(name)], check=True)

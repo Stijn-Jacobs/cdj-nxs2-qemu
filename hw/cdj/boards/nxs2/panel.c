@@ -155,7 +155,8 @@ static void cdj_pnl_touch_msg(CdjPnlTouch *t, int64_t now)
 
     cdj_touch_px_to_raw(t->host.x, t->host.y, &t->rx, &t->ry);
     t->want_down = t->host.down;
-    t->latched |= t->host.down;
+    /* Only a new press latches: a move while held must not queue a second one. */
+    t->latched |= edge && t->host.down;
     t->tap_until_ms = t->host.tap_ms ? now + t->host.tap_ms : 0;
     if (!edge) {
         return;             /* a drag: one line per move would bury the log */
