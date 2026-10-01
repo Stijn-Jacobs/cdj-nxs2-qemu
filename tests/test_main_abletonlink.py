@@ -2,7 +2,7 @@
 """The two Ableton Link MAIN mods: found by signature, hooked on the shared
 trampolines (the beat send for the ALIVE, the Pro DJ Link receive for the
 PONG), stackable with the other MAIN mods, and -- through the SH-4 interpreter
-of test_main_osc extended with the float and branch instructions these
+of test_main_usbmidi extended with the float and branch instructions these
 routines add -- producing the datagrams Link's discovery v1 and measurement
 v1 wire formats define (the encoders below are written from the Link headers,
 not from the routines)."""
@@ -15,6 +15,7 @@ import pytest
 import patch_main
 import sigpatch
 from test_main_osc import OscCpu, Sh4, WRAPPER
+from test_main_usbmidi import UsbMidiCpu
 
 BASE = 0
 BEAT_OFF = 0x300
@@ -157,130 +158,10 @@ def f32(x):
     return struct.unpack('<f', struct.pack('<f', x))[0]
 
 
-class ScratchCpu(Sh4):
-    """The interpreter plus the instructions these routines add, with fixed
-    firmware addresses mapped onto scratch memory by WINDOWS."""
-    WINDOWS = ()
-
-    def loc(self, a):
-        for real, scratch, size in self.WINDOWS:
-            if real <= a < real + size:
-                return scratch + a - real
-        return a
-
-    def u32(self, a):
-        return super().u32(self.loc(a))
-
-    def put32(self, a, v):
-        super().put32(self.loc(a), v)
-
-    def s8(self, a):
-        return super().s8(self.loc(a))
-
-    def poke(self, real, size, value):
-        at = self.loc(real)
-        self.mem[at:at + size] = value.to_bytes(size, 'little')
-
-    def branch(self, cond, pc, simm, delayed):
-        if delayed:
-            taken = cond
-            self.delay(pc)
-            return pc + 4 + simm * 2 if taken else pc + 4
-        return pc + 4 + simm * 2 if cond else pc + 2
-
-    def step(self, op, pc):
-        r = self.r
-        n, m = op >> 8 & 15, op >> 4 & 15
-        imm = op & 0xFF
-        simm = imm - 256 if imm & 0x80 else imm
-        if op & 0xFF00 in (0x8900, 0x8B00, 0x8D00, 0x8F00):
-            cond = self.t if op & 0xFF00 in (0x8900, 0x8D00) else not self.t
-            return self.branch(cond, pc, simm, op & 0xFF00 in (0x8D00, 0x8F00))
-        if op >> 12 == 0xA:                                     # bra
-            disp = op & 0xFFF
-            disp = disp - 0x1000 if disp & 0x800 else disp
-            self.delay(pc)
-            return pc + 4 + disp * 2
-        if op >> 12 == 0x9:                                     # mov.w @(disp,pc),Rn
-            v = struct.unpack_from('<H', self.mem, pc + 4 + imm * 2)[0]
-            r[n] = v - 0x10000 if v & 0x8000 else v
-        elif op & 0xFF00 == 0x8500:                             # mov.w @(disp,Rm),r0
-            r[0] = struct.unpack_from('<H', self.mem, self.loc(r[m] + (op & 15) * 2))[0]
-        elif op & 0xF00F == 0x6000:                             # mov.b @Rm,Rn
-            r[n] = self.s8(r[m])
-        elif op & 0xF00F == 0x6001:                             # mov.w @Rm,Rn
-            r[n] = struct.unpack_from('<H', self.mem, self.loc(r[m]))[0]
-        elif op & 0xF00F == 0x6002:                             # mov.l @Rm,Rn
-            r[n] = self.u32(r[m])
-        elif op & 0xF00F == 0x600C:                             # extu.b
-            r[n] = r[m] & 0xFF
-        elif op & 0xF00F == 0x600D:                             # extu.w
-            r[n] = r[m] & 0xFFFF
-        elif op & 0xF00F == 0x2000:                             # mov.b Rm,@Rn
-            self.mem[self.loc(r[n])] = r[m] & 0xFF
-        elif op & 0xF00F == 0x0006:                             # mov.l Rm,@(R0,Rn)
-            self.put32(r[0] + r[n], r[m])
-        elif op & 0xF00F == 0x2008:                             # tst Rm,Rn
-            self.t = int(r[n] & r[m] == 0)
-        elif op & 0xF00F == 0x200A:                             # xor Rm,Rn
-            r[n] ^= r[m]
-        elif op & 0xF00F == 0x3000:                             # cmp/eq
-            self.t = int(r[n] == r[m])
-        elif op & 0xF00F == 0x3002:                             # cmp/hs
-            self.t = int(r[n] >= r[m])
-        elif op & 0xF00F == 0x3006:                             # cmp/hi
-            self.t = int(r[n] > r[m])
-        elif op & 0xF00F == 0x3008:                             # sub
-            r[n] = (r[n] - r[m]) & 0xFFFFFFFF
-        elif op & 0xF00F == 0x000E:                             # mov.l @(R0,Rm),Rn
-            r[n] = self.u32(r[0] + r[m])
-        elif op & 0xF00F == 0x0007:                             # mul.l
-            self.macl = r[n] * r[m] & 0xFFFFFFFF
-        elif op & 0xF00F == 0x3005:                             # dmulu.l
-            product = r[n] * r[m]
-            self.macl, self.mach = product & 0xFFFFFFFF, product >> 32
-        elif op & 0xF0FF == 0x001A:                             # sts macl,Rn
-            r[n] = self.macl
-        elif op & 0xF0FF == 0x000A:                             # sts mach,Rn
-            r[n] = self.mach
-        elif op & 0xF0FF in (0x4002, 0x4012):                   # sts.l mach/macl,@-Rn
-            r[n] = (r[n] - 4) & 0xFFFFFFFF
-            self.put32(r[n], self.mach if op & 0xF0 == 0 else self.macl)
-        elif op & 0xF0FF in (0x4006, 0x4016):                   # lds.l @Rm+,mach/macl
-            v = self.u32(r[n])
-            r[n] += 4
-            if op & 0xF0 == 0:
-                self.mach = v
-            else:
-                self.macl = v
-        elif op & 0xF00F == 0x200B:                             # or
-            r[n] |= r[m]
-        elif op & 0xF0FF == 0x0029:                             # movt
-            r[n] = self.t
-        elif op & 0xF0FF == 0x4011:                             # cmp/pz
-            self.t = int(r[n] < 0x80000000)
-        elif op & 0xF0FF == 0x4000:                             # shll
-            r[n] = r[n] << 1 & 0xFFFFFFFF
-        elif op & 0xF0FF == 0x4009:                             # shlr2
-            r[n] = r[n] >> 2
-        elif op & 0xF0FF == 0x4018:                             # shll8
-            r[n] = r[n] << 8 & 0xFFFFFFFF
-        elif op & 0xF0FF == 0x4029:                             # shlr16
-            r[n] = r[n] >> 16
-        elif op & 0xFF00 == 0xC800:                             # tst #imm,r0
-            self.t = int(r[0] & imm == 0)
-        elif op & 0xFF00 == 0xC900:                             # and #imm,r0
-            r[0] &= imm
-        elif op & 0xFF00 == 0x8800:                             # cmp/eq #imm,r0
-            self.t = int(r[0] == simm & 0xFFFFFFFF)
-        else:
-            return super().step(op, pc)
-        return pc + 2
-
-
-class LinkCpu(ScratchCpu, OscCpu):
-    """What the Link routines add to the scratch interpreter, with the
-    firmware functions they call replaced by recorders."""
+class LinkCpu(UsbMidiCpu, OscCpu):
+    """The usbmidi interpreter plus what the Link routines add, with the
+    firmware's fixed addresses mapped onto scratch memory and the firmware
+    functions they call replaced by recorders."""
     WINDOWS = ((TICK, 0x3800, 4), (TCNT4, 0x3810, 8), (DEVICE, 0x3820, 1),
                (CEP, 0x3830, 4), (POOL, 0x3840, 4))
 

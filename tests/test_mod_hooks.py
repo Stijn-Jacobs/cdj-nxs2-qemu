@@ -136,7 +136,7 @@ def test_real_main_takes_every_main_mod_at_once_deterministically():
     names = sorted(patch_main.MODS)
     out = patch_main.patch(data, names)
     assert out == patch_main.patch(data, list(reversed(names)))
-    for name in ('abletonlink', 'abletonlinkpong', 'oscbeat'):
+    for name in ('abletonlink', 'abletonlinkpong', 'oscbeat', 'usbmidi'):
         alone = patch_main.patch(data, [name])
         mod = patch_main.MODS[name]
         span = sigpatch.find_sig(sigpatch.Image(patch_main.MAIN_PROFILE, data), mod) + 2 * mod.start

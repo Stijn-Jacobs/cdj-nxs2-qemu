@@ -70,6 +70,29 @@ BEAT_SEND = dict(
     end=11,
 )
 
+# The USB-MIDI task's event loop, at its top: the task-state read, the load of
+# that state's event mask into r14 and the push of the infinite timeout, all
+# before the wait call. Every pass of the loop branches back to the start of
+# the span; nothing after it reads r0 or r1 before the wait returns.
+MIDI_TASK = dict(
+    sig=[0xDAAE, 0xD1AE, 0x6012, 0xE1FF, 0x4008, 0x0E9E, 0x2F16, 0xE601,
+         0x67C3, 0x55F3, 0x6452, 0x4A0B, 0xE5FF],
+    start=1,
+    end=7,
+)
+
+# The 1 ms timer interrupt's body (TMU unit 1 channel 1, the tick word
+# 0x0B0C5258), at the first of its down-counters: the load of its base, the
+# decrement unless already zero and the store. pr is saved before it, r1 is
+# not read before the body next writes it and T is set again before it is
+# tested.
+TIMER_TICK = dict(
+    sig=[0xD67E, 0x6262, 0x2228, 0x8B01, 0xA22C, 0x0009, 0xD67C, 0x5261,
+         0x2228, 0x8901, 0x72FF, 0x1621, 0xD47A, 0xE5FF],
+    start=6,
+    end=12,
+)
+
 # The Pro DJ Link receive task, right after udp_rcv_dat has filled its 128-byte
 # buffer (r10) and the call that takes a memory block for the datagram: the
 # block call with its delay slot and the fpscr read that follows it. r0 still
@@ -224,6 +247,24 @@ MODS = {
         literal=False,
         hook=True,
         **BEAT_SEND,
+    ),
+    'usbmidi': Mod(
+        what='USB-MIDI start/stop/clock, sending',
+        target='main',
+        fw_versions=('1.87',),
+        args=[],
+        literal=False,
+        hook=True,
+        **MIDI_TASK,
+    ),
+    'usbmiditick': Mod(
+        what='USB-MIDI start/stop/clock, 1 ms timing',
+        target='main',
+        fw_versions=('1.87',),
+        args=[],
+        literal=False,
+        hook=True,
+        **TIMER_TICK,
     ),
 }
 

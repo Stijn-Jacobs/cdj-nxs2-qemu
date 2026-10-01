@@ -264,13 +264,13 @@ def test_registry_only_lists_firmware_patchable_mods():
     knob_names = re.findall(r"^(\w+)\|", conf, re.M)
     assert "high_fps" not in reg and "live_clock" not in reg
     assert "three_band" not in reg          # that row's key, not the mod names
-    assert knob_names == ["high_fps", "live_clock", "three_band", "osc", "ableton_link"]
+    assert knob_names == ["high_fps", "live_clock", "three_band", "osc", "usb_midi", "ableton_link"]
 
 
 def test_list_cli_shows_target_and_versions():
     r = run_script("mods/patch_update.py", "--list")
     assert r.returncode == 0, r.stderr
-    assert re.search(r"wave3\s+\[gui Ver1\.81\]", r.stdout)
+    assert re.search(r"three_band\s+\[gui Ver1\.81, main Ver1\.87\] wave3 ", r.stdout)
 
 
 def test_repack_with_no_mods_is_byte_identical(tmp_path):
@@ -450,3 +450,30 @@ def test_real_patched_upd_unpacks_to_patch_guis_own_output(tmp_path):
     orig_gui = open(path("..", "extract", "gui_unpacked.bin"), "rb").read()
     from_patch_gui = patch_gui.patch(orig_gui, ["wave3"])
     assert from_upd == from_patch_gui
+
+
+def test_a_mods_conf_row_names_every_patch_it_switches_on():
+    rows = patch_update.conf_rows()
+    assert rows["three_band"] == ["wave3", "wave3ov", "wave3data", "wave3detail",
+                                  "wave3ovfetch", "wave3ovdata"]
+    assert rows["osc"] == ["osc", "oscbeat"]
+
+
+def test_an_emulator_only_row_is_refused(tmp_path):
+    r = run_script("mods/patch_update.py", tmp_path / "in.UPD", tmp_path / "out.UPD", "high_fps")
+    assert r.returncode != 0
+    assert "only changes the emulator" in r.stderr
+
+
+def test_a_row_name_wins_over_a_patch_of_the_same_name(tmp_path, monkeypatch):
+    # `osc` is both a row and its first patch; the row must bring oscbeat too
+    patched = []
+    monkeypatch.setattr(patch_main, "patch", lambda image, names: patched.extend(names) or image)
+    upd = build_upd(gui_section(), b"driv-section", b"main-section", b"panl-section")
+    src = tmp_path / "in.UPD"
+    src.write_bytes(upd)
+    monkeypatch.setattr(patch_update, "TARGETS", dict(patch_update.TARGETS, main=(
+        lambda section: ("Ver1.87", 0, 0, section), lambda section, image: image, patch_main)))
+    monkeypatch.setattr(sys, "argv", ["patch_update.py", str(src), str(tmp_path / "out.UPD"), "osc"])
+    patch_update.main()
+    assert patched == ["osc", "oscbeat"]

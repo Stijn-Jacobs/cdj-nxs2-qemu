@@ -42,7 +42,7 @@ The deck leads: apps follow its tempo, and a tempo change on the Link side
 does not reach the deck.
 
 **In the firmware.** Two MAIN patches, `abletonlink` and `abletonlinkpong`:
-`python mods/patch_update.py C2KNXS2.UPD out.UPD abletonlink abletonlinkpong`
+`python mods/patch_update.py C2KNXS2.UPD out.UPD ableton_link`
 writes both into a real update (firmware 1.87). It is a firmware patch like
 the other [mods](../README.md#mods).
 
