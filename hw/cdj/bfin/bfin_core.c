@@ -9,6 +9,7 @@
  * count.
  */
 #include "bfin_priv.h"
+#include <stddef.h>
 #include <stdlib.h>
 
 #define MMR_EVT0    0xFFE02000
