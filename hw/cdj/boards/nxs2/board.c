@@ -130,7 +130,7 @@ static void cdj2000nxs2_init(MachineState *machine)
     cdj_unimp("sh7724.intc-b", 0xA4140000, 0x1000);
     cdj_unimp("sh7724.intc-c", 0xA4090000, 0x1000);
     cdj_unimp("sh7724.cmt",    0xA44A0000, 0x1000);  /* compare-match timer */
-    cdj_unimp("sh7724.misc-d9", 0xA4D90000, 0x1000); /* referenced by firmware */
+    cdj_unimp("sh7724.usb1",   0xA4D90000, 0x1000);  /* see cdj_usbf_init() */
     cdj_unimp("sh7724.misc-ce", 0xA4CE0000, 0x1000); /* referenced by firmware */
 
     cdj_pfc_init(sysmem);                            /* PFC + LED decoding */
@@ -218,6 +218,10 @@ static void cdj2000nxs2_init(MachineState *machine)
         /* USI0 is wired so an attach can be signalled; the driver waits on
          * BCHG. */
         cdj_usb_init(sysmem, cdj_intc.irqs[CDJ_USB0]);
+    }
+    /* The rear USB port is modelled only with a host plugged into it. */
+    if (getenv("CDJ_USBF_HOST")) {
+        cdj_usbf_host_init(cdj_usbf_init(sysmem, cdj_intc.irqs[CDJ_USB1]));
     }
     /* Ranges the peer path reaches that nothing else claims -- see cdj_probe. */
     cdj_probe(sysmem, "probe.area0", 0x00800000, 0x03800000);

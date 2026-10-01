@@ -5,7 +5,7 @@ little-endian SH-4, the GUI's SH7269 is big-endian), the literal-pool safety
 check, and the MAIN section codec (main_decode.py/main_encode.py).
 
 Most mods here are test-only and built by the test itself, the same way this
-file always has; patch_main.MODS's own real entry (oscbeat) is exercised
+file always has; patch_main.MODS's own real entry (wave3data) is exercised
 through its --list/--assemble output below rather than through sigpatch.patch()
 directly, matching how patch_gui.py's real mods are covered."""
 import contextlib
@@ -151,7 +151,7 @@ def test_a_mov_l_inside_its_own_replaced_span_is_not_a_conflict_with_itself(tmp_
 def test_patch_main_list_shows_the_real_mod():
     r = run_script('mods/patch_main.py', '--list')
     assert r.returncode == 0, r.stderr
-    assert 'oscbeat' in r.stdout
+    assert 'wave3data' in r.stdout
 
 
 needs_sh4_as = pytest.mark.skipif(not shutil.which('sh4-linux-gnu-as'),
@@ -160,7 +160,7 @@ needs_sh4_as = pytest.mark.skipif(not shutil.which('sh4-linux-gnu-as'),
 
 @needs_sh4_as
 def test_patch_main_assemble_rebuilds_the_committed_blob(tmp_path):
-    blob = patch_main.blob_path('oscbeat')
+    blob = patch_main.blob_path('wave3data')
     before = open(blob, 'rb').read()
     r = run_script('mods/patch_main.py', '--assemble')
     assert r.returncode == 0, r.stderr

@@ -172,7 +172,9 @@ def rig_env(env, tag, ndecks, frames):
     # Every mod in mods.conf the caller left unset gets its registry default.
     mod_list = mods.load(Layout())
     for m in mod_list:
-        export_default(env, m.env, mods.default(mod_list, m.env))
+        value = mods.default(mod_list, m.env)
+        for name in mods.env_names(m.env):
+            export_default(env, name, value)
     # Diagnostic re-read and scan of every DMA'd display frame; off.
     export_default(env, "CDJ_GUI_FRAME_SCAN", "0")
     # TOUCH=1 (default): a click/drag in the display window, or a 'touch'/'tap'

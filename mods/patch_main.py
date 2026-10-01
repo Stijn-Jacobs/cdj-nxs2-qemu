@@ -27,7 +27,7 @@ MAIN is a little-endian SH-4 (the GUI's SH7269 is big-endian), so every mod's
 sig/args/literal is still given as the instruction's logical value -- see
 sigpatch.ImageProfile's byteorder field, which does the translation.
 
-MAIN mods are hooks (Mod.hook): several of them can sit on one firmware
+Most MAIN mods are hooks (Mod.hook): several of them can sit on one firmware
 site, which is defined once below and shared by every mod on it. The patch
 engine moves the site's span into one trampoline that runs it once and then
 calls each selected mod's routine in registry order -- see
@@ -85,7 +85,110 @@ LINK_RECEIVE = dict(
     end=10,
 )
 
+# The Sentinel task's one call to the status serialiser: the argument offset,
+# the serialiser's literal, the call with its delay slot and the two
+# instructions after it (the fpscr read and the next literal load, which make
+# the span long enough for the jump to the trampoline), between context
+# halfwords that make the signature unique. The hooks run after the span; r11
+# still holds the deck's own status record and r12 the fpscr mask the firmware
+# applies around every call.
+STATUS_SEND = dict(
+    sig=[0x018C, 0x0B14, 0xE07E, 0x4008, 0xD33E, 0x430B, 0x04FE, 0x046A, 0xD131],
+    start=2,
+    end=9,
+)
+
+# The colour-preview publisher's copy of the 600 six-byte overview records
+# into the link slot: the copy's call with its delay slot, then the fpscr read
+# and the load after it, which make the span long enough for the jump to the
+# trampoline. The hooks run after the copy, with the slot's lock still held.
+OVERVIEW_PUBLISH = dict(
+    sig=[0x65B3, 0xEB00, 0x2E12, 0xD14E, 0x410B, 0x1E21, 0x026A, 0xD547, 0xD644],
+    start=3,
+    end=8,
+)
+
+# The waveform requester's success path after the firmware has re-encoded the
+# builder's PWV5 record: the free of the builder's record, then the stores of
+# the new record and its size into the shared context (0x0B531EB8/0x0B531EBC).
+# The hooks run after the stores and before the record is published. The only
+# branch into the span is the `bf` just before it, which lands on its first
+# halfword.
+DETAIL_CONVERTED = dict(
+    sig=[0x8B08, 0xD67E, 0x4A0B, 0x2F66, 0x096A, 0x57F7, 0x2979, 0x496A, 0xA00C,
+         0x7F04, 0xD178, 0xDA7A, 0x4A0B, 0x5417, 0xD276, 0x0B6A, 0x5CF4, 0x5DF3,
+         0x2BE9, 0x12C7, 0x4B6A, 0x12D8, 0x65F2, 0xD675, 0x460B],
+    start=10,
+    end=22,
+)
+
+# The colour-preview reader's call to the PWV4 tag reader, from the push of
+# the tag's entry count to the argument setup before the call: the span has no
+# branch and nothing branches into it. r13 holds the open ANLZ handle and the
+# saved r5 the track's hash, both the reader's own arguments; the hooks run
+# before the reader, which is before the preview is published.
+PREVIEW_READ = dict(
+    sig=[0x60E3, 0x8801, 0x8F0F, 0x426A, 0xE805, 0x4818, 0x78B0, 0x2F86,
+         0x67F3, 0x66F3, 0x55F2, 0x7714, 0x7618, 0xB25E, 0x64D3, 0x0C6A,
+         0x2CA9, 0x4C6A, 0x7F04, 0xDE7E],
+    start=4,
+    end=13,
+)
+
 MODS = {
+    # The detail-waveform builder's own PWV5 fetch, right after it returns:
+    # r15+8/+12 still hold the &out_ptr/&out_size the fetch wrote into (read
+    # again a few instructions later, once this call site resumes, to fill
+    # the shared ctx's own RGB fields), r10 still holds the fetch's hash
+    # argument, and the ANLZ handle this call opened is at r15+16 -- all of
+    # it live only in this one span, which is why the hook sits exactly
+    # here rather than earlier or later in the same function. r6/r7/r10 and
+    # the bsr are reproduced first, so the RGB path is untouched whether or
+    # not this mod's own fetches below succeed.
+    'wave3data': Mod(
+        what='3-band detail waveform data fetch (PWV7)',
+        target='main',
+        fw_versions=('1.87',),
+        sig=[0x67F3, 0x66F3, 0x7708, 0x65A3, 0x760C, 0xDA18, 0xBC7B, 0x1FE5],
+        start=0,
+        end=8,
+        args=[],
+        literal=False,
+    ),
+    # Hooks DETAIL_CONVERTED: writes the words the wave3data mod packed into the
+    # re-encoded waveform record, reading its buffer through two words at fixed
+    # addresses (see main_wave3data.s).
+    'wave3detail': Mod(
+        what='3-band detail waveform data (PWV7 in the waveform record)',
+        target='main',
+        fw_versions=('1.87',),
+        args=[],
+        literal=False,
+        hook=True,
+        **DETAIL_CONVERTED,
+    ),
+    # Hooks OVERVIEW_PUBLISH: writes the PWV6 bands the wave3ovfetch mod kept
+    # into the overview payload, reading that mod's buffer through a word at a
+    # fixed address (see main_wave3ovfetch.s).
+    'wave3ovdata': Mod(
+        what='3-band overview data (PWV6 in the overview payload)',
+        target='main',
+        fw_versions=('1.87',),
+        args=[],
+        literal=False,
+        hook=True,
+        **OVERVIEW_PUBLISH,
+    ),
+    # Hooks PREVIEW_READ: reads and packs the track's PWV6 for wave3ovdata.
+    'wave3ovfetch': Mod(
+        what='3-band overview data fetch (PWV6)',
+        target='main',
+        fw_versions=('1.87',),
+        args=[],
+        literal=False,
+        hook=True,
+        **PREVIEW_READ,
+    ),
     'abletonlink': Mod(
         what='Ableton Link announcements (UDP 20808)',
         target='main',
@@ -104,8 +207,17 @@ MODS = {
         hook=True,
         **LINK_RECEIVE,
     ),
+    'osc': Mod(
+        what='OSC deck state and load/play/stop/cue/loop events (UDP 50010)',
+        target='main',
+        fw_versions=('1.87',),
+        args=[],
+        literal=False,
+        hook=True,
+        **STATUS_SEND,
+    ),
     'oscbeat': Mod(
-        what='OSC beat output (UDP 50010)',
+        what='OSC per-beat output (UDP 50010)',
         target='main',
         fw_versions=('1.87',),
         args=[],

@@ -104,6 +104,16 @@
 /* Bound on a ring walk that never meets an inactive descriptor (BQL held). */
 #define CDJ_ETHER_RING_MAX 512
 
+/*
+ * How long a frame waits before the receive ring is checked again: about one
+ * full-size frame on the 100 Mbit/s wire. A host peer hands over a burst (an
+ * 8 KB UDP datagram is six IP fragments) in one go, faster than the
+ * firmware's receive task (0x08345B86, which wraps its index at 16
+ * descriptors) drains the ring, and one lost fragment loses the whole
+ * datagram.
+ */
+#define CDJ_ETHER_RX_RETRY_NS 125000
+
 /* PIR bits: MDC clock, MMD data direction, MDO data out, MDI data in. */
 #define CDJ_PIR_MDC  0x01
 #define CDJ_PIR_MMD  0x02
@@ -142,11 +152,13 @@ typedef struct {
      * it owns the guard itself. */
     MemReentrancyGuard reentrancy_guard;
     qemu_irq irq;
+    QEMUTimer *rx_retry;             /* re-offers frames held on a full ring */
     uint32_t tx_cur;
     uint32_t rx_cur;
     uint8_t txbuf[CDJ_ETHER_MAXFRAME];
     unsigned txlen;
-    uint64_t ntx, ntx_nonet, nrx, nrx_dropped, nrx_nodesc;
+    uint64_t ntx, ntx_nonet, nrx, nrx_dropped, nrx_stalls;
+    bool rx_stalled;                 /* frames are held on a full ring */
     bool warned_trunc, warned_big;
 } CdjEtherState;
 
@@ -423,30 +435,56 @@ static const uint8_t *cdj_ether_mac_override(void);
 
 /*
  * CDJ_ETHER_LINKLOG=1: one stderr line per Pro DJ Link frame (UDP 50000-50002)
- * sent or received, with both the virtual and the host clock:
- *   ETHLINK tx|rx vt=<virtual s> ht=<host s> ip=.<last octet> port=<n> type=0x<t> len=<n>
+ * sent, received or held on a full receive ring, with both the virtual and
+ * the host clock:
+ *   ETHLINK tx|rx|held vt=<virtual s> ht=<host s> ip=.<last octet> port=<n> type=0x<t> len=<n>
+ * NFS frames (UDP 2049, how a deck reads a track off rekordbox or another
+ * deck) and every IP fragment after the first, which carries no UDP header,
+ * are logged too, with frag=<byte offset> and a + while more follow:
+ *   ETHLINK ... ip=.<last octet> port=<n>/2049 nfs frag=0+ len=<n>
+ *   ETHLINK ... ip=.<last octet> frag=<offset>[+] len=<n>
  */
 static void cdj_ether_linklog(const char *dir, const uint8_t *buf, size_t size)
 {
     static int on = -1;
-    unsigned ihl, sport, dport;
+    unsigned ihl, sport, dport, frag;
     const uint8_t *udp;
 
     if (on < 0) {
         const char *e = getenv("CDJ_ETHER_LINKLOG");
         on = e && *e && strcmp(e, "0") != 0;
     }
-    if (!on || size < 14 + 20 || buf[12] != 0x08 || buf[13] != 0x00) {
+    if (!on || size < 14 + 20 || buf[12] != 0x08 || buf[13] != 0x00 ||
+        buf[14 + 9] != 17) {
         return;
     }
     ihl = (buf[14] & 0x0f) * 4;
-    if (buf[14 + 9] != 17 || size < 14 + ihl + 8 + 11) {
+    frag = ((buf[14 + 6] << 8) | buf[14 + 7]) & 0x3fff;     /* MF + offset */
+    if (frag & 0x1fff) {
+        fprintf(stderr, "ETHLINK %s vt=%.4f ht=%.4f ip=.%u frag=%u%s "
+                "len=%zu\n", dir,
+                qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) / 1e9,
+                qemu_clock_get_ns(QEMU_CLOCK_REALTIME) / 1e9,
+                buf[14 + 15], (frag & 0x1fff) * 8, frag & 0x2000 ? "+" : "",
+                size - 14 - ihl);
+        return;
+    }
+    if (size < 14 + ihl + 8) {
         return;
     }
     udp = buf + 14 + ihl;
     sport = (udp[0] << 8) | udp[1];
     dport = (udp[2] << 8) | udp[3];
-    if (dport < 50000 || dport > 50002) {
+    if (sport == 2049 || dport == 2049) {
+        fprintf(stderr, "ETHLINK %s vt=%.4f ht=%.4f ip=.%u port=%u/%u nfs%s "
+                "len=%zu\n", dir,
+                qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) / 1e9,
+                qemu_clock_get_ns(QEMU_CLOCK_REALTIME) / 1e9,
+                buf[14 + 15], sport, dport, frag ? " frag=0+" : "",
+                size - 14 - ihl - 8);
+        return;
+    }
+    if (dport < 50000 || dport > 50002 || size < 14 + ihl + 8 + 11) {
         return;
     }
     fprintf(stderr, "ETHLINK %s vt=%.4f ht=%.4f ip=.%u port=%u/%u type=0x%02x "
@@ -631,12 +669,23 @@ static ssize_t cdj_ether_receive(NetClientState *nc, const uint8_t *buf,
     rd1 = cdj_ether_ld(d + 4);
     rd2 = cdj_ether_ld(d + 8);
 
-    /* No active descriptor: the frame is lost, as on hardware. */
+    /*
+     * No active descriptor. Hardware would lose the frame, but it never sees
+     * a burst arrive faster than the wire, so hold it: returning 0 makes QEMU
+     * queue this frame and every later one, in order, until the retry timer
+     * finds the firmware has handed a descriptor back. RDE wakes the
+     * firmware's receive task, once per stall.
+     */
     if (!(rd0 & CDJ_RD0_RACT)) {
-        s->nrx_nodesc++;
-        /* RDE only; the FIFO has not overflowed. */
-        cdj_ether_raise(s, CDJ_EESR_RDE);
-        return size;
+        if (!s->rx_stalled) {
+            s->rx_stalled = true;
+            s->nrx_stalls++;
+            cdj_ether_linklog("held", buf, size);
+            cdj_ether_raise(s, CDJ_EESR_RDE);
+        }
+        timer_mod(s->rx_retry, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+                               CDJ_ETHER_RX_RETRY_NS);
+        return 0;
     }
 
     rbl = rd1 >> 16;
@@ -676,9 +725,17 @@ static ssize_t cdj_ether_receive(NetClientState *nc, const uint8_t *buf,
     s->rx_cur = (rd0 & CDJ_RD0_RDLE) ? s->reg[CDJ_ETHER_RDLAR / 4]
                                      : (uint32_t)(d + dlen);
     s->nrx++;
+    s->rx_stalled = false;
     cdj_ether_linklog("rx", buf, size);
     cdj_ether_raise(s, CDJ_EESR_FR);
     return size;
+}
+
+static void cdj_ether_rx_retry(void *opaque)
+{
+    CdjEtherState *s = opaque;
+
+    qemu_flush_queued_packets(qemu_get_queue(s->nic));
 }
 
 static NetClientInfo cdj_ether_net_info = {
@@ -890,8 +947,8 @@ static void cdj_ether_dump(Notifier *n, void *unused)
     unsigned i;
 
     info_report("ether: tx=%" PRIu64 " rx=%" PRIu64 " dropped=%" PRIu64
-                " no-descriptor=%" PRIu64 " discarded-no-netdev=%" PRIu64 "%s",
-                s->ntx, s->nrx, s->nrx_dropped, s->nrx_nodesc, s->ntx_nonet,
+                " ring-full-stalls=%" PRIu64 " discarded-no-netdev=%" PRIu64
+                "%s", s->ntx, s->nrx, s->nrx_dropped, s->nrx_stalls, s->ntx_nonet,
                 s->nic ? "" : "  (no netdev attached)");
     for (i = 0; i < CDJ_ETHER_SIZE / 4; i++) {
         const char *name;
@@ -938,6 +995,7 @@ void cdj_ether_init(MemoryRegion *sysmem, const char *name, hwaddr base,
     s->conf.peers.queues = 1;
     s->nic = qemu_new_nic(&cdj_ether_net_info, &s->conf, "cdj.ether",
                           "ether", &s->reentrancy_guard, s);
+    s->rx_retry = timer_new_ns(QEMU_CLOCK_VIRTUAL, cdj_ether_rx_retry, s);
     info_report("%s: EtherMAC attached to netdev '%s'",
                 cdj_board->name, id && *id ? id : "djlink");
 }

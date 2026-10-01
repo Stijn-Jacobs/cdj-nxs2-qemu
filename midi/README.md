@@ -280,3 +280,21 @@ bound in the mapping's `"leds"`:
 
 `--no-leds` leaves the lamps alone, and `midi/led_replay.py <log>` replays a
 recorded state log through the LED rules offline.
+
+## The deck's own USB-MIDI port
+
+Everything above drives the deck from a controller. The deck also has a USB-B
+port on its back, and the emulated one enumerates as a USB-MIDI device that
+software can send MIDI to and receive MIDI from; no mod uses it yet.
+`scripts/net/usb_midi_port.py` is the computer on
+the other end of that cable. It receives the port's traffic over UDP on
+localhost (27020 for deck 1, 27021 for deck 2) and shows it as a MIDI port:
+
+    python3 scripts/net/usb_midi_port.py
+
+On macOS and Linux that creates a virtual port called "CDJ-2000NXS2 MIDI" for
+your DAW or DJ software to pick. Windows cannot create virtual ports, so make a
+loopMIDI port with that name first; a second port, named with `--in-port-name`,
+carries MIDI back to the deck. To check the port without any MIDI library,
+`--monitor` prints every message with a timestamp and `--count` prints how many
+of each status byte arrived per second.

@@ -371,12 +371,12 @@ listed in `mods/mods.conf`:
 |---|---|---|
 | [`high_fps`](mods/high_fps.md) | Draw the zoomed-in waveform about twice as often (~70 fps instead of ~33). | on |
 | [`live_clock`](mods/live_clock.md) | Repaint the REMAIN clock every frame instead of about three times a second. | on |
-| [`three_band`](mods/three_band.md) | Draw the RGB centre waveform as three bands (low blue, mid amber, high white), CDJ-3000 style. | off |
-| [`osc_beat`](mods/osc_beat.md) | Send each beat as an OSC message on UDP broadcast port 50010, for lighting desks and scripts. | off |
+| [`three_band`](mods/three_band.md) | Draw the centre waveform and the overview as three bands (low blue, mid amber, high white), CDJ-3000 style, from the track's own 3-band data (.2EX). | off |
+| [`osc`](mods/osc.md) | Send the deck's beats, state and load/play/stop/cue/loop events as OSC messages on UDP broadcast port 50010, for lighting desks and scripts. | off |
 | [`ableton_link`](mods/ableton_link.md) | Join Ableton Link as a peer: Live or any Link app on the deck's network follows its tempo and beat. | off |
 
 Each mod has a page of its own: its knobs, what it patches, and what has and has
-not been verified. `osc_beat` needs a relay on the emulator
+not been verified. `osc` needs a relay on the emulator
 (`python3 scripts/net/osc_relay.py`, see its page); `ableton_link` is reached
 through [a TAP adapter](#rekordbox-ableton).
 
@@ -390,7 +390,7 @@ or override any of them for one run with the environment, e.g.
 [SERVICE MODE](#service-mode) is a separate boot option, not a mod: it changes
 what the deck boots into, not how it behaves once it is up.
 
-**Patching a real firmware update.** `three_band`, `osc_beat` and
+**Patching a real firmware update.** `three_band`, `osc` and
 `ableton_link` are firmware code patches, not emulator knobs: the launcher
 applies the display ones to a copy of the display image at boot
 (`mods/patch_gui.py`) and the MAIN ones to a copy of the MAIN image

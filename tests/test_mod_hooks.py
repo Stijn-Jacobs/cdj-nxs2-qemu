@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Several hook mods on one firmware site: one trampoline that runs the
 replaced span once and then calls each selected hook in registry order,
-run through the SH-4 interpreter of test_main_oscbeat."""
+run through the SH-4 interpreter of test_main_osc."""
 import os
 import struct
 
@@ -10,7 +10,7 @@ import pytest
 import patch_main
 import sigpatch
 from sigpatch import Mod
-from test_main_oscbeat import Sh4
+from test_main_osc import Sh4
 
 SIG_OFF = 0x100
 SPAN = SIG_OFF + 4

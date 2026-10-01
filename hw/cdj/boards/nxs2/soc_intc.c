@@ -42,8 +42,9 @@ static struct intc_vect cdj_intc_vectors[] = {
     INTC_VECT(CDJ_IRQ2, 0x640), INTC_VECT(CDJ_IRQ3, 0x660),
     INTC_VECT(CDJ_IRQ4, 0x680), INTC_VECT(CDJ_IRQ5, 0x6A0),
     INTC_VECT(CDJ_IRQ6, 0x6C0), INTC_VECT(CDJ_IRQ7, 0x6E0),
-    /* USB0 (USI0), manual table 13.4: vector H'A20, IPRF [7:4], IMR9 bit 1. */
-    INTC_VECT(CDJ_USB0, 0xA20),
+    /* USB0 (USI0) and USB1 (USI1), manual table 13.4: vectors H'A20 and
+     * H'A40, IPRF [7:4], IMR9 bits 1 and 2. */
+    INTC_VECT(CDJ_USB0, 0xA20), INTC_VECT(CDJ_USB1, 0xA40),
     INTC_VECT(CDJ_ETHI, 0xD60),
     /* DMAC0A DEI0..DEI3, manual table 13.4: H'800..H'860, IPRE [15:12],
      * IMR1 bits 3..0. */
@@ -81,6 +82,7 @@ static struct intc_group cdj_intc_groups[] = {
     INTC_GROUP(CDJ_IIC1, CDJ_IIC1_AL, CDJ_IIC1_TACK,
                CDJ_IIC1_WAIT, CDJ_IIC1_DTE),
     INTC_GROUP(CDJ_DMAC1B, CDJ_DMAC1B_DEI4, CDJ_DMAC1B_DEI5),
+    INTC_GROUP(CDJ_USBI, CDJ_USB0, CDJ_USB1),
 };
 
 /* All 13 IMR/IMCR pairs are declared so undecoded ones still hold their
@@ -113,7 +115,7 @@ static struct intc_mask_reg cdj_intc_mask_registers[] = {
                               CDJ_IIC1_TACK, CDJ_IIC1_AL } },
     { IMCR(8),  IMR(8),  8, { 0 } },
     /* IMR9/IMCR9: -, -, -, CMTI, -, USI1, USI0, - */
-    { IMCR(9),  IMR(9),  8, { 0, 0, 0, 0, 0, 0, CDJ_USB0, 0 } },
+    { IMCR(9),  IMR(9),  8, { 0, 0, 0, 0, 0, CDJ_USB1, CDJ_USB0, 0 } },
     /* IMR10/IMCR10: -, DADERR, DEI5, DEI4 (DMAC1B) in bits 6..4, then the RTC
      * in bits 2..0. DEI4 and DEI5 are the DSP link's two DMA channels. */
     { IMCR(10), IMR(10), 8, { 0, 0, CDJ_DMAC1B_DEI5, CDJ_DMAC1B_DEI4 } },
@@ -138,7 +140,7 @@ static struct intc_prio_reg cdj_intc_prio_registers[] = {
     /* IPRE: DMAC0A [15:12], VIO [11:8], SCIFA3 [7:4], VPU5F [3:0] */
     { IPR(4),  0, 16, 4, { CDJ_DMAC0A, 0, 0, 0 } },
     /* IPRF: KEYSC [15:12], DMAC0B [11:8], USB0/USB1 [7:4], CMT [3:0] */
-    { IPR(5),  0, 16, 4, { 0, 0, CDJ_USB0, 0 } },
+    { IPR(5),  0, 16, 4, { 0, 0, CDJ_USBI, 0 } },
     { IPR(6),  0, 16, 4, { 0 } },
     /* IPRH: MSIOFI0 [15:12], MSIOFI1 [11:8], I2C1 [7:4], I2C0 [3:0]. The IIC
      * channels set their nibbles at 0x083AF952 and 0x083AF9A8. */

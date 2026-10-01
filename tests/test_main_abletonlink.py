@@ -2,7 +2,7 @@
 """The two Ableton Link MAIN mods: found by signature, hooked on the shared
 trampolines (the beat send for the ALIVE, the Pro DJ Link receive for the
 PONG), stackable with the other MAIN mods, and -- through the SH-4 interpreter
-of test_main_oscbeat extended with the float and branch instructions these
+of test_main_osc extended with the float and branch instructions these
 routines add -- producing the datagrams Link's discovery v1 and measurement
 v1 wire formats define (the encoders below are written from the Link headers,
 not from the routines)."""
@@ -14,7 +14,7 @@ import pytest
 
 import patch_main
 import sigpatch
-from test_main_oscbeat import Sh4, WRAPPER
+from test_main_osc import OscCpu, Sh4, WRAPPER
 
 BASE = 0
 BEAT_OFF = 0x300
@@ -158,9 +158,8 @@ def f32(x):
 
 
 class ScratchCpu(Sh4):
-    """The oscbeat interpreter plus the integer and branch instructions the
-    routines add, with the firmware's fixed addresses mapped onto a small
-    scratch memory."""
+    """The interpreter plus the instructions these routines add, with fixed
+    firmware addresses mapped onto scratch memory by WINDOWS."""
     WINDOWS = ()
 
     def loc(self, a):
@@ -244,6 +243,16 @@ class ScratchCpu(Sh4):
             r[n] = self.macl
         elif op & 0xF0FF == 0x000A:                             # sts mach,Rn
             r[n] = self.mach
+        elif op & 0xF0FF in (0x4002, 0x4012):                   # sts.l mach/macl,@-Rn
+            r[n] = (r[n] - 4) & 0xFFFFFFFF
+            self.put32(r[n], self.mach if op & 0xF0 == 0 else self.macl)
+        elif op & 0xF0FF in (0x4006, 0x4016):                   # lds.l @Rm+,mach/macl
+            v = self.u32(r[n])
+            r[n] += 4
+            if op & 0xF0 == 0:
+                self.mach = v
+            else:
+                self.macl = v
         elif op & 0xF00F == 0x200B:                             # or
             r[n] |= r[m]
         elif op & 0xF0FF == 0x0029:                             # movt
@@ -260,14 +269,18 @@ class ScratchCpu(Sh4):
             r[n] = r[n] >> 16
         elif op & 0xFF00 == 0xC800:                             # tst #imm,r0
             self.t = int(r[0] & imm == 0)
+        elif op & 0xFF00 == 0xC900:                             # and #imm,r0
+            r[0] &= imm
+        elif op & 0xFF00 == 0x8800:                             # cmp/eq #imm,r0
+            self.t = int(r[0] == simm & 0xFFFFFFFF)
         else:
             return super().step(op, pc)
         return pc + 2
 
 
-class LinkCpu(ScratchCpu):
-    """The scratch-memory interpreter plus what the Link routines add, with
-    the firmware functions they call replaced by recorders."""
+class LinkCpu(ScratchCpu, OscCpu):
+    """What the Link routines add to the scratch interpreter, with the
+    firmware functions they call replaced by recorders."""
     WINDOWS = ((TICK, 0x3800, 4), (TCNT4, 0x3810, 8), (DEVICE, 0x3820, 1),
                (CEP, 0x3830, 4), (POOL, 0x3840, 4))
 
@@ -509,12 +522,13 @@ def test_the_stock_send_and_its_descriptor_are_left_as_they_were():
     assert cpu.r[12] == WRAPPER and cpu.r[10] == 0xFFE7FFFF
 
 
-def test_stacks_with_osc_beat_on_the_same_site_in_registry_order():
+def test_stacks_with_osc_on_the_same_site_in_registry_order():
     cpu = beat(names=('abletonlink', 'oscbeat'))
-    stock, alive, osc = cpu.sent
+    stock, alive, osc, timing = cpu.sent
     assert len(stock['payload']) == 0x60
     assert alive['payload'][:8] == b'_asdp_v\x01' and len(alive['payload']) == 107
-    assert osc['payload'].startswith(b'/cdj/beat')
+    assert osc['payload'].startswith(b'/cdj/2/beat')
+    assert timing['payload'].startswith(b'/cdj/2/timing')
     assert struct.unpack('<IIIII', osc['desc'])[4] == 50010
     assert struct.unpack('<IIIII', alive['desc'])[4] == 20808
 
@@ -624,4 +638,4 @@ def test_a_ping_is_swallowed_unanswered_when_the_deck_has_no_address():
 def test_both_link_mods_and_the_other_mods_run_on_their_own_sites():
     names = ALL
     assert len(receive(ping(), names=names).datagrams) == 1
-    assert len(beat(names=names).sent) == 3
+    assert len(beat(names=names).sent) == 4

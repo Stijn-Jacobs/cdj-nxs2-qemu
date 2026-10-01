@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Hand the decks' OSC beat messages (the osc_beat mod) to desktop OSC apps.
+"""Hand the decks' OSC messages (the osc mod) to desktop OSC apps.
 
 On a real network the deck's OSC datagrams reach every machine on its subnet.
 Here they travel inside QEMU's `-netdev socket,mcast=GROUP:PORT` segment as raw

@@ -69,6 +69,24 @@ MODS = {
         args=[0x54FB, 0x66C3, 0x6783],
         literal=True,
     ),
+    # The colour-preview strip renderer's per-column record decode (r5 = the
+    # record, r8 = the column, r6 = -4): the two heights read from record
+    # bytes 4-5, up to the `tst r2,r2` that tests the first. The hook decodes
+    # the same way and returns, or paints a 3-band record and returns r2 = 0,
+    # which sends the renderer to the end of the column.
+    'wave3ov': Mod(
+        what='3-band overview strip',
+        target='gui',
+        fw_versions=('1.81',),
+        sig=[
+            0xE006, 0x6583, 0x4580, 0xD421, 0xE6FC, 0x354C, 0x3751, 0x8004,
+            0x3051, 0x9002, 0x4709, 0x406D, 0x627C, 0xC93F, 0x2228, 0x8F02,
+        ],
+        start=6,            # `movu.b @(4,r5),r7`
+        end=14,             # up to `tst r2,r2`
+        args=[],
+        literal=False,
+    ),
 }
 
 
