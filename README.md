@@ -373,6 +373,7 @@ listed in `mods/mods.conf`:
 | [`live_clock`](mods/live_clock.md) | Repaint the REMAIN clock every frame instead of about three times a second. | on |
 | [`three_band`](mods/three_band.md) | Draw the centre waveform and the overview as three bands (low blue, mid amber, high white), CDJ-3000 style, from the track's own 3-band data (.2EX). | off |
 | [`osc`](mods/osc.md) | Send the deck's beats, state and load/play/stop/cue/loop events as OSC messages on UDP broadcast port 50010, for lighting desks and scripts. | off |
+| [`usb_midi`](mods/usb_midi.md) | Send MIDI Start, Stop, Continue and Timing Clock over the rear USB-B port, so a DAW or drum machine follows the deck. | off |
 | [`ableton_link`](mods/ableton_link.md) | Join Ableton Link as a peer: Live or any Link app on the deck's network follows its tempo and beat. | off |
 
 Each mod has a page of its own: its knobs, what it patches, and what has and has
@@ -390,7 +391,7 @@ or override any of them for one run with the environment, e.g.
 [SERVICE MODE](#service-mode) is a separate boot option, not a mod: it changes
 what the deck boots into, not how it behaves once it is up.
 
-**Patching a real firmware update.** `three_band`, `osc` and
+**Patching a real firmware update.** `three_band`, `osc`, `usb_midi` and
 `ableton_link` are firmware code patches, not emulator knobs: the launcher
 applies the display ones to a copy of the display image at boot
 (`mods/patch_gui.py`) and the MAIN ones to a copy of the MAIN image
@@ -400,7 +401,7 @@ they end up on an actual player instead of a copy this emulator throws away on
 exit; each mod's page gives its command, for example:
 
 ```sh
-python mods/patch_update.py C2KNXS2.UPD C2KNXS2-link.UPD abletonlink abletonlinkpong
+python mods/patch_update.py C2KNXS2.UPD C2KNXS2-link.UPD ableton_link
 ```
 
 MAIN has no scatter-load table of its own: it runs in place, so a mod's routine
@@ -412,6 +413,13 @@ emulator-only knob such as `high_fps` or `live_clock` has nothing to
 write into a real update, and does not appear. `python mods/patch_update.py
 --list` shows what is available and which firmware version it was verified
 against; a mismatched version is refused unless you pass `--force-version`.
+**Combining mods.** Name as many as you like in one command, e.g.
+`python mods/patch_update.py C2KNXS2.UPD out.UPD three_band osc ableton_link`.
+Each name brings every patch its row in `mods/mods.conf` needs. All routines
+of one image are placed in a single pass into one free area, so they cannot
+overlap, and mods that hook the same spot in the firmware share it: the spot
+is replaced once by a stub that runs the original code and then each mod in
+turn. The launcher combines the mods you switched on the same way.
 
 **This is untested on real hardware.** The container repacking and the LZSS
 re-encoding have been checked against the real update file byte for byte, and

@@ -31,8 +31,7 @@ environment.
   falls back to stock per track, with no state to reset.
 
 It is a real code patch: `python mods/patch_update.py C2KNXS2.UPD out.UPD
-wave3 wave3ov wave3data wave3detail wave3ovfetch wave3ovdata` writes it into
-a real update. The display patches are verified against display firmware 1.81, the MAIN patches against
+three_band` writes all six into a real update. The display patches are verified against display firmware 1.81, the MAIN patches against
 1.87.
 
 **What is verified.** The waveform keeps moving with the MAIN data patches on

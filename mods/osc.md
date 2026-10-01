@@ -77,7 +77,7 @@ Two MAIN patches: one hooked at the send of the Pro DJ Link beat packet, one
 at the routine that serialises the deck's status record. Both send through
 MAIN's own network send routine, with the payload built inside the patch.
 Nothing is sent when the packet's player is not 1 to 4. `python
-mods/patch_update.py C2KNXS2.UPD out.UPD osc oscbeat` writes both into a real
+mods/patch_update.py C2KNXS2.UPD out.UPD osc` writes both into a real
 update (firmware 1.87).
 
 **What is verified.** The beat half (`beat`, `bar`, `timing`) was checked live

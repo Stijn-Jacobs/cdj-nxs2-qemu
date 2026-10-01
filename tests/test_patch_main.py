@@ -252,7 +252,7 @@ def test_list_cli_would_show_a_main_mod(monkeypatch):
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         patch_update.main()
-    assert 'regtest  [main Ver1.87] a MAIN test mod' in buf.getvalue()
+    assert 'regtest      [main Ver1.87] a MAIN test mod' in buf.getvalue()
 
 
 # -- gated on the real, user-supplied firmware -----------------------------------

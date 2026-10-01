@@ -5,6 +5,9 @@
     usage: patch_update.py <in.UPD> <out.UPD> [<mod> ...]
            patch_update.py --list
 
+A mod is named as in mods/mods.conf (three_band, osc, ableton_link, ...) and
+brings every patch that row switches on; --list shows them. A single patch
+(patch_gui.py --list, patch_main.py --list) can still be named on its own.
 With no mod named, every section is copied through untouched -- a repack
 that reproduces the input byte for byte, useful for proving the container
 handling itself is not what changed.
@@ -85,6 +88,20 @@ def registry():
     return reg
 
 
+def conf_rows():
+    """{mods.conf key: the registry names of its knobs}. A knob is named
+    CDJ_GUI_<NAME> or CDJ_MAIN_<NAME> after its patch_gui/patch_main entry, so
+    one row (three_band) stands for every patch it switches on."""
+    rows = {}
+    with open(os.path.join(HERE, 'mods.conf'), encoding='utf-8') as f:
+        for line in f:
+            if line.startswith('#') or '|' not in line:
+                continue
+            key, env = line.split('|')[:2]
+            rows[key] = [re.sub(r'^CDJ_(GUI|MAIN)_', '', knob).lower() for knob in env.split('+')]
+    return rows
+
+
 def parse_manifest(data):
     """(section sizes, header length) -- see split_update.py."""
     sizes, pos = [], 0
@@ -113,20 +130,39 @@ def main():
     force_version = '--force-version' in args
     args = [a for a in args if a != '--force-version']
 
+    reg = registry()
+    rows = {key: [n for n in knobs if n in reg] for key, knobs in conf_rows().items()}
+
     if args == ['--list']:
-        for name, (target, mod) in registry().items():
-            m = mod.MODS[name]
-            print('%-8s [%s Ver%s] %s' % (name, target, '/'.join(m.fw_versions), m.what))
+        for key, patches in rows.items():
+            if patches:
+                versions = sorted({'%s Ver%s' % (reg[n][0], '/'.join(reg[n][1].MODS[n].fw_versions))
+                                   for n in patches})
+                print('%-12s [%s] %s' % (key, ', '.join(versions), ' '.join(patches)))
+        in_rows = {n for patches in rows.values() for n in patches}
+        for name, (target, mod) in reg.items():
+            if name not in in_rows:
+                m = mod.MODS[name]
+                print('%-12s [%s Ver%s] %s' % (name, target, '/'.join(m.fw_versions), m.what))
         return
 
     if len(args) < 2:
         raise SystemExit(__doc__)
-    in_path, out_path, names = args[0], args[1], args[2:]
+    in_path, out_path = args[0], args[1]
 
-    reg = registry()
-    unknown = [n for n in names if n not in reg]
-    if unknown:
-        die('unknown mod(s) %s -- see --list' % ', '.join(unknown))
+    # A row's name wins over a patch of the same name: `osc` is the whole osc
+    # row (osc + oscbeat), not its first patch alone.
+    names = []
+    for arg in args[2:]:
+        if rows.get(arg):
+            expanded = rows[arg]
+        elif arg in rows:
+            die('%s only changes the emulator; it has nothing to write into a .UPD' % arg)
+        elif arg in reg:
+            expanded = [arg]
+        else:
+            die('unknown mod %s -- see --list' % arg)
+        names += [n for n in expanded if n not in names]
 
     by_target = {}
     for name in names:
