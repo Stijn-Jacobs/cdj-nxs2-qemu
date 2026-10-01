@@ -17,5 +17,6 @@ sh4_ss.add(declare_dependency(include_directories: include_directories('.', 'com
 # host-specific. It defines cdjc6x and adds it to sh4_ss.
 subdir('c6x')
 subdir('common')
+subdir('bfin')
 subdir('boards/nxs2')
 subdir('boards/cdj2000')

@@ -11,6 +11,7 @@ reaches an inert LOAD PREVIOUS TRACK view.
 
 usage: load_track.py <tag>
 env:   WALK DWELL POSTLOAD KEYBYTE KEYBITS FILMN MOTION_MS MAXWAIT POLL SHOTDIR
+       STOPFILE=<path> ends the film as soon as that file appears
 """
 
 import os
@@ -618,6 +619,15 @@ def ramsnap(name):
 KEYSEQ = [s for s in os.environ.get("KEYSEQ", "").split(",") if s]
 STEPS = KEYSEQ or ["0x%02x:0x%02x" % (KEYBYTE, b) for b in KEYBITS]
 
+# STOPFILE=<path>: an external process drops this file when it has everything
+# it needs from the film, so a fixed FILMN does not keep the deck running (and
+# the batch waiting) after the last useful frame.
+STOPFILE = os.environ.get("STOPFILE", "")
+
+
+def stop_requested():
+    return bool(STOPFILE) and os.path.exists(STOPFILE)
+
 # The step index is in every artefact name so repeated keys do not overwrite
 # each other's films.
 for si, step in enumerate(STEPS):
@@ -641,10 +651,14 @@ for si, step in enumerate(STEPS):
         print("[%s]   ramsnap ok: %s %s %s %s"
               % (TAG, before_a, before_b, after, after2 or "(no after2)"))
     frames = []
+    stopped = False
     for n in range(FILMN + 1):
         # The name must start with "b" or grab() routes it to the scratch file.
         frames.append(shot("b%02x-%02x-s%d-f%d" % (kb, bit, si, n)))
         if n < FILMN:
+            if stop_requested():
+                stopped = True
+                break
             vsleep(MOTION_MS / 1000.0)
     guidump("s%d" % si)
     uniq = len({f for f in frames if f is not None})
@@ -657,3 +671,6 @@ for si, step in enumerate(STEPS):
     else:
         flag = ""
     print("  key 0x%02x:0x%02x  %s%s" % (kb, bit, " ".join(str(f) for f in frames), flag))
+    if stopped:
+        print("[%s] STOPFILE seen -- ending the film early" % TAG)
+        break

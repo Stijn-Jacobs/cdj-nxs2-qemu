@@ -63,6 +63,11 @@ typedef struct c66x_jit_cap {
 #define PKC_SLOT(pc) ((((pc) >> 1) ^ ((pc) >> 17) ^ ((pc) >> 23)) & (PKC_SIZE - 1))
 #define NBR      8       /* at most 6 branches can be in flight */
 #define IDLE_RS_SLOTS 2048   /* the app's idle pass reads a few hundred words */
+#define IDLE_RS_PAGES 64     /* 4 KB pages the read set may span before handlers stay slow */
+#define IDLE_RS_BLOOM 16384  /* bits in the read set's word filter */
+/* codepage bits: decoded code on the page / a word the idle loop reads */
+#define CP_CODE 1
+#define CP_IDLE 2
 #define PST_DEPTH 64         /* stores in one cycle: a packet plus loop-buffer instructions */
 #define IDLE_IDEM 8
 
@@ -249,6 +254,20 @@ struct c66x_core {
     struct { uint32_t v[64]; uint8_t f[64]; uint64_t gen; } jit_xs;
     /* Appended, not inserted: modules built for this ABI read the fields above. */
     uint64_t xpk_flushes;           /* code_gen bumps from a full xpk table */
+    /* While a handler runs, idle_armed reads 0 so its stores take the fast
+     * paths (compiled code included). The pages holding the loop's read set
+     * carry CP_IDLE in codepage, which routes a store there through
+     * idle_page_stored; it compares the word with the value the loop read. */
+    uint8_t  idle_isr_fast;         /* C66X_IDLE_ISR_FAST */
+    uint8_t  idle_isr_disarmed;
+    uint8_t  idle_rs_pgover;        /* read set spans more pages than idle_rs_pg holds */
+    unsigned idle_rs_npg;
+    struct { uint8_t *cp; uint32_t page; } idle_rs_pg[IDLE_RS_PAGES];
+    uint32_t idle_rs_val[IDLE_RS_SLOTS];   /* each RAM word's value when the loop read it */
+    uint8_t  idle_rs_ram[IDLE_RS_SLOTS];   /* the slot's word is RAM, so its value is kept */
+    /* One bit per word offset within its mapping, modulo the filter size:
+     * clear means no kept word of any mapping lives there. */
+    uint32_t idle_rs_bloom[IDLE_RS_BLOOM / 32];
 };
 
 /* ------------------------------------------------------------------------ */

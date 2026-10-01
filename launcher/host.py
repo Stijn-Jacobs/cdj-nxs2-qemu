@@ -142,6 +142,22 @@ def windows_reserved_ranges(proto):
             if len(f) >= 2 and f[0].isdigit() and f[1].isdigit()]
 
 
+def adapter_has_address(ifname, ip):
+    """Whether the Windows adapter `ifname` carries `ip`; None when there is no
+    such adapter. A TAP adapter reads as disconnected until QEMU opens it, and
+    netsh then lists none of its addresses; Get-NetIPAddress still does."""
+    script = ("$a = Get-NetIPAddress -InterfaceAlias '%s' -AddressFamily IPv4 -ErrorAction Stop; "
+              "$a.IPAddress" % ifname.replace("'", "''"))
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-Command", script],
+                             capture_output=True, text=True)
+    except OSError:
+        return None
+    if out.returncode:
+        return None
+    return ip in out.stdout.split()
+
+
 def in_ranges(port, ranges):
     return any(lo <= port <= hi for lo, hi in ranges)
 

@@ -1,26 +1,27 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
-#include "cdj.h"
+#include "cdj_ata.h"
 #include "cdj_getenv.h"
 /* ---------------------------------------------------------------------------
  * ATA/ATAPI task file for the CD drive, modelled as an empty, healthy drive.
  * Enabled with CDJ_ATA=1.
  *
- * Without it boot subsystem 4 registers status 2 with fatal_register
- * (0x084026A6) and the firmware shows E-7001 DISC DRIVE ERROR. Subsystem 4
- * passes when *(0x092225A0) == 2, set at 0x0820A96E when the first IDENTIFY
- * through 0x084526A8 succeeds and word 0 has bit 15 set (ATAPI signature).
+ * On the NXS2, without it boot subsystem 4 registers status 2 with
+ * fatal_register (0x084026A6) and the firmware shows E-7001 DISC DRIVE
+ * ERROR. Subsystem 4 passes when *(0x092225A0) == 2, set at 0x0820A96E when
+ * the first IDENTIFY through 0x084526A8 succeeds and word 0 has bit 15 set
+ * (ATAPI signature).
  *
- * Registers at 0x04DA2100 + 60 * channel, 4-byte stride (0x0845270C):
+ * Registers at base + 60*channel, 4-byte stride (NXS2 0x0845270C):
  * +0x04 Features, +0x08 Sector Count, +0x10/+0x14/+0x18 LBA, +0x1C
  * Command/Status, +0x38 control. Commands used: 0xEC IDENTIFY DEVICE and 0xA1
- * IDENTIFY PACKET DEVICE. The ready-wait at 0x08453BFA treats status 0xFF as
- * no device and needs BSY and DRQ clear; 0x0845296A needs ERR clear.
+ * IDENTIFY PACKET DEVICE. The ready-wait (NXS2 0x08453BFA) treats status 0xFF
+ * as no device and needs BSY and DRQ clear; (NXS2 0x0845296A) needs ERR
+ * clear.
  *
  * No medium is needed: disc presence is checked later with TEST UNIT READY.
  */
-#define CDJ_ATA_BASE    0xA4DA2100
 #define CDJ_ATA_SIZE    0x100
-#define CDJ_ATA_STRIDE  60          /* base + 60*channel (0x0845270C) */
+#define CDJ_ATA_STRIDE  60          /* base + 60*channel */
 
 typedef struct {
     MemoryRegion iomem;
@@ -45,8 +46,8 @@ static bool cdj_ata_on(void)
     return on;
 }
 
-/* Only word 0 is tested (bit 15, at 0x0820A970). 0x85C0 is the usual ATAPI
- * CD-ROM signature; the other words are left zero. */
+/* Only word 0 is tested (NXS2 bit 15, at 0x0820A970). 0x85C0 is the usual
+ * ATAPI CD-ROM signature; the other words are left zero. */
 static uint16_t cdj_ata_identify(unsigned idx)
 {
     return idx == 0 ? 0x85C0 : 0x0000;
@@ -110,7 +111,7 @@ static void cdj_ata_summary(Notifier *n, void *unused)
                 " IDENTIFY commands", s->reads, s->writes, s->cmds);
 }
 
-void cdj_ata_init(MemoryRegion *sysmem)
+void cdj_ata_init(MemoryRegion *sysmem, const char *name, hwaddr base)
 {
     CdjAtaState *s;
 
@@ -120,11 +121,9 @@ void cdj_ata_init(MemoryRegion *sysmem)
     s = g_new0(CdjAtaState, 1);
     s->exit.notify = cdj_ata_summary;
     qemu_add_exit_notifier(&s->exit);
-    memory_region_init_io(&s->iomem, NULL, &cdj_ata_ops, s, "sh7724.atapi",
+    memory_region_init_io(&s->iomem, NULL, &cdj_ata_ops, s, name,
                           CDJ_ATA_SIZE);
-    memory_region_add_subregion_overlap(sysmem, A7ADDR(CDJ_ATA_BASE),
-                                        &s->iomem, 1);
+    memory_region_add_subregion_overlap(sysmem, base, &s->iomem, 1);
     info_report("ata: empty ATAPI drive at 0x%08x (status 0x50, ATAPI "
-                "signature 0x85C0)", CDJ_ATA_BASE);
+                "signature 0x85C0)", (unsigned)base);
 }
-

@@ -725,12 +725,16 @@ static bool cdj_c6x_preload_stage1(void)
     };
     const char *dir = getenv("CDJ_C6X_STAGE1");
 
+    /* The first stage is extracted by hand, so there is no default place. */
+    if (!dir || !*dir) {
+        warn_report("c6x: CDJ_C6X_PRELOAD needs CDJ_C6X_STAGE1=<directory of "
+                    "the extracted first-stage sections>");
+        return false;
+    }
     cdj_c6x_stop();
     memset(cdj_c6x.l2, 0, C6X_L2_SIZE);
     for (unsigned i = 0; i < ARRAY_SIZE(s1); i++) {
-        g_autofree char *path = g_strdup_printf("%s/%s",
-                                                dir ? dir : "lab/c3_out/stage1",
-                                                s1[i].file);
+        g_autofree char *path = g_strdup_printf("%s/%s", dir, s1[i].file);
         g_autofree gchar *data = NULL;
         gsize n;
 

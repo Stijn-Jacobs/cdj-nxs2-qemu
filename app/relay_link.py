@@ -36,7 +36,6 @@ def _import_leds():
 
 
 leds = _import_leds()
-LAMPS = leds.LAMPS
 parse_state = leds.parse_state
 
 
@@ -59,10 +58,9 @@ class DeckState:
 
     def lamp(self, role):
         """True while the NXS2 would light this lamp (a LAMPS role)."""
-        if not self.live or self.pnl is None or role not in LAMPS:
+        if not self.live or self.pnl is None or role not in leds.ROLE_NAMES:
             return False
-        byte, mask = LAMPS[role]
-        return bool(self.pnl[byte] & mask)
+        return leds.lamp_lit(self.pnl, role)
 
     def pointer_turns(self):
         """The centre display's pointer as a fraction of a turn, or None."""

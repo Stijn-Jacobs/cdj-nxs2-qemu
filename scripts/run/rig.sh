@@ -14,6 +14,16 @@
 #   env:   DJLINK=1 (Pro DJ Link on; 0 = off)   GROUP=<ip:port> (own segment)
 #          NDECKS=1 (2 for both DJ-202 sides)   GUI_DISPLAY=gtk|cocoa|none   AUDIODEV=<-audio spec, %TAG% ok>
 #          RING=3000 PREFILL=150 MAXLAT=450 (ms)   NOSOUND=1   WARM=0 (1 = throwaway warm-up wave first)
+#          DJLINK=tap:<adapter> puts the deck on a host TAP-Windows6 adapter, so a desktop app on
+#          this PC (Ableton Live) sees its Pro DJ Link network directly; one deck, Windows only.
+#
+# DJLINK=tap:CDJ-Link needs a one-time setup on Windows: run scripts/net/tap_setup.ps1 from an
+# elevated PowerShell (it creates the adapter, its address, the MTU cap, the ARP entry and the
+# firewall rule; the README section "Connecting rekordbox and Ableton Live on this PC" has the rest).
+# Starting a deck needs no admin. With the ableton_link mod on (mods.conf; CDJ_MAIN_ABLETONLINK and
+# CDJ_MAIN_ABLETONLINKPONG):
+#   DJLINK=tap:CDJ-Link CDJ_MAIN_ABLETONLINK=1 CDJ_MAIN_ABLETONLINKPONG=1 bash scripts/run/rig.sh show
+# then enable Link in Live. There is no capture_link.py here: watch the adapter with Wireshark.
 #
 # The work is done by launcher/rig.py.
 . "$(dirname "${BASH_SOURCE[0]}")/../cdj_python.sh"

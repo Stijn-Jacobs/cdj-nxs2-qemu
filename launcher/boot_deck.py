@@ -48,6 +48,7 @@ class Deck:
         self.notes = []          # (stream, line) printed as the deck starts
         self.mint = None         # player_flash.py argv
         self.gui_patch = None    # patch_gui.py argv
+        self.main_patch = None   # patch_main.py argv
         self.flash_copy = None   # (src, dst)
         self.persist_new = None  # the deck's own flash image, made on this start
         self.media_cache = None  # (src, dst)
@@ -160,8 +161,10 @@ class Deck:
             drive = "format=raw,file=fat:%s,readonly=on" % mediadir
         elif mode == "img":
             src = nonempty(env, "MEDIA_IMG_SRC", os.path.join(lay.extract, "usbmedia3.img"))
-            if "MEDIA_IMG_SRC" not in env:
-                # Cache the source on the local disk; /mnt/c is slow.
+            if "MEDIA_IMG_SRC" not in env and not _same_filesystem(src, tmp):
+                # Cache the source on the local disk; a remote or slow mount
+                # (e.g. WSL's /mnt/c) is not worth reading from on every boot.
+                # Already-local (same filesystem as tmp) skips this copy.
                 cached = "%s/usbmedia3.img" % tmp
                 self.media_cache = (src, cached)
                 src = cached
@@ -244,9 +247,27 @@ class Deck:
         # CDJ_NETDEV: one -netdev for Pro DJ Link; the EtherMAC's NIC finds its
         # backend by id, so decks can share an L2 segment.
         net = ["-netdev", env["CDJ_NETDEV"]] if env.get("CDJ_NETDEV") else []
+        # MAIN firmware mods are patched into a copy of the image, per run:
+        # each patch_main.py mod <name> is on when CDJ_MAIN_<NAME>=1. A
+        # -kernel boot patches main_unpacked.bin the way gui_patch does above;
+        # MAIN_BOOT=flash instead patches the packed image inside a copy of
+        # the flash the -drive below attaches, since that is where the
+        # bootloader reads it from.
+        main_kernel = model_extract_n + "/main_unpacked.bin"
+        main_mods = [m for m in self._main_mod_names() if env.get("CDJ_MAIN_" + m.upper()) == "1"]
+        if main_mods:
+            if env.get("MAIN_BOOT") == "flash":
+                patched_flash = host.native("%s/cdj-%s-flash.bin" % (nonempty(env, "LOGDIR", tmp), tag))
+                self.main_patch = host.python_argv() + [self._patch_main(), "--flash", flash, patched_flash] + main_mods
+                flash = patched_flash
+            else:
+                patched_main = host.native("%s/cdj-%s-main.bin" % (nonempty(env, "LOGDIR", tmp), tag))
+                self.main_patch = host.python_argv() + [self._patch_main(), main_kernel, patched_main] + main_mods
+                main_kernel = patched_main
+
         # MAIN_BOOT=flash: MAIN resets into Pioneer's bootloader in the flash
         # image instead of starting from main_unpacked.bin (the default, kernel).
-        boot = [] if env.get("MAIN_BOOT") == "flash" else ["-kernel", model_extract_n + "/main_unpacked.bin"]
+        boot = [] if env.get("MAIN_BOOT") == "flash" else ["-kernel", main_kernel]
         self.main_argv = ([self.main_qemu, "-M", profile.main_machine] + boot
                           + ["-drive", "if=pflash,format=raw,file=%s,%s" % (flash, snap)] + media_args
                           + ["-chardev", "socket,id=spilink,path=%s,server=on,wait=off" % self.sock]
@@ -272,6 +293,14 @@ class Deck:
 
     def _gui_mod_names(self):
         out = subprocess.run(host.python_argv() + [self._patch_gui(), "--list"],
+                             capture_output=True, text=True, check=True).stdout
+        return [line.split()[0] for line in out.splitlines() if line.strip()]
+
+    def _patch_main(self):
+        return os.path.join(self.lay.emu, "mods", "patch_main.py")
+
+    def _main_mod_names(self):
+        out = subprocess.run(host.python_argv() + [self._patch_main(), "--list"],
                              capture_output=True, text=True, check=True).stdout
         return [line.split()[0] for line in out.splitlines() if line.strip()]
 
@@ -364,6 +393,14 @@ class Deck:
             if out.returncode != 0:
                 sys.stderr.write(out.stderr)
                 chain.err("[%s] display firmware not patched" % tag)
+                return False
+        if self.main_patch:
+            out = subprocess.run(self.main_patch, capture_output=True, text=True)
+            for line in out.stdout.splitlines():
+                chain.say("[%s] %s" % (tag, line))
+            if out.returncode != 0:
+                sys.stderr.write(out.stderr)
+                chain.err("[%s] MAIN firmware not patched" % tag)
                 return False
         mon = _monsock(lay)
         # A leftover QEMU on the same tag still holds the monitor address.
@@ -508,6 +545,16 @@ def _tail(path, n):
     except OSError:
         return []
     return [line for line in lines if line.strip()][-n:]
+
+
+def _same_filesystem(src, tmp_dir):
+    """True if src and tmp_dir already live on the same drive/filesystem, in
+    which case a copy into tmp_dir buys nothing. Any stat failure answers
+    False, which keeps the older, always-safe caching behaviour."""
+    try:
+        return os.stat(src).st_dev == os.stat(tmp_dir).st_dev
+    except OSError:
+        return False
 
 
 def _launchctl_manager():

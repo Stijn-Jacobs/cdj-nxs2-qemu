@@ -369,9 +369,16 @@ listed in `mods/mods.conf`:
 
 | mod | what it does | default |
 |---|---|---|
-| `high_fps` | Draw the zoomed-in waveform about twice as often (~70 fps instead of ~33). | on |
-| `live_clock` | Repaint the REMAIN clock every frame instead of about three times a second. | on |
-| `three_band` | Draw the RGB centre waveform as three bands (low blue, mid amber, high white), CDJ-3000 style. Needs a track with rekordbox's colour waveform. | off |
+| [`high_fps`](mods/high_fps.md) | Draw the zoomed-in waveform about twice as often (~70 fps instead of ~33). | on |
+| [`live_clock`](mods/live_clock.md) | Repaint the REMAIN clock every frame instead of about three times a second. | on |
+| [`three_band`](mods/three_band.md) | Draw the centre waveform and the overview as three bands (low blue, mid amber, high white), CDJ-3000 style, from the track's own 3-band data (.2EX). | off |
+| [`osc`](mods/osc.md) | Send the deck's beats, state and load/play/stop/cue/loop events as OSC messages on UDP broadcast port 50010, for lighting desks and scripts. | off |
+| [`ableton_link`](mods/ableton_link.md) | Join Ableton Link as a peer: Live or any Link app on the deck's network follows its tempo and beat. | off |
+
+Each mod has a page of its own: its knobs, what it patches, and what has and has
+not been verified. `osc` needs a relay on the emulator
+(`python3 scripts/net/osc_relay.py`, see its page); `ableton_link` is reached
+through [a TAP adapter](#rekordbox-ableton).
 
 `./setup.sh` shows the defaults (step 7) and either takes them or asks about
 each one, and saves your answers to `cdj.conf`; `./setup.sh --reconfigure`
@@ -383,16 +390,22 @@ or override any of them for one run with the environment, e.g.
 [SERVICE MODE](#service-mode) is a separate boot option, not a mod: it changes
 what the deck boots into, not how it behaves once it is up.
 
-**Patching a real firmware update.** `three_band` is already a display-firmware
-code patch, not an emulator knob: the launcher applies it to a copy of the
-display image at boot (`mods/patch_gui.py`), the same file a real update would
-carry. `mods/patch_update.py` makes that same patch to a real Pioneer `.UPD`
-file, so it ends up on an actual player instead of a copy this emulator throws
-away on exit:
+**Patching a real firmware update.** `three_band`, `osc` and
+`ableton_link` are firmware code patches, not emulator knobs: the launcher
+applies the display ones to a copy of the display image at boot
+(`mods/patch_gui.py`) and the MAIN ones to a copy of the MAIN image
+(`mods/patch_main.py`), the same code a real update would carry.
+`mods/patch_update.py` makes the same patches to a real Pioneer `.UPD` file, so
+they end up on an actual player instead of a copy this emulator throws away on
+exit; each mod's page gives its command, for example:
 
 ```sh
-python mods/patch_update.py C2KNXS2.UPD C2KNXS2-wave3.UPD wave3
+python mods/patch_update.py C2KNXS2.UPD C2KNXS2-link.UPD abletonlink abletonlinkpong
 ```
+
+MAIN has no scatter-load table of its own: it runs in place, so a mod's routine
+goes straight into a run of erased flash inside its own address space rather
+than being copied out to RAM the way a display patch is.
 
 Only a mod that is an actual firmware code patch is offered this way — an
 emulator-only knob such as `high_fps` or `live_clock` has nothing to
@@ -402,11 +415,85 @@ against; a mismatched version is refused unless you pass `--force-version`.
 
 **This is untested on real hardware.** The container repacking and the LZSS
 re-encoding have been checked against the real update file byte for byte, and
-the patched image has been checked against `patch_gui.py`'s own output (see
-`tests/`), but nobody has flashed a patched update into an actual player.
-Flashing a modified firmware update is entirely at your own risk — keep the
-original file, and expect that a mistake here could mean a trip through
-service mode's recovery path, or worse.
+the patched image has been checked against `patch_gui.py`'s/`patch_main.py`'s
+own output (see `tests/`), but nobody has flashed a patched update into an
+actual player. Flashing a modified firmware update is entirely at your own
+risk — keep the original file, and expect that a mistake here could mean a
+trip through service mode's recovery path, or worse.
+
+<a id="rekordbox-ableton"></a>
+
+## 🔌 Connecting rekordbox and Ableton Live on this PC
+
+<details>
+<summary><b>Setup, start command and troubleshooting</b></summary>
+
+The decks' usual Pro DJ Link network is QEMU's multicast segment, which no
+program on your PC can join. On Windows the deck can instead sit on a virtual
+network adapter of your PC, and then:
+
+- **rekordbox** on the PC is a Pro DJ Link peer of the deck. In Export mode
+  they see each other, the deck browses the rekordbox library (the deck's
+  REKORDBOX / LINK source) and loads and plays tracks from it.
+- **Ableton Live** (12 tested) shows `1 Link` at the deck's BPM, and follows
+  the deck's tempo, with the [`ableton_link`](#mods) mod on. rekordbox in
+  Performance mode also lists the deck as a Link peer and syncs to it.
+
+`ableton_link` is a firmware patch like the other [mods](#mods), and off by
+default.
+
+**One-time setup.** The adapter is the TAP-Windows6 driver that ships with
+[OpenVPN](https://openvpn.net/community-downloads/) (the "TAP Virtual Ethernet
+Adapter" component is enough). Install OpenVPN, then from an **elevated**
+PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\net\tap_setup.ps1
+```
+
+It creates an adapter named `CDJ-Link` with its `tapctl.exe` (expected in
+`C:\Program Files\OpenVPN\bin`; pass `-TapCtl <path>` if OpenVPN lives
+elsewhere) and gives it the address `192.168.50.1/24`. It also caps the
+adapter's MTU at 1500, adds a fixed ARP entry for the deck (`192.168.50.10`),
+and opens one firewall rule on that adapter for UDP 67 (DHCP), 20808 (Ableton
+Link) and 50000-50002 (Pro DJ Link). It is safe to run again, and starting a
+deck afterwards needs no admin rights.
+
+**Start the deck on it** (one deck; the rig's own DHCP server gives it
+`192.168.50.10`):
+
+```sh
+DJLINK=tap:CDJ-Link bash scripts/run/rig.sh show
+# with the ableton_link mod:
+DJLINK=tap:CDJ-Link CDJ_MAIN_ABLETONLINK=1 CDJ_MAIN_ABLETONLINKPONG=1 bash scripts/run/rig.sh show
+```
+
+**In rekordbox**, switch to **Export mode** (the deck does not show up in
+Performance mode for browsing). Once the deck has booted it appears in the
+player list. On the deck press `L` (LINK) or `R` (REKORDBOX) for the source,
+browse the library and load a track as from a USB stick.
+
+**In Ableton Live**, turn on *Preferences > Link/Tempo/MIDI > Show Link
+Toggle*, then press `LINK` in the transport. With the mod on, the toggle shows
+`1 Link` and Live's tempo follows the deck's.
+
+**If it does not work:**
+
+- **`E-8309` on the deck when you load from rekordbox**: the adapter's MTU is
+  not capped at 1500. TAP-Windows reports 65500, so Windows sends rekordbox's
+  NFS replies as single oversized frames, which the deck drops. Run
+  `tap_setup.ps1` again, or
+  `netsh interface ipv4 set subinterface "CDJ-Link" mtu=1500 store=persistent`.
+- **rekordbox does not see the deck**: rekordbox is in Performance mode, or it
+  is sending on another adapter. Switch to Export mode; if the deck still does
+  not appear, check that `CDJ-Link` is the adapter rekordbox's network settings
+  use.
+- **The launcher says there is no adapter of that name, or that it has no
+  address**: the setup has not run, or the adapter was renamed.
+- **One deck only, and Windows only.** A TAP adapter carries a single deck
+  (`NDECKS=1`), and `DJLINK=tap:` is refused on other systems.
+
+</details>
 
 ## 🔧 Service mode
 
@@ -533,7 +620,7 @@ machine: the update file, and anything built from it, is Pioneer's.
 | `hw/cdj/common/` | what every board shares: the boot (DRAM, NOR flash, image, reset vector), the SH-4 core blocks and the board descriptor (`cdj_common.h`) |
 | `hw/cdj/boards/nxs2/` | the CDJ-2000NXS2: its MAIN board, one file per device, and the display board (`sh7269gui.c`); `diag/` holds the diagnostic hooks, `standin/` historical models that are off by default |
 | `hw/cdj/boards/cdj2000/` | the CDJ-2000 and CDJ-2000NXS MAIN board (Renesas SH7763), in bring-up |
-| `mods/` | the [mods](#mods) registry and the display-firmware patches behind them |
+| `mods/` | the [mods](#mods) registry and the display- and MAIN-firmware patches behind them |
 | `models/` | one profile per player, read by the firmware and launch scripts (see `models/README.md`) |
 | `hw/cdj/c6x/` | the C66x DSP core, its SoC peripherals, the JIT generator (`tools/`) and unit tests |
 | `patches/` | the changes to QEMU 9.1.0 itself |
@@ -541,7 +628,7 @@ machine: the update file, and anything built from it, is Pioneer's.
 | `scripts/firmware/` | unpacking and verifying the update file |
 | `scripts/media/` | the USB stick image builder; `collection_xml.py` and `bpm_estimate.py` turn a plain folder of music into the XML [baken](https://github.com/M-Igashi/baken) reads for the other USB step |
 | `scripts/run/` | the run chain behind the launchers, the panel and monitor sockets, the controller relay and the run reports |
-| `scripts/net/` | the Pro DJ Link segment: DHCP server, capture, capture scorer |
+| `scripts/net/` | the Pro DJ Link segment: DHCP server, capture, capture scorer, and `tap_setup.ps1` for the [TAP adapter](#rekordbox-ableton) |
 | `midi/` | the MIDI controller bridge, controller profiles, mappings and the learn tool |
 | `app/` | the [virtual deck app](#virtual-deck): the drawn player around the emulated screen |
 | `docs/img/` | the screenshots on this page |

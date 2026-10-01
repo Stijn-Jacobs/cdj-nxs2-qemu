@@ -22,11 +22,21 @@ def load(lay):
     return mods
 
 
+def env_names(env):
+    """A row's `env` field is usually one board knob, but a mod that patches
+    more than one image (e.g. a MAIN fetch feeding a GUI draw routine) names
+    all of them, '+'-joined, so one setup answer and one cdj.conf line drive
+    every image together -- see wave3data's row."""
+    return env.split("+")
+
+
 def conf_key(env):
     """The cdj.conf key a knob is saved under: CDJ_-prefixed, so SERVICE
     becomes CDJ_SERVICE, the key setup used to hand-add for it before this
-    registry existed."""
-    return env if env.startswith("CDJ_") else "CDJ_" + env
+    registry existed. A multi-image row is saved under its first knob only;
+    the others are derived from the same saved choice, never saved twice."""
+    first = env_names(env)[0]
+    return first if first.startswith("CDJ_") else "CDJ_" + first
 
 
 def default(mods, env):
@@ -39,11 +49,13 @@ def default(mods, env):
 
 
 def apply(mods, c, env):
-    """Set every mod's knob in `env` (a dict, normally os.environ's own) from
-    cdj.conf's values `c`, unless `env` already has it -- the caller's own
-    environment, or something start.py itself set (its --service flag)."""
+    """Set every mod's knob(s) in `env` (a dict, normally os.environ's own)
+    from cdj.conf's values `c`, unless `env` already has a knob set -- the
+    caller's own environment, or something start.py itself set (its
+    --service flag)."""
     for m in mods:
-        if env.get(m.env, "") != "":
-            continue
         saved = c.get(conf_key(m.env), "")
-        env[m.env] = saved if saved in (m.on, m.off) else default(mods, m.env)
+        value = saved if saved in (m.on, m.off) else default(mods, m.env)
+        for name in env_names(m.env):
+            if env.get(name, "") == "":
+                env[name] = value

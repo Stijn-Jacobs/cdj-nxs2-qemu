@@ -6,6 +6,7 @@ end of the load; PLAY pauses and resumes. The machine is paced to real time
 
   usage: bash scripts/run/rig.sh [prefix=show] [film-frames=120]
   env:   DJLINK=1 (Pro DJ Link on; 0 = off)   GROUP=<ip:port> (own segment)
+         DJLINK=tap:<adapter> puts one deck on a TAP-Windows6 adapter instead (see scripts/run/rig.sh)
          NDECKS=1 (2 for both DJ-202 sides)   GUI_DISPLAY=gtk|cocoa|none   AUDIODEV=<-audio spec, %TAG% ok>
          RING=3000 PREFILL=150 MAXLAT=450 (ms)   NOSOUND=1   WARM=0 (1 = throwaway warm-up wave first)
          SERVICE=1 boots into SERVICE MODE instead of playing a track
@@ -19,6 +20,7 @@ from .chain import export_default, ifset, nonempty
 from .layout import Layout
 
 DEFAULT_GROUP = "239.77.77.1:45000"
+TAP_HOST_IP = "192.168.50.1"
 
 
 def default_audiodev():
@@ -53,9 +55,29 @@ def jit_module(env):
     return ""
 
 
+def tap_adapter(ifname, ndecks):
+    """DJLINK=tap:<ifname>: the adapter name, once it is fit to carry the deck.
+    The deck and the host share the adapter's segment, and the host end of it
+    is the rig's DHCP server."""
+    if not host.is_windows():
+        raise SystemExit("DJLINK=tap: needs Windows (TAP-Windows6)")
+    if int(ndecks) > 1:
+        raise SystemExit("DJLINK=tap:%s: a TAP-Windows6 adapter carries one deck, NDECKS=%s" % (ifname, ndecks))
+    setup = ("one-time setup: install TAP-Windows6, rename the adapter to %s, then: "
+             "netsh interface ip set address \"%s\" static %s 255.255.255.0 (details in scripts/run/rig.sh)"
+             % (ifname, ifname, TAP_HOST_IP))
+    has_ip = host.adapter_has_address(ifname, TAP_HOST_IP)
+    if has_ip is None:
+        raise SystemExit("DJLINK=tap:%s: no adapter of that name; %s" % (ifname, setup))
+    if not has_ip:
+        raise SystemExit("DJLINK=tap:%s: the adapter has no %s; %s" % (ifname, TAP_HOST_IP, setup))
+    return ifname
+
+
 def rig_env(env, tag, ndecks, frames):
-    """rig.sh's knobs, applied to `env`. Returns the Pro DJ Link group when
-    the rig should run a DHCP server for it."""
+    """rig.sh's knobs, applied to `env`. Returns the argument for the rig's
+    DHCP server (the Pro DJ Link group, or tap:<host ip>) when the rig should
+    run one."""
     say, warn = chain.say, chain.err
     if env.get("NOSOUND", "0") != "1":
         # Ring/prefill/cap 3000/150/450 ms; a narrower band ping-pongs between
@@ -96,7 +118,8 @@ def rig_env(env, tag, ndecks, frames):
         say("[%s] no curated JIT module: the auto-JIT compiles the DSP's hot code as it plays" % tag)
     export_default(env, "CDJ_NATIVE_LIBC", "1")
 
-    # Pro DJ Link, on by default. DJLINK=0 turns it off.
+    # Pro DJ Link, on by default. DJLINK=0 turns it off; DJLINK=tap:<adapter>
+    # attaches the deck to a host TAP adapter (one deck) instead of the segment.
     #  CDJ_NETDEV        a multicast segment shared by every deck on GROUP;
     #                    QEMU's socket backend carries one frame per datagram.
     #  CDJ_ETHER_PHYADS  0,1,5. The link-up gate is link_status(0) | link_status(1).
@@ -107,8 +130,12 @@ def rig_env(env, tag, ndecks, frames):
     # The deck will not announce without a DHCP lease, so a DHCP server runs
     # as long as the rig.
     export_default(env, "DJLINK", "1")
-    dhcp = None
-    if env["DJLINK"] == "1":
+    dhcp = netdev = None
+    if env["DJLINK"].startswith("tap:"):
+        adapter = tap_adapter(env["DJLINK"][4:], ndecks)
+        netdev, dhcp, where = "tap,id=djlink,ifname=" + adapter, "tap:" + TAP_HOST_IP, "adapter %s (host %s)" % (
+            adapter, TAP_HOST_IP)
+    elif env["DJLINK"] == "1":
         group = nonempty(env, "GROUP", DEFAULT_GROUP)
         # Windows reserves UDP ranges for Hyper-V/WSL, and a bind inside one
         # fails with only "Unknown error" from QEMU.
@@ -118,15 +145,18 @@ def rig_env(env, tag, ndecks, frames):
             warn("[%s]   netdev cannot bind it and MAIN will not start. Pick another:" % tag)
             warn("[%s]   GROUP=239.77.77.1:45000 bash scripts/run/live_linked.sh %s" % (tag, tag))
             warn("[%s]   (netsh int ipv4 show excludedportrange protocol=udp)" % tag)
-        export_default(env, "CDJ_NETDEV", "socket,id=djlink,mcast=" + group)
+        netdev, dhcp, where = "socket,id=djlink,mcast=" + group, group, group
+    if netdev:
+        export_default(env, "CDJ_NETDEV", netdev)
         export_default(env, "CDJ_ETHER_PHYADS", "0,1,5")
         env["CDJ_ETHER_MAC"] = ifset(env, "CDJ_ETHER_MAC", "02:00:00:00:00:0%N%")
         export_default(env, "CDJ_PCALL2", "0x08345574:0x08516448:0x2a:0x50000001:0x0")
-        if nonempty(env, "DJLINK_DHCP", "1") == "1":
-            dhcp = group
-        say("[%s] Pro DJ Link ON: %s, MAC %s, leases -> /tmp/cdj-%s-dhcpd.log" % (tag, group, env["CDJ_ETHER_MAC"], tag))
-        say("[%s]   watch it: python3 scripts/net/capture_link.py %s /tmp/cdj-%s.pcap  (score with score_link.py)"
-            % (tag, group, tag))
+        if nonempty(env, "DJLINK_DHCP", "1") != "1":
+            dhcp = None
+        say("[%s] Pro DJ Link ON: %s, MAC %s, leases -> /tmp/cdj-%s-dhcpd.log" % (tag, where, env["CDJ_ETHER_MAC"], tag))
+        if env["DJLINK"] == "1":
+            say("[%s]   watch it: python3 scripts/net/capture_link.py %s /tmp/cdj-%s.pcap  (score with score_link.py)"
+                % (tag, group, tag))
     else:
         say("[%s] Pro DJ Link off (DJLINK=0)" % tag)
     # MAIN/DSP lockstep quantum. It sets how coarsely MAIN sees the DSP's play
@@ -142,7 +172,9 @@ def rig_env(env, tag, ndecks, frames):
     # Every mod in mods.conf the caller left unset gets its registry default.
     mod_list = mods.load(Layout())
     for m in mod_list:
-        export_default(env, m.env, mods.default(mod_list, m.env))
+        value = mods.default(mod_list, m.env)
+        for name in mods.env_names(m.env):
+            export_default(env, name, value)
     # Diagnostic re-read and scan of every DMA'd display frame; off.
     export_default(env, "CDJ_GUI_FRAME_SCAN", "0")
     # TOUCH=1 (default): a click/drag in the display window, or a 'touch'/'tap'

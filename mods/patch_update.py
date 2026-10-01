@@ -9,35 +9,36 @@ With no mod named, every section is copied through untouched -- a repack
 that reproduces the input byte for byte, useful for proving the container
 handling itself is not what changed.
 
-Every mod here also has a --list entry in patch_gui.py, since that is the
-tool that actually knows how to splice each one into an image; this is the
-container-level wrapper around it. Only mods that patch real firmware code
-are offered -- an emulator-only knob such as high_fps or live_clock
-(emulator/mods/mods.conf) has nothing to write into a .UPD and does not
-appear here.
+Every mod here also has a --list entry in patch_gui.py or patch_main.py,
+since that is the tool that actually knows how to splice it into its image;
+this is the container-level wrapper around them. Only mods that patch real
+firmware code are offered -- an emulator-only knob such as high_fps or
+live_clock (emulator/mods/mods.conf) has nothing to write into a .UPD and
+does not appear here.
 
     1. Split the update into its sections (the same manifest split_update.py
        reads: CRLF-decimal lengths, then the sections concatenated).
-    2. Decode the target section's LZSS stream to the raw image
-       patch_gui.py works on.
-    3. Apply every requested mod for that image in one patch_gui.patch()
-       call, so they share one load-table record and cannot collide.
-    4. Re-encode (lzss_encode.py) and recompute the section's length field
-       and checksum (gui_encode.py).
-    5. Rewrite the manifest (only the patched section's size changes) and
+    2. Decode the target section to the raw image patch_gui.py/patch_main.py
+       works on: an LZSS stream for the GUI section, Motorola S-records
+       wrapping the same LZSS codec for the MAIN section.
+    3. Apply every requested mod for that image in one patch() call, so they
+       share one placement and cannot collide.
+    4. Re-encode (lzss_encode.py) and recompute the section's own length
+       field and checksum(s) -- gui_encode.py, main_encode.py.
+    5. Rewrite the manifest (only the patched sections' sizes change) and
        concatenate the sections back into a new .UPD.
 
 Every mod declares the firmware version(s) of its target image it was
-verified against (patch_gui.MODS[name].fw_versions). patch_update.py reads
-the update's own version string for that image and refuses a mismatch --
-pass --force-version to patch anyway, at your own risk.
+verified against (MODS[name].fw_versions). patch_update.py reads the
+update's own version string for that image and refuses a mismatch -- pass
+--force-version to patch anyway, at your own risk.
 
 THIS IS UNTESTED ON REAL HARDWARE. The container repacks correctly and the
-patched image has been proven identical to patch_gui.py's own output (see
-emulator/tests/), but nobody has flashed one of these into a real deck.
-Flashing a modified firmware update is entirely at your own risk: keep the
-original .UPD to restore from, and expect that a mistake here can require a
-service-mode recovery or worse.
+patched image has been proven identical to patch_gui.py's/patch_main.py's own
+output (see emulator/tests/), but nobody has flashed one of these into a real
+deck. Flashing a modified firmware update is entirely at your own risk: keep
+the original .UPD to restore from, and expect that a mistake here can require
+a service-mode recovery or worse.
 """
 import os
 import re
@@ -50,19 +51,28 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, FIRMWARE)
 
 import patch_gui
+import patch_main
 import gui_decode
 import gui_encode
+import main_decode
+import main_encode
 
 # Which section of the v1.87 container (models/cdj2000nxs2.conf's
-# MODEL_GUI_SECTION) each target lives in. The CDJ-2000NXS2's .UPD is the only
-# container shape this tool reads; a model whose update ships as several
-# files (the CDJ-2000) is out of scope.
-SECTION_OF = {'gui': 1}
+# MODEL_GUI_SECTION / MODEL_MAIN_SECTION) each target lives in. The
+# CDJ-2000NXS2's .UPD is the only container shape this tool reads; a model
+# whose update ships as several files (the CDJ-2000) is out of scope.
+SECTION_OF = {'gui': 1, 'main': 3}
 
 # target -> (decode(section) -> (header, declared, avail, image),
-#            encode(header32, image) -> section, module owning MODS/patch())
+#            encode(header_or_section, image) -> section, module owning MODS/patch())
+#
+# gui's encode() only needs the section's 32-byte header (it is a flat LZSS
+# blob with nothing else to preserve); main's needs the whole original
+# section, since its own encode() carries the bootloader/emergency-updater
+# S-records before the image forward unchanged -- see main() below.
 TARGETS = {
     'gui': (gui_decode.decode, gui_encode.encode, patch_gui),
+    'main': (main_decode.decode, main_encode.encode, patch_main),
 }
 
 
@@ -148,7 +158,10 @@ def main():
                     '-- pass --force-version to patch anyway (untested)'
                     % (name, target, '/'.join(wanted), version))
         patched = mod.patch(image, target_names)
-        sections[idx] = encode(section[:32], patched)
+        # gui's section has nothing but the header and the LZSS blob; main's
+        # carries the bootloader and emergency-updater S-records too, so its
+        # encode() needs the whole original section to reproduce them.
+        sections[idx] = encode(section, patched) if target == 'main' else encode(section[:32], patched)
         print('patch_update: section %d (%s, Ver%s) %d -> %d bytes'
               % (idx + 1, target, version, len(section), len(sections[idx])))
 

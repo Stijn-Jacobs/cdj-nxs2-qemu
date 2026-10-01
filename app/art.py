@@ -410,20 +410,21 @@ class Art:
                (255, 255, 255), 30, 0.05, over=True)
 
     def _left_column(self, p):
-        # USB socket: a chrome frame around the port.
-        p.rrect((18, 68, 80, 126), 5, fill=(10, 10, 11))
+        # USB socket: a chrome frame around the port. Its lit look (the port
+        # opening's own indicator frame) is drawn as key usb_indicator, over
+        # this same box.
+        p.rrect(L.USB_PORT, 5, fill=(10, 10, 11))
         p.gradient((20, 70, 78, 124), (200, 202, 208), (110, 112, 118), radius=4)
         p.rrect((27, 78, 71, 110), 3, fill=(14, 14, 15))
         p.rrect((33, 84, 65, 94), 1, fill=(62, 64, 68))
         p.line([(40, 150), (56, 150)], PRINT, 1)
         p.rrect((97, 72, 111, 82), 1, outline=PRINT, width=1)
         p.line([(94, 84), (114, 84)], PRINT, 1)
-        # SD slot: a recess with its light bar.
+        # SD slot: a recess with its light bar. SD isn't modelled, so the bar
+        # is drawn dark -- there is no measured signal to light it from.
         p.rrect((18, 188, 122, 246), 4, fill=(8, 8, 9), outline=(70, 72, 76), width=1)
         p.rrect((26, 196, 114, 228), 2, fill=(20, 20, 22))
-        p.glow((30, 237, 110, 241), lambda d, c: d.rectangle(p.b((30, 237, 110, 241)), fill=c),
-               (200, 230, 255), 3, 0.9)
-        p.rrect((30, 237, 110, 241), 1, fill=(215, 235, 255))
+        p.rrect((30, 237, 110, 241), 1, fill=(50, 52, 56))
         p.rrect((54, 255, 62, 267), 1, outline=PRINT, width=1)
         # The hot cue ladder.
         for x in (26, 115):
@@ -594,6 +595,11 @@ class Art:
                        rd, 1.0)
             p.circle(cx, cy, rd, fill=_mix(key.dot, (255, 255, 255), 0.25) if lit
                      else _dim(key.dot, 0.45))
+
+    def _k_frame(self, p, key, lit, down):
+        """A lit outline around a fixed opening, e.g. the USB port -- the
+        indicator is the opening's own frame, not a separate LED."""
+        self._led_outline(p, key.box, 5, key.color, lit, 2)
 
     def _led(self, p, cx, cy, rd, color, lit):
         """An LED dot in a key's centre."""

@@ -39,6 +39,8 @@
 #include "ui/surface.h"
 #include "ui/vgafont.h"
 #include "cdj_panelkeys.h"
+#include "cdj_ether.h"
+#include "cdj_ata.h"
 #include "c6x/c66x.h"
 #include "c6x/soc_c6655.h"
 #ifdef _WIN32
@@ -505,7 +507,8 @@ enum {
     CDJ_TMU1_TUNI0, CDJ_TMU1_TUNI1, CDJ_TMU1_TUNI2,
     CDJ_IRQ0, CDJ_IRQ1, CDJ_IRQ2, CDJ_IRQ3,
     CDJ_IRQ4, CDJ_IRQ5, CDJ_IRQ6, CDJ_IRQ7,
-    CDJ_USB0,
+    CDJ_USB0, CDJ_USB1,
+    CDJ_USBI,                    /* priority group: both share IPRF[7:4]       */
     CDJ_DMAC0A_DEI0, CDJ_DMAC0A_DEI1, CDJ_DMAC0A_DEI2, CDJ_DMAC0A_DEI3,
     CDJ_DMAC0A,                  /* priority group: all four share IPRE[15:12] */
     CDJ_DMAC1A_DEI0, CDJ_DMAC1A_DEI1, CDJ_DMAC1A_DEI2, CDJ_DMAC1A_DEI3,
@@ -593,13 +596,24 @@ void cdj_capture_write(FILE **fp, const char *suffix,
 void cdj_dsp_take(const uint8_t *in, unsigned words);
 void cdj_msiof(MemoryRegion *sysmem, const char *name, hwaddr addr,
                       bool dsp);
-void cdj_ata_init(MemoryRegion *sysmem);
 uint64_t cdj_dsp_i2c_tx_bytes(void);
 void cdj_iic(MemoryRegion *sysmem, const char *name, hwaddr addr,
                     unsigned ch, qemu_irq *irq);
 void cdj_pnl_init(MemoryRegion *sysmem, hwaddr addr);
 void cdj_usb_init(MemoryRegion *sysmem, qemu_irq irq);
-void cdj_ether_init(MemoryRegion *sysmem, qemu_irq irq);
+/* The rear USB port's bus side: what a token gets back besides a length. */
+#define CDJ_USBF_NAK   (-1)
+#define CDJ_USBF_STALL (-2)
+typedef struct CdjUsbfState CdjUsbfState;
+CdjUsbfState *cdj_usbf_init(MemoryRegion *sysmem, qemu_irq irq);
+bool cdj_usbf_attached(CdjUsbfState *s);
+void cdj_usbf_vbus(CdjUsbfState *s, bool on);
+void cdj_usbf_bus_reset(CdjUsbfState *s);
+int cdj_usbf_setup(CdjUsbfState *s, const uint8_t setup[8]);
+int cdj_usbf_in(CdjUsbfState *s, unsigned ep, uint8_t *buf, unsigned max);
+int cdj_usbf_out(CdjUsbfState *s, unsigned ep, const uint8_t *buf,
+                 unsigned len);
+void cdj_usbf_host_init(CdjUsbfState *dev);
 void cdj_hpb_probe_init(MemoryRegion *sysmem);
 extern struct intc_desc cdj_intc;
 void cdj_intc_init(MemoryRegion *sysmem, SuperHCPU *cpu);

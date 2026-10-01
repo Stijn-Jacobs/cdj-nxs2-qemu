@@ -23,8 +23,8 @@ ROLES = {"beat": ["fx1", "fx2", "fx3", "tap"], "play": "play", "cue": "cue",
          "slip": "slip", "master_tempo": "mt", "ring": "ring"}
 
 
-def panel(b0=0, b1=0, b2=0):
-    return bytes([b0, b1, b2]) + bytes(37)
+def panel(b0=0, b1=0, b2=0, b3=0, b4=0, b5=0):
+    return bytes([b0, b1, b2, b3, b4, b5]) + bytes(34)
 
 
 def lit(surface, *names):
@@ -95,6 +95,37 @@ def test_panel_bits_drive_their_lamps(deck, frame, on):
     assert lit(surface, *names) == {n: n in on for n in names}
 
 
+# -- the source lamps: SD/LINK/DISC/PC each measured to their own bit -------
+# USB has no LAMPS entry: its real signal has not been measured, so it is not
+# wired (not even as "none of the other four" -- that was an inference).
+
+@pytest.mark.parametrize("frame, on", [
+    (panel(), set()),
+    (panel(b3=0x02), {"source_sd"}),
+    (panel(b3=0x20), {"source_link"}),
+    (panel(b3=0x80), {"source_pc"}),
+    (panel(b4=0x80), {"source_disc"}),
+])
+def test_source_lamps_read_their_own_bit(frame, on):
+    names = ["source_sd", "source_link", "source_pc", "source_disc"]
+    assert {n for n in names if leds.lamp_lit(frame, n)} == on
+
+
+def test_usb_has_no_lamps_entry():
+    assert "source_usb" not in leds.LAMPS
+    assert "source_usb" not in leds.ROLE_NAMES
+
+
+def test_tempo_reset_lamp():
+    assert leds.lamp_lit(panel(), "tempo_reset") is False
+    assert leds.lamp_lit(panel(b2=0x10), "tempo_reset") is True
+
+
+@pytest.mark.parametrize("b5, on", [(0x55, False), (0xd5, True), (0x75, True)])
+def test_usb_indicator_lamp(b5, on):
+    assert leds.lamp_lit(panel(b5=b5), "usb_indicator") is on
+
+
 def test_no_panel_frame_yet_keeps_lamps_dark(deck):
     d, surface = deck
     d.update("frm", {"beat": 1})
@@ -155,4 +186,6 @@ def test_leds_routes_state_by_tag_and_lights_bound_pads():
 
 def test_state_watch_lamp_word():
     word = state_watch.lamp_word(panel(0x01, 0x04))
-    assert word == "play=# cue=. slip=. master_tempo=# ring=."
+    assert word == ("play=# cue=. slip=. master_tempo=# ring=. "
+                    "source_sd=. source_link=. source_pc=. source_disc=. "
+                    "tempo_reset=. usb_indicator=.")

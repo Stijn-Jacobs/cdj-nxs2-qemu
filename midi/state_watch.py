@@ -19,8 +19,8 @@ import leds  # noqa: E402
 
 
 def lamp_word(frame):
-    return " ".join(f"{name}={'#' if frame[b] & m else '.'}"
-                    for name, (b, m) in leds.LAMPS.items())
+    return " ".join(f"{name}={'#' if leds.lamp_lit(frame, name) else '.'}"
+                    for name in leds.ROLE_NAMES)
 
 
 def main():

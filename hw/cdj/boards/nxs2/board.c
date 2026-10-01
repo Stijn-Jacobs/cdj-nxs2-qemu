@@ -130,7 +130,7 @@ static void cdj2000nxs2_init(MachineState *machine)
     cdj_unimp("sh7724.intc-b", 0xA4140000, 0x1000);
     cdj_unimp("sh7724.intc-c", 0xA4090000, 0x1000);
     cdj_unimp("sh7724.cmt",    0xA44A0000, 0x1000);  /* compare-match timer */
-    cdj_unimp("sh7724.misc-d9", 0xA4D90000, 0x1000); /* referenced by firmware */
+    cdj_unimp("sh7724.usb1",   0xA4D90000, 0x1000);  /* see cdj_usbf_init() */
     cdj_unimp("sh7724.misc-ce", 0xA4CE0000, 0x1000); /* referenced by firmware */
 
     cdj_pfc_init(sysmem);                            /* PFC + LED decoding */
@@ -140,7 +140,7 @@ static void cdj2000nxs2_init(MachineState *machine)
     cdj_c6x_init();
     cdj_msiof(sysmem, "sh7724.msiof0", 0xA4C40000, cdj_dsp.present);
     cdj_msiof(sysmem, "sh7724.msiof1", 0xA4C50000, false);
-    cdj_ata_init(sysmem);
+    cdj_ata_init(sysmem, "sh7724.atapi", A7ADDR(0xA4DA2100));
     {
         /* AL/TACK/WAIT/DTE per channel, in the order cdj_iic expects. Counted
          * so the exit summary shows a line rising without its ISR running.
@@ -210,14 +210,18 @@ static void cdj2000nxs2_init(MachineState *machine)
 
     /* HPB window: physical area 1 (0x04000000-0x07FFFFFF) is the on-chip
      * peripheral bus. EtherMAC is modelled; the rest of 0x04C00000 is logged. */
-    cdj_ether_init(sysmem, cdj_count_irq(cdj_intc.irqs[CDJ_ETHI],
-                                        "EtherMAC ETHI"));
+    cdj_ether_init(sysmem, "sh7724.ether", 0x04600000,
+                  cdj_count_irq(cdj_intc.irqs[CDJ_ETHI], "EtherMAC ETHI"), 0);
     cdj_unimp("sh7724.hpb",   0x04C00000, 0x100000);
     cdj_hpb_probe_init(sysmem);   /* logging/ready-probe for the 0x04CE0000 chip */
     if (!getenv("CDJ_USB_STUB")) {
         /* USI0 is wired so an attach can be signalled; the driver waits on
          * BCHG. */
         cdj_usb_init(sysmem, cdj_intc.irqs[CDJ_USB0]);
+    }
+    /* The rear USB port is modelled only with a host plugged into it. */
+    if (getenv("CDJ_USBF_HOST")) {
+        cdj_usbf_host_init(cdj_usbf_init(sysmem, cdj_intc.irqs[CDJ_USB1]));
     }
     /* Ranges the peer path reaches that nothing else claims -- see cdj_probe. */
     cdj_probe(sysmem, "probe.area0", 0x00800000, 0x03800000);

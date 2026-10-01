@@ -27,6 +27,13 @@ static void take_interrupt(c66x_core *c, int n, uint32_t ret)
     c->idle = 0;
     c->st.interrupts++;
     if (c->isr_depth++ == 0) {
+        /* The handler's stores take the fast paths; the read set's pages
+         * catch the ones idle_isr_store would look at. A read set that is
+         * full or spans too many pages keeps them on the slow path. */
+        if (c->idle_armed && c->idle_isr_fast && !c->idle_rs_full && !c->idle_rs_pgover) {
+            c->idle_armed = 0;
+            c->idle_isr_disarmed = 1;
+        }
         c->idle_resume_pc = ret;
         c->idle_irq_captured = 0;
         c->idle_ret_pending = 0;
@@ -54,6 +61,10 @@ void idle_isr_return(c66x_core *c, uint32_t target)
 {
     if (!c->isr_depth || --c->isr_depth)
         return;
+    if (c->idle_isr_disarmed) {
+        c->idle_isr_disarmed = 0;
+        c->idle_armed = 1;
+    }
     if (c->idle_fp && !c->idle_isr_hit && c->idle_irq_captured && target == c->idle_resume_pc)
         c->idle_ret_pending = 1;
     else

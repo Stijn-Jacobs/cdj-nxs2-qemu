@@ -141,6 +141,7 @@ int idle_check(c66x_core *c);
 
 /* c66x_mem.c */
 void invalidate_code(c66x_core *c, uint32_t a, uint32_t n);
+void page_stored(c66x_core *c, uint8_t cp, uint32_t a, uint32_t n);
 void idle_rs_clear(c66x_core *c);
 uint32_t mem_read(c66x_core *c, uint32_t a, unsigned n);
 void mem_write(c66x_core *c, uint32_t a, uint32_t v, unsigned n, int in_isr, uint32_t pc);

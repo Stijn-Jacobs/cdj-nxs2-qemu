@@ -27,6 +27,23 @@ The NXS2's own lamps:
                      playing, blinking at twice PLAY's rate once paused -- the
                      NXS2's "paused off the cue point". Named by behaviour: it
                      has not yet been seen go steady on the cue point.
+  pnl byte 3 bit 0x02, byte 3 bit 0x20, byte 3 bit 0x80, byte 4 bit 0x80
+                     SD, LINK, rekordbox (PC) and DISC source lamps. Each is
+                     steady on while its source is selected and clears when
+                     another source key is pressed. USB's own signal is not
+                     yet measured -- it is not simply "none of the other
+                     four" (that was tried and retracted; see the audit doc).
+  pnl byte 2 bit 0x10
+                     TEMPO RESET indicator, slot/setter not yet traced.
+                     Toggles on press.
+  pnl byte 5 bits 0x80 | 0x20
+                     USB port indicator (separate from the USB source-select
+                     key): steady on while the medium is mounted, dark at
+                     rest. Confirmed against the real unit's own behaviour
+                     (steady while mounted, flashes only while ejecting --
+                     not measured here, no key presses it): sampled every
+                     ~20 ms this bit makes one transition, then holds
+                     rock-steady, matching "steady", not "flashes".
 
 The frame builder is FUN_0844F808 (most of it was undefined in Ghidra); MAIN
 toggles the bit itself to blink, so mirroring the bit reproduces the NXS2's
@@ -41,6 +58,14 @@ The scheme, per deck (roles bound to controls in the mapping's "leds"):
          mirrors the NXS2's MASTER TEMPO lamp (pnl byte 1 bit 2), on KEY LOCK.
   ring   mirrors the NXS2's jog ring light (pnl byte 2, two 2-bit levels), on
          the headphone CUE buttons: lit at any level, so SLIP's flash shows.
+  source_sd, source_disc, source_link, source_pc
+         mirror the NXS2's SD/DISC/LINK/rekordbox source-select lamps. USB's
+         is not wired here yet -- its signal has not been measured.
+  tempo_reset
+         mirrors the NXS2's TEMPO RESET indicator, on TEMPO RESET.
+  usb_indicator
+         mirrors the NXS2's USB port indicator (steady while a medium is
+         mounted). Not on the DJ-202.
   beat   four LEDs (FX 1, FX 2, FX 3, TAP) show the firmware's beat in the
          bar, exactly as the screen's beat box does (held while paused). In
          the LAST BAR of a phrase (the deck's own Bars countdown <= 4) they
@@ -69,8 +94,28 @@ LAMPS = {
     "slip": (0x00, 0x80),           # on at the 1st SLIP press, off at the 2nd
     "master_tempo": (0x01, 0x04),   # on at the 1st MT press, off at the 2nd
     "ring": (0x02, 0x0F),
+    "source_sd": (0x03, 0x02),      # dev_sd
+    "source_link": (0x03, 0x20),    # dev_link
+    "source_pc": (0x03, 0x80),      # dev_rekordbox
+    "source_disc": (0x04, 0x80),    # dev_disc
+    "tempo_reset": (0x02, 0x10),
+    "usb_indicator": (0x05, 0xA0),
 }
+# source_usb has no LAMPS entry: pressing dev_usb never set a bit anywhere in
+# byte 3/4 (unlike dev_sd/dev_disc/dev_link, each its own bit there), and "USB
+# is lit whenever none of the other three are" was tried and retracted -- it
+# is an inference, not a measured signal, and this project wires only what
+# the firmware is measured to send. usb_indicator above is a different lamp
+# (the port indicator next to the slot, not the source-select key) and does
+# have a measured bit.
+ROLE_NAMES = tuple(LAMPS)
 STALE_S = 3.0           # no state for this long: the deck is gone, go dark
+
+
+def lamp_lit(frame, name):
+    """True while the 40-byte pnl `frame` lights the named lamp."""
+    byte, mask = LAMPS[name]
+    return bool(frame[byte] & mask)
 
 
 def parse_state(payload):
@@ -163,8 +208,7 @@ class DeckLeds:
             self.pnl = value
 
     def lamp(self, name):
-        byte, mask = LAMPS[name]
-        return self.pnl is not None and bool(self.pnl[byte] & mask)
+        return self.pnl is not None and lamp_lit(self.pnl, name)
 
     def _print_panel_diff(self, new):
         changes = [f"[{i:02x}] {a:02x}->{b:02x}"
@@ -186,7 +230,7 @@ class DeckLeds:
         for i, name in enumerate(beat_leds, start=1):
             self.surface.set(name, in_bar and (i <= beat if fill else i == beat))
 
-        for role in LAMPS:
+        for role in ROLE_NAMES:
             if role in self.roles:
                 self.surface.set(self.roles[role], live and self.lamp(role))
         for name in self.pads:
