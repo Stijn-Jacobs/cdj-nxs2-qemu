@@ -2,9 +2,11 @@
 extract/
 notes/
 qemu-src/
-# ./setup.sh output: your saved setup, build logs, a private Python venv.
+# ./setup.sh output: your saved setup, build logs, a private Python venv,
+# the tools it downloads (baken).
 cdj.conf
 logs/
 .venv/
+tools/
 __pycache__/
 *.pyc
