@@ -1,17 +1,18 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
-#include "cdj.h"
+#include "cdj_common.h"
 #include "cdj_getenv.h"
 #include "usb_r8a66597.h"
+#include "qemu/timer.h"
+#include "hw/usb.h"
 /*
- * SH7724 USB 2.0 module at 0xA4D80000 (physical 0x04D80000), a Renesas
- * R8A66597-family controller used in host mode. QEMU has no model for it, so
+ * Renesas R8A66597-family USB host controller, in the SH7724 (0xA4D80000) and
+ * the SH7763 (0xFE400000). QEMU has no model for it, so
  * this is a small single-port HCD that connects the firmware to a QEMU USB
  * device (normally usb-storage for the media stick).
  *
  *   CDJ_USB_DEBUG=1      log every register access and transfer
  *   CDJ_USB_ATTACH=1     report the port occupied even with no device
  *   CDJ_USB_ATTACH_MS=n  delay before the attach interrupt (default 500)
- *   CDJ_USB_STUB=1       map an unimplemented device instead (board.c)
  */
 /* INTENB1/INTSTS1 bit 14: bus change -- the device-attached notification. */
 #define CDJ_USB_BCHG     0x4000
@@ -61,6 +62,11 @@ struct CdjUsbState {
     uint16_t pipebuf[CDJ_USB_NR_PIPES];
     uint16_t pipemaxp[CDJ_USB_NR_PIPES];
     uint16_t pipeperi[CDJ_USB_NR_PIPES];
+
+    /* Control IN data stage: bytes still to fetch, and whether the driver
+     * takes it one packet at a time (cdj_usb_dcp_fetch()). */
+    unsigned dcp_left;
+    bool dcp_per_packet;
 
     uint16_t reg[CDJ_USB_SIZE / 2];
 };
@@ -232,6 +238,7 @@ static void cdj_usb_setup(CdjUsbState *s)
 
     s->reg[CDJ_USB_DCPCTR / 2] &= ~CDJ_USB_SUREQ;
     s->buf[0].len = s->buf[0].pos = 0;
+    s->dcp_left = 0;
 
     if (cdj_usb_ep0(s, USB_TOKEN_SETUP, setup, sizeof(setup)) < 0) {
         /* SIGN: the setup transaction was not acknowledged (no device). */
@@ -241,19 +248,53 @@ static void cdj_usb_setup(CdjUsbState *s)
     }
 }
 
+/* The control IN data stage into the DCP buffer, with BRDY: the whole request
+ * at once, or with dcp_per_packet one packet, the next arriving when the driver
+ * has drained it. A short packet or the requested length ends the stage, so a
+ * multiple of the packet size shorter than the request ends on a zero-length
+ * packet. */
+static void cdj_usb_dcp_fetch(CdjUsbState *s)
+{
+    unsigned maxp = s->reg[CDJ_USB_DCPMAXP / 2] & 0x7f;
+    unsigned want, got = 0;
+    bool ended = false;
+
+    if (!maxp || maxp > sizeof(s->buf[0].data)) {
+        maxp = 64;
+    }
+    want = MIN(s->dcp_left, s->dcp_per_packet ? maxp : sizeof(s->buf[0].data));
+    /* Always send at least one token: a control transfer without a data stage
+     * (SET_ADDRESS, SET_CONFIGURATION) ends with a zero-length IN, and that is
+     * what makes the device act on it. */
+    do {
+        unsigned chunk = MIN(maxp, want - got);
+        int n = cdj_usb_ep0(s, USB_TOKEN_IN, s->buf[0].data + got, chunk);
+
+        if (n < 0) {
+            s->dcp_left = 0;
+            s->reg[CDJ_USB_NRDYSTS / 2] |= 1;
+            return;
+        }
+        got += n;
+        ended = (unsigned)n < chunk;
+    } while (!ended && got < want);
+
+    s->buf[0].len = got;
+    s->buf[0].pos = 0;
+    s->dcp_left = ended || !s->dcp_per_packet ? 0 : s->dcp_left - got;
+    if (cdj_usb_debug()) {
+        info_report("usb: control IN %u of %u bytes", got, want);
+    }
+    cdj_usb_raise_brdy(s);
+}
+
 /* PID = BUF on the DCP: run the data or status stage of the control transfer.
  * DCPCFG DIR gives the data stage direction; CCPL marks the status stage, a
  * zero-length packet in the opposite direction. */
 static void cdj_usb_dcp_run(CdjUsbState *s)
 {
     bool out = (s->reg[CDJ_USB_DCPCFG / 2] & CDJ_USB_DIR) != 0;
-    unsigned maxp = s->reg[CDJ_USB_DCPMAXP / 2] & 0x7f;
-    unsigned want;
     int n;
-
-    if (!maxp || maxp > sizeof(s->buf[0].data)) {
-        maxp = 64;
-    }
 
     if (s->reg[CDJ_USB_DCPCTR / 2] & CDJ_USB_CCPL) {
         /* Status stage: opposite direction, zero length. */
@@ -276,35 +317,8 @@ static void cdj_usb_dcp_run(CdjUsbState *s)
         return;
     }
 
-    /* Keep issuing IN tokens until the requested length is buffered or the
-     * device sends a short packet; the driver reads the whole descriptor at
-     * once. */
-    want = s->reg[CDJ_USB_USBLENG / 2];
-    if (want > sizeof(s->buf[0].data)) {
-        want = sizeof(s->buf[0].data);
-    }
-    s->buf[0].len = 0;
-    s->buf[0].pos = 0;
-    /* Always send at least one token: a control transfer without a data stage
-     * (SET_ADDRESS, SET_CONFIGURATION) ends with a zero-length IN, and that is
-     * what makes the device act on it. */
-    do {
-        unsigned chunk = MIN(maxp, want - s->buf[0].len);
-
-        n = cdj_usb_ep0(s, USB_TOKEN_IN, s->buf[0].data + s->buf[0].len, chunk);
-        if (n < 0) {
-            s->reg[CDJ_USB_NRDYSTS / 2] |= 1;
-            return;
-        }
-        s->buf[0].len += (unsigned)n;
-        if ((unsigned)n < chunk) {
-            break;                    /* short packet ends the data stage */
-        }
-    } while (s->buf[0].len < want);
-    if (cdj_usb_debug()) {
-        info_report("usb: control IN %u of %u bytes", s->buf[0].len, want);
-    }
-    cdj_usb_raise_brdy(s);
+    s->dcp_left = s->reg[CDJ_USB_USBLENG / 2];
+    cdj_usb_dcp_fetch(s);
 }
 
 /* Pull IN packets into a receiving pipe's buffer until it is full or the
@@ -527,6 +541,9 @@ static uint64_t cdj_usb_read(void *opaque, hwaddr off, unsigned size)
                 b = s->buf[pipe].data[s->buf[pipe].pos++];
             }
             v |= (uint64_t)b << (8 * i);
+        }
+        if (!pipe && s->dcp_left && s->buf[0].pos >= s->buf[0].len) {
+            cdj_usb_dcp_fetch(s);
         }
         if (cdj_usb_debug()) {
             info_report("usb: fifo%d pipe %u read %u bytes = 0x%08x "
@@ -780,7 +797,7 @@ static void cdj_usb_realize(DeviceState *dev, Error **errp)
     CdjUsbState *s = CDJ_USB(dev);
 
     memory_region_init_io(&s->iomem, OBJECT(dev), &cdj_usb_ops, s,
-                          "sh7724.usb", CDJ_USB_SIZE);
+                          "cdj.usb", CDJ_USB_SIZE);
     /* A DREQ-driven DMA reads the FIFO port from inside this region's own
      * write handler. The recursion is bounded (it only touches the pipe
      * buffer), but the default reentrancy guard would return zeros. See
@@ -805,7 +822,7 @@ static void cdj_usb_class_init(ObjectClass *klass, void *data)
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->realize = cdj_usb_realize;
-    dc->desc = "SH7724 USB 2.0 host module (R8A66597)";
+    dc->desc = "USB host module (R8A66597)";
 }
 
 static const TypeInfo cdj_usb_info = {
@@ -856,8 +873,9 @@ static void cdj_usb_dump(Notifier *n, void *unused)
     }
 }
 
-/* irq is the board INTC's USB0 (USI0) line. */
-void cdj_usb_init(MemoryRegion *sysmem, qemu_irq irq)
+/* irq is the board INTC's line for the host controller. */
+void cdj_usb_init(MemoryRegion *sysmem, hwaddr base, qemu_irq irq,
+                  bool dcp_per_packet)
 {
     DeviceState *dev = qdev_new(TYPE_CDJ_USB);
     SysBusDevice *sbd = SYS_BUS_DEVICE(dev);
@@ -866,8 +884,18 @@ void cdj_usb_init(MemoryRegion *sysmem, qemu_irq irq)
     sysbus_realize_and_unref(sbd, &error_fatal);
     s->exit.notify = cdj_usb_dump;
     qemu_add_exit_notifier(&s->exit);
+    s->dcp_per_packet = dcp_per_packet;
     sysbus_connect_irq(sbd, 0, irq);
-    memory_region_add_subregion_overlap(sysmem, CDJ_USB_BASE,
+    memory_region_add_subregion_overlap(sysmem, base,
                                         sysbus_mmio_get_region(sbd, 0), 1);
+    /* The DMAC addresses the FIFO through the A7 alias of a P4 base. */
+    if (A7ADDR(base) != base) {
+        MemoryRegion *alias = g_new(MemoryRegion, 1);
+
+        memory_region_init_alias(alias, OBJECT(dev), "cdj.usb-a7",
+                                 sysbus_mmio_get_region(sbd, 0), 0,
+                                 CDJ_USB_SIZE);
+        memory_region_add_subregion(sysmem, A7ADDR(base), alias);
+    }
 }
 

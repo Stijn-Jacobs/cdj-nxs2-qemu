@@ -15,11 +15,20 @@
  *
  * Frame (validator 0x0428CDF8): [0x00..0x15] payload, [0x16] checksum
  * (8-bit sum with end-around carry), [0x17] sync = 0x8F. Keys are active
- * high, so an all-zero payload means nothing pressed. Which payload byte is
- * which key is not mapped yet (the firmware's own key-name table is at
- * 0x040A1330), so this model answers a clean idle frame plus whatever the
- * key socket or CDJ_PANEL_PRESS asks for, by raw offset -- both handled
- * generically by cdj_pnl_link_init().
+ * high, so an all-zero payload means nothing pressed. The decoder at
+ * 0x0428E1D6 turns payload bits into one state bit per key ID of the
+ * firmware's key-name table (0x0405C44C); the ones that matter for browsing:
+ *
+ *   RotaryPush 0x11/0x01   DevLink 0x13/0x01  DevUSB 0x13/0x02
+ *   DevSD 0x13/0x04        DevDisc 0x13/0x08  Browse 0x14/0x01
+ *   Prepare 0x14/0x02      Information 0x14/0x04  MenuUtility 0x14/0x08
+ *   Return 0x14/0x10       AddPrepare 0x14/0x20 (0x10 and 0x20 swap on a
+ *                          deck whose model word at 0x04C06FA4+0x1674 is <= 9)
+ *   PlayPause 0x10/0x01    Cue 0x10/0x02      TrackRev 0x12/0x02
+ *
+ * This model answers a clean idle frame plus whatever the key socket or
+ * CDJ_PANEL_PRESS asks for, by raw offset -- both handled generically by
+ * cdj_pnl_link_init().
  */
 #define CDJ2000_PNL_FRAME 0x18
 #define CDJ2000_PNL_SYNC  0x8F

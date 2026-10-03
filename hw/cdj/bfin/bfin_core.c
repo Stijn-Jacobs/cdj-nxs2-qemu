@@ -35,19 +35,32 @@ bfin_core *bfin_new(const bfin_bus *bus)
     bfin_core *c = calloc(1, sizeof(*c));
 
     c->bus = *bus;
+    c->blocks = calloc(BLOCK_SLOTS, sizeof(*c->blocks));
+    c->code_lines = calloc(1, CODE_LINE(~0u) + 1);
     c->tzero = UINT64_MAX;
+    bfin_decode_init();
     return c;
 }
 
 void bfin_free(bfin_core *c)
 {
+    free(c->blocks);
+    free(c->code_lines);
     free(c);
 }
 
 void bfin_map_ram(bfin_core *c, uint32_t base, uint32_t size, uint8_t *host)
 {
     if (c->nram < BFIN_MAX_RAM) {
-        c->ram[c->nram++] = (bfin_ram){ base, size, host };
+        c->ram[c->nram++] = (bfin_ram){ base, size, host, 0 };
+    }
+}
+
+void bfin_map_rom(bfin_core *c, uint32_t base, uint32_t size,
+                  const uint8_t *host)
+{
+    if (c->nram < BFIN_MAX_RAM) {
+        c->ram[c->nram++] = (bfin_ram){ base, size, (uint8_t *)host, 1 };
     }
 }
 
@@ -61,6 +74,21 @@ void bfin_reset(bfin_core *c, uint32_t pc)
     c->tzero = UINT64_MAX;
     c->idle = 0;
     c->irq_check = 1;
+}
+
+const uint8_t *bfin_code_page(bfin_core *c, uint32_t addr)
+{
+    for (int n = 0; n < c->nram; n++) {
+        bfin_ram *r = &c->ram[n];
+
+        if (r->size >= 8 && addr - r->base <= r->size - 8) {
+            c->code_base = r->base;
+            c->code_span = r->size - 7;
+            c->code_host = r->host;
+            return r->host + (addr - r->base);
+        }
+    }
+    return NULL;
 }
 
 /* ---- registers ---------------------------------------------------------- */
@@ -225,6 +253,7 @@ static void take_event(bfin_core *c, int ev)
     }
     c->pc = c->evt[ev];
     c->idle = 0;
+    c->irq_check = 1;
 }
 
 void bfin_raise(bfin_core *c, int ev)
@@ -342,6 +371,7 @@ static void timer_start(bfin_core *c, uint32_t count)
     c->tzero = timer_running(c) && count ?
         c->cycles + (uint64_t)count * ((c->tscale & 0xFF) + 1) : UINT64_MAX;
     c->cmmr[(MMR_TCOUNT & 0x3FFF) / 4] = count;
+    c->irq_check = 1;                       /* ends the running block */
 }
 
 static void timer_expire(bfin_core *c)
@@ -454,16 +484,235 @@ static uint32_t loop_bottom(bfin_core *c, uint32_t pc, uint32_t npc)
     return npc;
 }
 
+/* JUMP.S 0 or JUMP.L 0, the form the ThreadX idle thread waits in. */
+static int self_jump(uint16_t iw0, uint16_t iw1)
+{
+    return iw0 == 0x2000 || (iw0 == 0xE200 && iw1 == 0);
+}
+
+static inline int same_bytes(const uint8_t *a, const uint8_t *b)
+{
+    uint64_t x = 0, p, q;
+
+    for (int n = 0; n < BLOCK_BYTES; n += 8) {
+        memcpy(&p, a + n, 8);
+        memcpy(&q, b + n, 8);
+        x |= p ^ q;
+    }
+    return x == 0;
+}
+
+/* Whether an active hardware loop ends on an instruction of b before its
+ * last one, where the chain would run past the loop's bottom. */
+static int loop_inside(const bfin_core *c, const bfin_block *b)
+{
+    return (c->lc[0] && c->lb[0] - b->pc < b->span) ||
+           (c->lc[1] && c->lb[1] - b->pc < b->span);
+}
+
+/* The block at c->pc when the run can go on into it without the checks
+ * between blocks in bfin_step: no stop flag is up, it was checked in this
+ * step and it ends below run_limit. */
+static inline const bfin_block *next_block(bfin_core *c)
+{
+    const bfin_block *b = &c->blocks[(c->pc >> 1) % BLOCK_SLOTS];
+
+    if (c->stop_flags || b->pc != c->pc || !b->n || b->gen != c->code_gen ||
+        c->cycles + b->n > c->run_limit || loop_inside(c, b) ||
+        c->pc == c->break_pc) {
+        return NULL;
+    }
+    return b;
+}
+
+static int loop_ends_at(const bfin_core *c, uint32_t pc)
+{
+    return (c->lc[0] && pc == c->lb[0]) || (c->lc[1] && pc == c->lb[1]);
+}
+
+/* The last entry of a chain: the instruction before it went on to the next
+ * one, which may be a hardware loop's top. */
+static int chain_end(bfin_core *c, const bfin_insn *i)
+{
+    uint32_t last = i[-1].pc, npc = i->pc;
+
+    BFIN_SYNC(c, i);
+    if (last == c->lb[0] || last == c->lb[1]) {
+        npc = loop_bottom(c, last, npc);
+    }
+    c->pc = npc;
+#ifdef BFIN_CHAINS
+    const bfin_block *b = next_block(c);
+
+    if (b) {
+        c->cycles_at = c->cycles;
+        BFIN_MUSTTAIL return b->op[0].fn(c, b->op);
+    }
+#endif
+    return 0;
+}
+
+/* The block of instructions starting at pc, decoded now if the slot holds
+ * something else, the code changed or a loop's bottom moved inside it; NULL
+ * when pc is not in RAM. */
+static bfin_block *block_at(bfin_core *c, uint32_t pc)
+{
+    const uint8_t *code = bfin_code(c, pc);
+    bfin_block *b;
+    unsigned off = 0, k = 0;
+
+    if (!code || pc - c->code_base >= c->code_span - (BLOCK_BYTES - 8)) {
+        return NULL;
+    }
+    b = &c->blocks[(pc >> 1) % BLOCK_SLOTS];
+    if (b->n && b->pc == pc) {
+        if (b->gen == c->code_gen) {
+            if (!loop_inside(c, b)) {
+                return b;
+            }
+        } else if (same_bytes(code, b->raw)) {
+            b->gen = c->code_gen;
+            if (!loop_inside(c, b)) {
+                return b;
+            }
+        }
+    }
+    c->code_lines[CODE_LINE(pc)] = 1;
+    c->code_lines[CODE_LINE(pc + BLOCK_BYTES - 1)] = 1;
+    b->gen = c->code_gen;
+    memcpy(b->raw, code, BLOCK_BYTES);
+    b->pc = pc;
+    b->n = 0;
+    while (off < BLOCK_BYTES && b->n < BLOCK_MAX) {
+        uint16_t iw0, iw1 = 0;
+        unsigned len;
+
+        memcpy(&iw0, code + off, 2);
+        len = bfin_insn_len(iw0);
+        if (off + len > BLOCK_BYTES || (off && pc + off == c->break_pc)) {
+            break;
+        }
+        if (len > 2) {
+            memcpy(&iw1, code + off + 2, 2);
+        }
+        off += len;
+        /* A NOP only takes its cycle, which the idx of the instruction after
+         * it counts, so it leaves the chain unless it ends the block. */
+        if (k && b->op[k - 1].iw0 == 0) {
+            k--;
+        }
+        b->op[k].idx = b->n++;
+        if (bfin_decode(c, &b->op[k++], pc + off - len, iw0, iw1) ||
+            loop_ends_at(c, pc + off - len)) {
+            break;
+        }
+    }
+    b->op[k].fn = chain_end;
+    b->op[k].pc = pc + off;
+    b->op[k].idx = b->n;
+    b->span = b->op[k - 1].pc - pc;
+    return b;
+}
+
+static void trap(bfin_core *c, uint32_t pc, uint16_t iw0, uint16_t iw1,
+                 unsigned len)
+{
+    c->trap_pc = pc;
+    c->trap_insn = (uint64_t)iw0 << 16 | iw1;
+    if (len == 8) {
+        c->trap_insn = c->trap_insn << 32 |
+            (uint32_t)bfin_fetch16(c, pc + 4) << 16 | bfin_fetch16(c, pc + 6);
+    }
+}
+
+/* Only an event leaves a jump to itself, and none can be taken before the
+ * core timer expires or the caller's budget ends: the peripherals that raise
+ * the others run between steps. Every pass is one cycle, so the passes are
+ * counted, not run. */
+static void skip_self_jump(bfin_core *c, uint64_t end)
+{
+    uint64_t until = end < c->tzero ? end : c->tzero;
+
+    if (until > c->cycles) {
+        c->cycles = until;
+    }
+}
+
+int bfin_end(bfin_core *c, const bfin_insn *i)
+{
+    uint32_t pc = i->pc, npc = c->npc;
+
+    if (c->undef) {
+        BFIN_SYNC(c, i);
+        c->pc = pc;
+        trap(c, pc, i->iw0, i->iw1, i->len);
+        return 1;
+    }
+    if (npc == pc + i->len && (pc == c->lb[0] || pc == c->lb[1])) {
+        npc = loop_bottom(c, pc, npc);
+    }
+    c->pc = npc;
+    c->cycles = c->cycles_at + i->idx + 1;
+    if (npc == pc && self_jump(i->iw0, i->iw1) && !c->trace &&
+        pc != c->break_pc) {
+        skip_self_jump(c, c->step_end);
+    }
+#ifdef BFIN_CHAINS
+    const bfin_block *b = next_block(c);
+
+    if (b) {
+        c->cycles_at = c->cycles;
+        BFIN_MUSTTAIL return b->op[0].fn(c, b->op);
+    }
+#endif
+    return 0;
+}
+
+/* Executes the instruction at pc on its own. Returns nonzero if it is not
+ * implemented, with the trap recorded. */
+static int run_insn(bfin_core *c, uint32_t pc)
+{
+    const uint8_t *code = bfin_code(c, pc);
+    bfin_insn one[2];
+    uint16_t iw0, iw1;
+    unsigned len;
+
+    if (code) {
+        memcpy(&iw0, code, 2);
+        memcpy(&iw1, code + 2, 2);
+    } else {
+        iw0 = bfin_load(c, pc, 2);
+        iw1 = bfin_load(c, pc + 2, 2);
+    }
+    len = bfin_insn_len(iw0);
+    if (len == 2) {
+        iw1 = 0;
+    }
+    if (c->trace && c->cycles >= c->trace_from && c->cycles < c->trace_to) {
+        trace_insn(c, pc, len);
+    }
+    bfin_decode(c, &one[0], pc, iw0, iw1);
+    one[0].idx = 0;
+    one[1].fn = chain_end;
+    one[1].pc = pc + len;
+    one[1].idx = 1;
+    c->cycles_at = c->cycles;
+    return one[0].fn(c, one);
+}
+
 bfin_stop bfin_step(bfin_core *c, uint64_t budget, uint64_t *executed)
 {
     uint64_t start = c->cycles, end = c->cycles + budget;
     bfin_stop stop = BFIN_STOP_BUDGET;
 
+    c->undef = 0;
+    c->code_gen++;
+    c->step_end = end;
     while (c->cycles < end) {
         if (c->cycles >= c->tzero) {
             timer_expire(c);
         }
-        if (c->irq_check || c->ivg_level) {
+        if (c->irq_check) {
             int ev = irq_ready(c);
 
             c->irq_check = 0;
@@ -482,29 +731,25 @@ bfin_stop bfin_step(bfin_core *c, uint64_t budget, uint64_t *executed)
             stop = BFIN_STOP_BREAK;
             break;
         }
-        uint16_t iw0 = bfin_fetch16(c, pc);
-        unsigned len = bfin_insn_len(iw0);
-        uint16_t iw1 = len > 2 ? bfin_fetch16(c, pc + 2) : 0;
+        bfin_block *blk = c->trace ? NULL : block_at(c, pc);
+        /* A block runs whole or not at all: inside it nothing tests the
+         * cycle limit, and an instruction that cannot stop the run does not
+         * look at the flags, so an event just taken (irq_check) gets the
+         * checks above again after one instruction. A change to tzero
+         * raises irq_check, which also stops blocks running on into each
+         * other below run_limit. */
+        c->run_limit = c->trace ? 0 : end < c->tzero ? end : c->tzero;
 
-        if (c->trace && c->cycles >= c->trace_from && c->cycles < c->trace_to) {
-            trace_insn(c, pc, len);
-        }
-        c->npc = pc + len;
-        c->undef = 0;
-        bfin_exec(c, iw0, iw1, len);
-        if (c->undef) {
-            c->trap_pc = pc;
-            c->trap_insn = (uint64_t)iw0 << 16 | iw1;
-            if (len == 8) {
-                c->trap_insn = c->trap_insn << 32 |
-                    (uint32_t)bfin_fetch16(c, pc + 4) << 16 |
-                    bfin_fetch16(c, pc + 6);
+        if (blk && c->cycles + blk->n <= c->run_limit && !c->irq_check) {
+            c->cycles_at = c->cycles;
+            if (blk->op[0].fn(c, blk->op)) {
+                stop = BFIN_STOP_UNDEF;
+                break;
             }
+        } else if (run_insn(c, pc)) {
             stop = BFIN_STOP_UNDEF;
             break;
         }
-        c->pc = c->npc == pc + len ? loop_bottom(c, pc, c->npc) : c->npc;
-        c->cycles++;
         if (c->yield) {
             c->yield = 0;
             break;
@@ -566,4 +811,5 @@ void bfin_set_trace(bfin_core *c, FILE *f, uint64_t from, uint64_t to)
 void bfin_set_break(bfin_core *c, uint32_t pc)
 {
     c->break_pc = pc;
+    memset(c->blocks, 0, BLOCK_SLOTS * sizeof(*c->blocks));
 }

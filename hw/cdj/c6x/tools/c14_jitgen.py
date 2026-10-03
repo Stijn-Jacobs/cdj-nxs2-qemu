@@ -42,7 +42,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CORE_DIR = os.path.dirname(HERE)
 
 OPK_CONST, OPK_REG, OPK_PAIR, OPK_MEM, OPK_CTRL, OPK_ADDR = 1, 2, 3, 4, 5, 6
+OPK_ILC = 10
 WK_REG, WK_CTRL = 0, 1
+CR_ILC = 0xd
 MAX_QUEUE = 7          # NBR - 1: never let a region reach the interpreter's overflow trap
 PRE_CYCLES = 17        # WQ_SLOTS + 1: writes scheduled before entry land within this many cycles
 MAX_KNOWN = 4          # registers with a compile-time value carried in the state
@@ -234,6 +236,8 @@ def native(ins):
         return ins.ops[0].kind in (OPK_REG, OPK_ADDR)
     if f == "callp":
         return ins.ops[1].kind == OPK_REG
+    if ins.name in ("bdec", "bpos"):
+        return ins.ops[0].kind in (OPK_CONST, OPK_ADDR) and ins.ops[1].kind == OPK_REG
     return False
 
 
@@ -587,6 +591,19 @@ class RegionGen:
             self.capture(ins, pk, flag, push)
             return
 
+        if ins.name in ("bdec", "bpos"):
+            # exec_insn's H_BDEC/H_BPOS: branch while the register is not
+            # negative; bdec also decrements it, under the same test
+            taken = self.t()
+            e("    uint8_t %s = %s(int32_t)%s >= 0;" % (taken, flag + " && " if flag else "", reg(1)))
+            flag = taken
+            queue.append({"rem": 6, "tconst": ops[0].val & 0xffffffff, "tvar": None, "flag": flag})
+            if ins.name == "bdec":
+                v = self.t()
+                e("    uint32_t %s = %s - 1u;" % (v, reg(1)))
+                push(ops[1].low_first - 1, WK_REG, ops[1].reg, v)
+            return
+
         if f in INT_OPS:
             a, b = val(0), (val(1) if len(ops) > 1 else "0")
             sa, sb = sval(0), (sval(1) if len(ops) > 1 else "0")
@@ -735,6 +752,23 @@ class RegionGen:
                 return "(uint64_t)%s" % u32(o.val)
             return None
 
+        def sv(i):
+            """exec_insn's sv(): the operand's value, signed by its size"""
+            o = ops[i]
+            if o.kind == OPK_CONST or o.size == 8:
+                return "(int64_t)%s" % v(i)
+            if o.size == 5:
+                return "jit_sext40(%s)" % v(i)
+            return "(int64_t)(int32_t)%s" % v(i)
+
+        def uv(i):
+            o = ops[i]
+            if o.size == 5:
+                return "(%s & 0xffffffffffull)" % v(i)
+            if o.size == 8:
+                return v(i)
+            return "(uint64_t)(uint32_t)%s" % v(i)
+
         def wlist(o):
             if o.kind == OPK_REG:
                 return [(o.low_first - 1, WK_REG, o.reg)]
@@ -743,6 +777,8 @@ class RegionGen:
             if o.kind == OPK_CTRL:
                 d = 3 if o.crlo in (0xd, 0xe) else 1 if o.crlo in (0x2, 0x3) else 0
                 return [(d, WK_CTRL, o.crlo)]
+            if o.kind == OPK_ILC:
+                return [(3, WK_CTRL, CR_ILC)]
             return None
 
         def values(o, x):
@@ -882,6 +918,87 @@ class RegionGen:
             else:
                 return False
             dst = ops[1]
+        elif hd in (H("H_ADD"), H("H_SUB")) and v(0) and v(1):
+            x = "(uint64_t)(%s %s %s)" % (sv(0), "+" if hd == H("H_ADD") else "-", sv(1))
+            dst = ops[last]
+        elif hd in (H("H_ADDU"), H("H_SUBU")) and v(0) and v(1):
+            x = "(%s %s %s)" % (uv(0), "+" if hd == H("H_ADDU") else "-", uv(1))
+            dst = ops[last]
+        elif hd in (H("H_AND"), H("H_ANDN"), H("H_OR"), H("H_XOR")) and v(0) and v(1):
+            # C66x pair forms apply a scst5 to both 32-bit halves
+            p = ("0x%08x%08xull" % ((ops[0].val & 0xffffffff,) * 2)
+                 if ops[0].kind == OPK_CONST and ops[2].size == 8 else v(0))
+            x = {H("H_AND"): "(%s & %s)", H("H_ANDN"): "(%s & ~%s)", H("H_OR"): "(%s | %s)",
+                 H("H_XOR"): "(%s ^ %s)"}[hd] % (p, v(1))
+            dst = ops[2]
+        elif hd == H("H_LMBD") and v(0) and v(1):
+            x = "(uint64_t)jit_lmbd((uint32_t)%s, (uint32_t)%s)" % (v(0), v(1))
+            dst = ops[2]
+        elif hd in (H("H_PACK2"), H("H_PACKH2"), H("H_PACKHL2"), H("H_PACKLH2"), H("H_PACKH4"), H("H_PACKL4")) \
+                and v(0) and v(1):
+            fn = {H("H_PACK2"): "pack2", H("H_PACKH2"): "packh2", H("H_PACKHL2"): "packhl2",
+                  H("H_PACKLH2"): "packlh2", H("H_PACKH4"): "packh4", H("H_PACKL4"): "packl4"}[hd]
+            x = "(uint64_t)jit_%s((uint32_t)%s, (uint32_t)%s)" % (fn, v(0), v(1))
+            dst = ops[2]
+        elif hd in (H("H_EXT"), H("H_EXTU"), H("H_SET"), H("H_CLR")) and v(0) \
+                and (ins.nops == 4 or (ins.nops == 3 and v(1))):
+            fields = ("%d, %d" % (ops[1].val & 31, ops[2].val & 31) if ins.nops == 4
+                      else "((uint32_t)%s >> 5) & 31, (uint32_t)%s & 31" % (v(1), v(1)))
+            op = {H("H_EXT"): 0, H("H_EXTU"): 1, H("H_SET"): 2, H("H_CLR"): 3}[hd]
+            x = "(uint64_t)jit_field((uint32_t)%s, %s, %d)" % (v(0), fields, op)
+            dst = ops[last]
+        elif hd == H("H_MPY32") and v(0) and v(1):
+            x = "jit_mpy32((uint32_t)%s, (uint32_t)%s, %d)" % (v(0), v(1), ins.sub)
+            dst = ops[2]
+        elif hd in (H("H_ADDDP"), H("H_SUBDP"), H("H_MPYDP"), H("H_MPYSPDP"), H("H_MPYSP2DP")) and v(0) and v(1):
+            op = {H("H_ADDDP"): "+", H("H_SUBDP"): "-"}.get(hd, "*")
+            kind = 1 if hd == H("H_MPYSPDP") else 2 if hd == H("H_MPYSP2DP") else 0
+            x = "jit_dpop(c, %d, %d, %s, %s, '%s', %d)" % (ins.unit, ins.side, v(0), v(1), op, kind)
+            dst = ops[2]
+        elif hd in (H("H_CMPEQDP"), H("H_CMPGTDP"), H("H_CMPLTDP")) and v(0) and v(1):
+            opch = "==" if hd == H("H_CMPEQDP") else ">" if hd == H("H_CMPGTDP") else "<"
+            x = "(uint64_t)(jit_u2d(%s) %s jit_u2d(%s))" % (v(0), opch, v(1))
+            dst = ops[2]
+        elif hd == H("H_ABSDP") and v(0):
+            x = "(%s & 0x7fffffffffffffffull)" % v(0)
+            dst = ops[1]
+        elif hd in (H("H_INTDP"), H("H_INTDPU")) and v(0):
+            x = "jit_d2u((double)(%s)%s)" % ("int32_t" if hd == H("H_INTDP") else "uint32_t", v(0))
+            dst = ops[1]
+        elif hd == H("H_DPINT") and v(0):
+            x = "(uint64_t)(uint32_t)jit_f_to_i32(jit_u2d(%s), jit_rmode(c, %d, %d))" % (v(0), ins.unit, ins.side)
+            dst = ops[1]
+        elif hd in (H("H_SPTRUNC"), H("H_DPTRUNC")) and v(0):
+            src = "jit_u2f((uint32_t)%s)" % v(0) if hd == H("H_SPTRUNC") else "jit_u2d(%s)" % v(0)
+            x = "(uint64_t)(uint32_t)jit_f_to_i32(%s, 1)" % src
+            dst = ops[1]
+        elif hd == H("H_RCPSP") and v(0):
+            x = "(uint64_t)jit_f2u(1.0f / jit_u2f((uint32_t)%s))" % v(0)
+            dst = ops[1]
+        elif hd == H("H_RCPDP") and v(0):
+            x = "jit_d2u(1.0 / jit_u2d(%s))" % v(0)
+            dst = ops[1]
+        elif hd == H("H_RSQRSP") and v(0):
+            x = "(uint64_t)jit_f2u(1.0f / sqrtf(jit_u2f((uint32_t)%s)))" % v(0)
+            dst = ops[1]
+        elif hd == H("H_RSQRDP") and v(0):
+            x = "jit_d2u(1.0 / sqrt(jit_u2d(%s)))" % v(0)
+            dst = ops[1]
+        elif hd == H("H_QMPYSP") and ops[0].kind == OPK_PAIR and ops[1].kind == OPK_PAIR:
+            # four writes to a register quad, as for H_CMPYSP
+            q = ops[2]
+            quad = [(q.low_first - 1, WK_REG, q.reg + k) for k in range(4)]
+            if [tuple(w) for w in ws] != quad or stop != 0:
+                return False
+            r = self.t()
+            a, b = ops[0].reg, ops[1].reg
+            e("    uint32_t %s[4];" % r)
+            e("    jit_qmpysp(c, %d, %d, &c->reg[%d], &c->reg[%d], %s);" % (ins.unit, ins.side, a, b, r))
+            for k, (d, kind, idx) in enumerate(quad):
+                t = self.t()
+                e("    uint32_t %s = %s[%d];" % (t, r, k))
+                push(d, kind, idx, t)
+            return True
         else:
             return False
 
@@ -2016,6 +2133,78 @@ static inline uint64_t jit_dintsp(c66x_core *c, int unit, int side, uint64_t v, 
     float o = is_signed ? (float)(int32_t)w_o : (float)w_o;
     if (rm) fesetround(FE_TONEAREST);
     return ((uint64_t)jit_f2u(o) << 32) | jit_f2u(e);
+}
+
+static inline int64_t jit_sext40(uint64_t v) { return (int64_t)(v << 24) >> 24; }
+
+/* exec_insn's H_LMBD: the leftmost bit equal to src1's bit 0 */
+static inline uint32_t jit_lmbd(uint32_t bit, uint32_t s)
+{
+    if (!(bit & 1))
+        s = ~s;
+    return s ? (uint32_t)__builtin_clz(s) : 32;
+}
+
+static inline uint32_t jit_pack2(uint32_t a, uint32_t b) { return ((a & 0xffff) << 16) | (b & 0xffff); }
+static inline uint32_t jit_packh2(uint32_t a, uint32_t b) { return ((a >> 16) << 16) | (b >> 16); }
+static inline uint32_t jit_packhl2(uint32_t a, uint32_t b) { return ((a >> 16) << 16) | (b & 0xffff); }
+static inline uint32_t jit_packlh2(uint32_t a, uint32_t b) { return ((a & 0xffff) << 16) | (b >> 16); }
+static inline uint32_t jit_packh4(uint32_t a, uint32_t b)
+{
+    return ((a >> 24) << 24) | (((a >> 8) & 0xff) << 16) | ((b >> 24) << 8) | ((b >> 8) & 0xff);
+}
+static inline uint32_t jit_packl4(uint32_t a, uint32_t b)
+{
+    return (((a >> 16) & 0xff) << 24) | ((a & 0xff) << 16) | (((b >> 16) & 0xff) << 8) | (b & 0xff);
+}
+
+/* exec_insn's H_EXT/H_EXTU/H_SET/H_CLR (op 0-3) */
+static inline uint32_t jit_field(uint32_t s, unsigned csta, unsigned cstb, int op)
+{
+    if (op >= 2) {
+        if (cstb < csta)
+            return s;
+        unsigned w = cstb - csta + 1;
+        uint32_t m = (w >= 32 ? 0xffffffffu : ((1u << w) - 1)) << csta;
+        return op == 3 ? s & ~m : s | m;
+    }
+    uint32_t t = s << csta;
+    return op == 0 ? (uint32_t)((int32_t)t >> cstb) : t >> cstb;
+}
+
+/* exec_insn's H_MPY32 by its sub: 0 signed, 1 unsigned, 2 signed x unsigned, 3 unsigned x signed */
+static inline uint64_t jit_mpy32(uint32_t a, uint32_t b, int sub)
+{
+    int64_t s1 = (int32_t)a, s2 = (int32_t)b;
+    uint64_t u1 = a, u2 = b;
+    if (sub == 1) return u1 * u2;
+    if (sub == 2) return (uint64_t)(s1 * (int64_t)u2);
+    if (sub == 3) return (uint64_t)((int64_t)u1 * s2);
+    return (uint64_t)(s1 * s2);
+}
+
+/* exec_insn's H_ADDDP/H_SUBDP/H_MPYDP (kind 0), H_MPYSPDP (1), H_MPYSP2DP (2) */
+static inline uint64_t jit_dpop(c66x_core *c, int unit, int side, uint64_t a, uint64_t b, char op, int kind)
+{
+    unsigned rm = jit_rmode(c, unit, side);
+    if (rm) fesetround(jit_fe_mode[rm]);
+    double p, q, res;
+    if (kind == 1) { p = jit_u2f((uint32_t)a); q = jit_u2d(b); }
+    else if (kind == 2) { p = jit_u2f((uint32_t)a); q = jit_u2f((uint32_t)b); }
+    else { p = jit_u2d(a); q = jit_u2d(b); }
+    res = op == '+' ? p + q : op == '-' ? p - q : p * q;
+    if (rm) fesetround(FE_TONEAREST);
+    return jit_d2u(res);
+}
+
+/* exec_insn's H_QMPYSP: four products, register by register */
+static inline void jit_qmpysp(c66x_core *c, int unit, int side, const uint32_t *a, const uint32_t *b, uint32_t *o)
+{
+    unsigned rm = jit_rmode(c, unit, side);
+    if (rm) fesetround(jit_fe_mode[rm]);
+    for (int k = 0; k < 4; k++)
+        o[k] = jit_f2u(jit_u2f(a[k]) * jit_u2f(b[k]));
+    if (rm) fesetround(FE_TONEAREST);
 }
 
 /* fop_run's F_LOAD inline RAM read */

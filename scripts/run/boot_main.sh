@@ -12,6 +12,7 @@
 #   LOGDIR      where <tag>.main.log goes (default /tmp)
 #   QEMU_D      the -d list (default unimp,guest_errors)
 #   ICOUNT      -icount value, for a run that repeats instruction for instruction
+#   MAIN_ARGS   extra qemu options, split on spaces (a USB stick, for one)
 #   FLASH       a NOR flash image (default none: the flash reads erased)
 #   MAIN_BOOT   flash: reset into the bootloader in FLASH instead of loading
 #               main_unpacked.bin (the default, kernel)
@@ -45,7 +46,7 @@ BOOT_ARGS=(-kernel "$IMAGE")
 MAINMON="/tmp/cdj-$TAG-main-mon.sock"
 rm -f "$MAINMON" 2>/dev/null
 "$MAIN_QEMU" -M "$MODEL_MAIN_MACHINE" "${BOOT_ARGS[@]}" \
-    -nographic -d "${QEMU_D:-unimp,guest_errors}" ${ICOUNT:+-icount "$ICOUNT"} \
+    -nographic -d "${QEMU_D:-unimp,guest_errors}" ${ICOUNT:+-icount "$ICOUNT"} ${MAIN_ARGS:-} \
     -monitor "$(python3 "$HERE/cdj_monsock.py" spec "$MAINMON")" \
     > "$MAINLOG" 2>&1 &
 MAIN_PID=$!

@@ -17,7 +17,7 @@ from test_main_wave3data import FirmwareSh4
 SIG_AT = 0x200                  # where the real signature starts (4-aligned)
 SPAN = SIG_AT + 6               # the hooked span, 2 mod 4 like the firmware's
 RESUME = SPAN + 10
-CAVE = (0x400, 0x2800)
+CAVE = (0x400, 0x2E00)
 FRAME = 0xF000
 MEMCPY = 0x085336DC
 SLOT, STOCK, PACKED, SHARED_LOW, HEADER = 0x4000, 0x6000, 0x8000, 0x3F00, 0x3F10

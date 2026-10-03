@@ -1,5 +1,5 @@
 diff --git a/target/sh4/translate.c b/target/sh4/translate.c
-index 53b0921..8897034 100644
+index 53b0921..766d57f 100644
 --- a/target/sh4/translate.c
 +++ b/target/sh4/translate.c
 @@ -46,6 +46,19 @@ typedef struct DisasContext {
@@ -792,7 +792,7 @@ index 53b0921..8897034 100644
      case 0x0073:
          /* MOVCO.L
           *     LDST -> T
-@@ -1794,12 +2402,66 @@ static void _decode_opc(DisasContext * ctx)
+@@ -1794,12 +2402,91 @@ static void _decode_opc(DisasContext * ctx)
      return;
  }
  
@@ -835,6 +835,31 @@ index 53b0921..8897034 100644
 +    }
 +}
 +
++/*
++ * The cpu loop looks at a pending interrupt once per request and refuses it
++ * inside a delay slot, so a request refused there is not looked at again
++ * until something exits to the loop, and a chain of TBs never does. Call
++ * this on the way out of a delay slot whose interrupt check was refused, or
++ * was made under the SR that RTE was about to restore: it leaves the exit
++ * flag set if a request is still pending, and the next TB start returns to
++ * the loop with the slot complete.
++ */
++static void gen_irq_recheck(void)
++{
++    TCGLabel *none = gen_new_label();
++    TCGv_i32 req = tcg_temp_new_i32();
++
++    tcg_gen_ld_i32(req, tcg_env,
++                   offsetof(ArchCPU, parent_obj.interrupt_request)
++                   - offsetof(ArchCPU, env));
++    tcg_gen_andi_i32(req, req, CPU_INTERRUPT_HARD);
++    tcg_gen_brcondi_i32(TCG_COND_EQ, req, 0, none);
++    tcg_gen_st16_i32(tcg_constant_i32(-1), tcg_env,
++                     offsetof(ArchCPU, parent_obj.neg.icount_decr.u16.high)
++                     - offsetof(ArchCPU, env));
++    gen_set_label(none);
++}
++
  static void decode_opc(DisasContext * ctx)
  {
      uint32_t old_flags = ctx->envflags;
@@ -859,7 +884,18 @@ index 53b0921..8897034 100644
      if (old_flags & TB_FLAG_DELAY_SLOT_MASK) {
          /* go out of the delay slot */
          ctx->envflags &= ~TB_FLAG_DELAY_SLOT_MASK;
-@@ -2210,6 +2872,13 @@ static void sh4_tr_init_disas_context(DisasContextBase *dcbase, CPUState *cs)
+@@ -1816,6 +2503,10 @@ static void decode_opc(DisasContext * ctx)
+         ctx->envflags &= ~TB_FLAG_GUSA_MASK;
+ 
+         tcg_gen_movi_i32(cpu_flags, ctx->envflags);
++        if ((old_flags & TB_FLAG_DELAY_SLOT_RTE) ||
++            (ctx->tbflags & TB_FLAG_DELAY_SLOT_MASK)) {
++            gen_irq_recheck();
++        }
+         if (old_flags & TB_FLAG_DELAY_SLOT_COND) {
+             gen_delayed_conditional_jump(ctx);
+         } else {
+@@ -2210,6 +2901,13 @@ static void sh4_tr_init_disas_context(DisasContextBase *dcbase, CPUState *cs)
      ctx->gbank = ((tbflags & (1 << SR_MD)) &&
                    (tbflags & (1 << SR_RB))) * 0x10;
      ctx->fbank = tbflags & FPSCR_FR ? 0x10 : 0;
@@ -873,7 +909,7 @@ index 53b0921..8897034 100644
  
  #ifdef CONFIG_USER_ONLY
      if (tbflags & TB_FLAG_GUSA_MASK) {
-@@ -2250,41 +2919,1046 @@ static void sh4_tr_insn_start(DisasContextBase *dcbase, CPUState *cs)
+@@ -2250,37 +2948,1042 @@ static void sh4_tr_insn_start(DisasContextBase *dcbase, CPUState *cs)
      tcg_gen_insn_start(ctx->base.pc_next, ctx->envflags);
  }
  
@@ -986,7 +1022,6 @@ index 53b0921..8897034 100644
 -    ctx->opcode = translator_lduw(env, &ctx->base, ctx->base.pc_next);
 -    decode_opc(ctx);
 -    ctx->base.pc_next += 2;
--}
 +            tcg_gen_extract_i32(b, v, bit, 1);
 +            if (op2 == 0xc) {
 +                tcg_gen_xori_i32(b, b, 1);
@@ -996,9 +1031,7 @@ index 53b0921..8897034 100644
 +        }
 +        case 0x5: {                             /* bor.b:  T |= bit */
 +            TCGv b = tcg_temp_new();
- 
--static void sh4_tr_tb_stop(DisasContextBase *dcbase, CPUState *cs)
--{
++
 +            tcg_gen_extract_i32(b, v, bit, 1);
 +            tcg_gen_or_i32(cpu_sr_t, cpu_sr_t, b);
 +            break;
@@ -1174,7 +1207,7 @@ index 53b0921..8897034 100644
 +            const char *start = e;
 +            uint32_t a = strtoul(e, (char **)&e, 0);
 +
-+            if (a >= 0x08000000) {
++            if (a >= 0x04000000) {
 +                taps[n++] = a;
 +            }
 +            if (e == start) {
@@ -1941,14 +1974,10 @@ index 53b0921..8897034 100644
 +    decode_opc(ctx);
 +    ctx->base.pc_next += 2;
 +    cdj_io_split_check(ctx, ctx->base.pc_next - 2);
-+}
-+
-+static void sh4_tr_tb_stop(DisasContextBase *dcbase, CPUState *cs)
-+{
-     DisasContext *ctx = container_of(dcbase, DisasContext, base);
+ }
  
-     if (ctx->tbflags & TB_FLAG_GUSA_EXCLUSIVE) {
-@@ -2295,8 +3969,32 @@ static void sh4_tr_tb_stop(DisasContextBase *dcbase, CPUState *cs)
+ static void sh4_tr_tb_stop(DisasContextBase *dcbase, CPUState *cs)
+@@ -2295,8 +3998,32 @@ static void sh4_tr_tb_stop(DisasContextBase *dcbase, CPUState *cs)
      switch (ctx->base.is_jmp) {
      case DISAS_STOP:
          gen_save_cpu_state(ctx, true);

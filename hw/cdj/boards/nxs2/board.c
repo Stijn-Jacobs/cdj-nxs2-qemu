@@ -1,5 +1,6 @@
 #include "cdj.h"
 #include "cdj_getenv.h"
+#include "usb_r8a66597.h"
 /*
  * Pioneer CDJ-2000NXS2 (Renesas SH7724) board.
  *
@@ -140,7 +141,7 @@ static void cdj2000nxs2_init(MachineState *machine)
     cdj_c6x_init();
     cdj_msiof(sysmem, "sh7724.msiof0", 0xA4C40000, cdj_dsp.present);
     cdj_msiof(sysmem, "sh7724.msiof1", 0xA4C50000, false);
-    cdj_ata_init(sysmem, "sh7724.atapi", A7ADDR(0xA4DA2100));
+    cdj_ata_init(sysmem, "sh7724.atapi", A7ADDR(0xA4DA2100), NULL);
     {
         /* AL/TACK/WAIT/DTE per channel, in the order cdj_iic expects. Counted
          * so the exit summary shows a line rising without its ISR running.
@@ -217,7 +218,7 @@ static void cdj2000nxs2_init(MachineState *machine)
     if (!getenv("CDJ_USB_STUB")) {
         /* USI0 is wired so an attach can be signalled; the driver waits on
          * BCHG. */
-        cdj_usb_init(sysmem, cdj_intc.irqs[CDJ_USB0]);
+        cdj_usb_init(sysmem, CDJ_USB_BASE, cdj_intc.irqs[CDJ_USB0], false);
     }
     /* The rear USB port is modelled only with a host plugged into it. */
     if (getenv("CDJ_USBF_HOST")) {

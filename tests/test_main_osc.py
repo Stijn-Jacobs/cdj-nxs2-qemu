@@ -16,7 +16,7 @@ WRAPPER = 0x085113EC
 PORT = 50010
 MASK = 0xFFE7FFFF
 STATUS_OFF, BEAT_OFF = 0x100, 0x300
-CAVE = (0x400, 0x2800)
+CAVE = (0x400, 0x2E00)
 SERIALISER = 0x2F00
 FRAME = 0xF000
 # MAIN's fixed addresses the routines read, moved into the interpreter's memory

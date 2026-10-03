@@ -30,11 +30,13 @@ static struct intc_vect s63_vectors[] = {
     INTC_VECT(S63_DMTE4, 0x780), INTC_VECT(S63_DMTE5, 0x7A0),
     INTC_VECT(S63_IIC0, 0x8A0), INTC_VECT(S63_IIC1, 0x8C0),
     INTC_VECT(S63_CMT, 0x900),
+    INTC_VECT(S63_DISP_RX_DMA, 0xA00), INTC_VECT(S63_DISP_RX_SER, 0xA20),
+    INTC_VECT(S63_DISP_TX_DMA, 0xAA0), INTC_VECT(S63_DISP_TX_SER, 0xAC0),
     INTC_VECT(S63_GETHER0, 0x920), INTC_VECT(S63_GETHER1, 0x940),
     INTC_VECT(S63_GETHER2, 0x960),
     INTC_VECT(S63_SCIF1_ERI, 0xB80), INTC_VECT(S63_SCIF1_RXI, 0xBA0),
     INTC_VECT(S63_SCIF1_BRI, 0xBC0), INTC_VECT(S63_SCIF1_TXI, 0xBE0),
-    INTC_VECT(S63_USBH, 0xC60), INTC_VECT(S63_USBF0, 0xC80),
+    INTC_VECT(S63_ATAPI, 0xC00), INTC_VECT(S63_USBH, 0xC60), INTC_VECT(S63_USBF0, 0xC80),
     INTC_VECT(S63_USBF1, 0xCA0),
     INTC_VECT(S63_MMCIF0, 0xD00), INTC_VECT(S63_MMCIF1, 0xD20),
     INTC_VECT(S63_MMCIF2, 0xD40), INTC_VECT(S63_MMCIF3, 0xD60),
@@ -67,16 +69,23 @@ static struct intc_group s63_groups[] = {
     INTC_GROUP(S63_USBF, S63_USBF0, S63_USBF1),
     INTC_GROUP(S63_MMCIF, S63_MMCIF0, S63_MMCIF1, S63_MMCIF2, S63_MMCIF3),
     INTC_GROUP(S63_GPIO, S63_GPIO0, S63_GPIO1, S63_GPIO2, S63_GPIO3),
+    INTC_GROUP(S63_DISP_TX, S63_DISP_TX_DMA, S63_DISP_TX_SER),
 };
 
 /* sh_intc's set register enables: the mask-clear register goes there, the
- * mask register as its clear register (see common/sh4_intc.c). */
+ * mask register as its clear register (see common/sh4_intc.c).
+ *
+ * The display link's driver (0x042A3C0E) unmasks INT2MSKCR bits 15 and 14
+ * together and bit 19 in its send routine; 15 is taken as the receive DMA
+ * and 14 as the receive serial engine, which nothing here tells apart. Its
+ * two transmit sources share one INT2PRI5 field, written from both arms, so
+ * they are one group behind bit 19. */
 static struct intc_mask_reg s63_mask_registers[] = {
     /* INT2MSKCR / INT2MSKR, bit 31 first */
     { 0xFFD4003C, 0xFFD40038, 32,
       { 0, 0, 0, 0, 0, 0, S63_GPIO, 0,
-        0, S63_MMCIF, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, S63_CMT, 0, 0, 0, S63_DMAC,
+        0, S63_MMCIF, 0, S63_ATAPI, S63_DISP_TX, 0, 0, 0,
+        S63_DISP_RX_DMA, S63_DISP_RX_SER, 0, S63_CMT, 0, 0, 0, S63_DMAC,
         0, 0, S63_WDT, S63_SCIF1, S63_SCIF0, S63_RTC, S63_TMU345, S63_TMU012 } },
     /* INT2MSKCR1 / INT2MSKR1 */
     { 0xFFD400D4, 0xFFD400D0, 32,
@@ -95,9 +104,9 @@ static struct intc_prio_reg s63_prio_registers[] = {
     { INT2PRI(1), 0, 32, 8, { S63_TMU3, S63_TMU4, S63_TMU5, S63_RTC } },
     { INT2PRI(2), 0, 32, 8, { S63_SCIF0, S63_SCIF1, S63_WDT } },
     { INT2PRI(3), 0, 32, 8, { 0, S63_DMAC } },
-    { INT2PRI(4), 0, 32, 8, { S63_CMT } },
-    { INT2PRI(5), 0, 32, 8, { 0 } },
-    { INT2PRI(6), 0, 32, 8, { 0, S63_USBF, S63_MMCIF } },
+    { INT2PRI(4), 0, 32, 8, { S63_CMT, 0, S63_DISP_RX_DMA, S63_DISP_RX_SER } },
+    { INT2PRI(5), 0, 32, 8, { 0, 0, 0, S63_DISP_TX } },
+    { INT2PRI(6), 0, 32, 8, { S63_ATAPI, S63_USBF, S63_MMCIF } },
     { INT2PRI(7), 0, 32, 8, { S63_SCIF2, S63_GPIO } },
     { INT2PRI8_(8), 0, 32, 8, { 0 } },
     { INT2PRI8_(9), 0, 32, 8, { 0, 0, S63_IIC1, S63_IIC0 } },
@@ -161,15 +170,107 @@ static void s63_mask_read_init(MemoryRegion *sysmem,
                                         &m->iomem, 1);
 }
 
+/*
+ * sh_intc counts a group member's enables once for its group, but a group
+ * named in both a mask and a priority register enables each member twice:
+ * once on the INT2MSKCR write, once on a non-zero priority. Such a member
+ * sat at 2 of 1 and was never forwarded -- the DMAC's DMTE1/2 after the
+ * first panel exchange, so the panel task never heard back.
+ */
+static unsigned s63_refs(const intc_enum *ids, unsigned n, intc_enum id)
+{
+    unsigned i, refs = 0;
+
+    for (i = 0; i < n; i++) {
+        refs += ids[i] == id;
+    }
+    return refs;
+}
+
+static void s63_count_group_enables(struct intc_desc *desc)
+{
+    unsigned i, k, refs;
+
+    for (i = 0; i < ARRAY_SIZE(s63_groups); i++) {
+        const struct intc_group *g = &s63_groups[i];
+
+        refs = 0;
+        for (k = 0; k < ARRAY_SIZE(s63_mask_registers); k++) {
+            refs += s63_refs(s63_mask_registers[k].enum_ids,
+                             ARRAY_SIZE(s63_mask_registers[k].enum_ids),
+                             g->enum_id);
+        }
+        for (k = 0; k < ARRAY_SIZE(s63_prio_registers); k++) {
+            refs += s63_refs(s63_prio_registers[k].enum_ids,
+                             ARRAY_SIZE(s63_prio_registers[k].enum_ids),
+                             g->enum_id);
+        }
+        for (k = 0; refs > 1 && k < ARRAY_SIZE(g->enum_ids); k++) {
+            if (g->enum_ids[k]) {
+                desc->sources[g->enum_ids[k]].enable_max += refs - 1;
+            }
+        }
+    }
+}
+
+/*
+ * INT2B registers: which source of a module is requesting, one bit each.
+ * INT2B3 (0xFFD4004C) is the DMAC, bit n for DMTEn; the panel's DMA-end
+ * handler (0x04246F88) reads it to pick the channel to acknowledge, and
+ * reading 0 it acknowledged nothing and DMTE2 re-entered it for good.
+ * INT2B4 (0xFFD40050) is the display link, bit n for its interrupt 0x50 + n;
+ * all four of its handlers read it first (they test 0x01, 0x02, 0x20, 0x40).
+ */
+typedef struct S63Int2b {
+    hwaddr addr;
+    intc_enum src[8];
+} S63Int2b;
+
+static const S63Int2b s63_int2b[] = {
+    { 0xFFD4004C, { S63_DMTE0, S63_DMTE1, S63_DMTE2, S63_DMTE3 } },
+    { 0xFFD40050, { S63_DISP_RX_DMA, S63_DISP_RX_SER, 0, 0, 0,
+                    S63_DISP_TX_DMA, S63_DISP_TX_SER } },
+};
+
+static uint64_t s63_int2b_read(void *opaque, hwaddr off, unsigned size)
+{
+    const S63Int2b *b = opaque;
+    uint32_t val = 0;
+    unsigned i;
+
+    for (i = 0; i < ARRAY_SIZE(b->src); i++) {
+        if (b->src[i] && cdj_sh7763_intc.sources[b->src[i]].asserted) {
+            val |= 1u << i;
+        }
+    }
+    return val;
+}
+
+static const MemoryRegionOps s63_int2b_ops = {
+    .read = s63_int2b_read,
+    .endianness = DEVICE_NATIVE_ENDIAN,
+    .valid = { .min_access_size = 4, .max_access_size = 4 },
+};
+
 void cdj_sh7763_intc_init(MemoryRegion *sysmem, SuperHCPU *cpu)
 {
+    static MemoryRegion int2b[ARRAY_SIZE(s63_int2b)];
+    unsigned i;
+
     cdj_intc_setup(sysmem, cpu, &cdj_sh7763_intc, S63_NR_SOURCES,
                    _INTC_ARRAY(s63_mask_registers),
                    _INTC_ARRAY(s63_prio_registers),
                    _INTC_ARRAY(s63_vectors),
                    _INTC_ARRAY(s63_groups));
+    s63_count_group_enables(&cdj_sh7763_intc);
     s63_mask_read_init(sysmem, &s63_mask_registers[0]);
     s63_mask_read_init(sysmem, &s63_mask_registers[1]);
+    for (i = 0; i < ARRAY_SIZE(s63_int2b); i++) {
+        memory_region_init_io(&int2b[i], NULL, &s63_int2b_ops,
+                              (void *)&s63_int2b[i], "sh7763.int2b", 4);
+        memory_region_add_subregion_overlap(sysmem, P4ADDR(s63_int2b[i].addr),
+                                            &int2b[i], 1);
+    }
 }
 
 /* The sources behind the IRQ counts at exit; the kernel tick (TMU3-5,

@@ -375,6 +375,7 @@ listed in `mods/mods.conf`:
 | [`osc`](mods/osc.md) | Send the deck's beats, state and load/play/stop/cue/loop events as OSC messages on UDP broadcast port 50010, for lighting desks and scripts. | off |
 | [`usb_midi`](mods/usb_midi.md) | Send MIDI Start, Stop, Continue and Timing Clock over the rear USB-B port, so a DAW or drum machine follows the deck. | off |
 | [`ableton_link`](mods/ableton_link.md) | Join Ableton Link as a peer: Live or any Link app on the deck's network follows its tempo and beat. | off |
+| [`tcnet`](mods/tcnet.md) | Act as a TCNet Master node, broadcasting the deck's play position, track length, beat in the bar and play state on UDP 60000/60001 and answering Metrics (BPM, speed) and MetaData requests on UDP 65023, so ShowKontrol, Resolume or other TCNet receivers can follow it. | off |
 
 Each mod has a page of its own: its knobs, what it patches, and what has and has
 not been verified. `osc` needs a relay on the emulator

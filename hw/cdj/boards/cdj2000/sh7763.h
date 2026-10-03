@@ -18,13 +18,14 @@ enum {
     S63_GETHER0, S63_GETHER1, S63_GETHER2,
     S63_RTC0, S63_RTC1, S63_RTC2, S63_WDT,
     S63_IIC0, S63_IIC1, S63_CMT,
-    S63_USBH, S63_USBF0, S63_USBF1,
+    S63_USBH, S63_USBF0, S63_USBF1, S63_ATAPI,
     S63_MMCIF0, S63_MMCIF1, S63_MMCIF2, S63_MMCIF3,
     S63_GPIO0, S63_GPIO1, S63_GPIO2, S63_GPIO3,
     S63_IRQ0, S63_IRQ1, S63_IRQ2, S63_IRQ3, S63_IRQ4, S63_IRQ5, S63_IRQ6, S63_IRQ7,
+    S63_DISP_RX_DMA, S63_DISP_RX_SER, S63_DISP_TX_DMA, S63_DISP_TX_SER,
     /* groups: one mask bit and one priority field each */
     S63_TMU012, S63_TMU345, S63_DMAC, S63_SCIF0, S63_SCIF1, S63_SCIF2,
-    S63_GETHER, S63_RTC, S63_USBF, S63_MMCIF, S63_GPIO,
+    S63_GETHER, S63_RTC, S63_USBF, S63_MMCIF, S63_GPIO, S63_DISP_TX,
     S63_NR_SOURCES
 };
 
@@ -40,7 +41,8 @@ typedef struct CdjDspWires {
     bool (*busy)(void *opaque);
 } CdjDspWires;
 
-void cdj2000_latch_init(MemoryRegion *sysmem, const CdjDspWires *dsp);
+void cdj2000_latch_init(MemoryRegion *sysmem, const CdjDspWires *dsp,
+                        bool display);
 
 /* The CDJ-2000NXS's C6747-class DSP, behind its host port on MAIN's area 3;
  * returns its end of the latch wires. */
@@ -52,7 +54,20 @@ const CdjDspWires *cdj_c6727_init(MemoryRegion *sysmem, hwaddr hpi_base);
  * protocol at a shorter frame length and with no touch screen. */
 void cdj2000_panel_init(MemoryRegion *sysmem, hwaddr addr);
 
-/* The ADSP-BF531 display processor on the other end of SPORT1; a no-op
- * unless CDJ_BF531_UPD names a GUI image to boot it with. */
-void cdj2000_display_init(void);
+/* The ADSP-BF531 display processor on the other end of SPORT1. Does nothing
+ * and returns false unless CDJ_BF531_UPD names a GUI image to boot it with. */
+bool cdj2000_display_init(void);
+/* One MAIN packet for it: the 64-byte fixed part or an extension part. */
+void cdj2000_display_send(const uint8_t *pkt, size_t len);
+bool cdj2000_display_pf1(void);
+
+/* MAIN's end of that link, the 0xFF400000 (receive) and 0xFF500000
+ * (transmit) DMA blocks; the display's answers arrive through
+ * cdj2000_display_link_receive(). */
+void cdj2000_display_link_init(MemoryRegion *sysmem, qemu_irq rx, qemu_irq tx,
+                               qemu_irq tx_ser);
+void cdj2000_display_link_receive(const uint8_t *pkt, size_t len);
+
+/* The SDHI at 0xFFE40000, with no card in the slot. */
+void cdj2000_sdhi_init(MemoryRegion *sysmem);
 #endif

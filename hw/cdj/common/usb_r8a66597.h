@@ -7,6 +7,10 @@
 #ifndef CDJ_USB_R8A66597_H
 #define CDJ_USB_R8A66597_H
 
+#define CDJ_USB_SIZE     0x1000
+
+#define CDJ_USB_SIZE     0x1000
+
 #define CDJ_USB_SYSCFG   0x00
 #define CDJ_USB_SYSSTS0  0x04
 #define CDJ_USB_DVSTCTR0 0x08
@@ -23,6 +27,9 @@
 #define CDJ_USB_D1FIFO   0x120
 #define CDJ_USB_D0FIFO_ALT 0x18
 #define CDJ_USB_D1FIFO_ALT 0x1C
+/* The SH7763's D0FIFO, a 32-byte block its DMAC reads a whole unit from. */
+#define CDJ_USB_D0FIFO_BLK 0x180
+#define CDJ_USB_FIFO_BLK_SIZE 32
 #define CDJ_USB_NR_FIFO_PORTS 3
 #define CDJ_USB_INTENB0  0x30
 #define CDJ_USB_INTENB1  0x32
@@ -101,6 +108,10 @@ static inline int cdj_usb_data_port(hwaddr off)
     if (off >= CDJ_USB_D1FIFO_ALT && off < CDJ_USB_D1FIFO_ALT + 4) {
         return 2;
     }
+    if (off >= CDJ_USB_D0FIFO_BLK &&
+        off < CDJ_USB_D0FIFO_BLK + CDJ_USB_FIFO_BLK_SIZE) {
+        return 1;
+    }
     return -1;
 }
 
@@ -124,5 +135,8 @@ static inline int cdj_usb_ctr_port(hwaddr off)
     default:                return -1;
     }
 }
+
+void cdj_usb_init(MemoryRegion *sysmem, hwaddr base, qemu_irq irq,
+                  bool dcp_per_packet);
 
 #endif

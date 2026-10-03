@@ -8,7 +8,13 @@
  *   +0x40 bit 4     in:  the DSP's HINT pin (active low), MAIN waits for it
  *                        to go low
  * Both DSP boards use the same two wires (the CDJ-2000 from 0x041C743C).
- * +0x60 bit 2 is the LED the firmware blinks when it has crashed.
+ * +0x60 bit 2 is the LED the firmware blinks when it has crashed. Bit 1 is
+ * an input that reads 1 while the display processor is fitted: with it clear
+ * the start-up panel check (0x0428D3CC) leaves the display mode word at 0 and
+ * the send task (0x04215722) never counts its idle passes towards a packet.
+ * +0x48 bit 2 is the display processor's PF1 when it runs: the GUI link
+ * tasks (0x04215268, 0x0421566E) start the link once it reads 0, and the
+ * answer handler (0x042134CC) accepts an answer only while it reads 1.
  * The rest store and read back, which is all the boot asks of them.
  */
 
@@ -18,11 +24,16 @@
 #define STATUS_DSP_BUSY (1u << 4)
 #define REG_DSP_CMD     0x5C
 #define DSP_CMD_MASK    3u
+#define REG_DISPLAY     0x48
+#define DISPLAY_PF1     (1u << 2)
+#define REG_PANEL       0x60
+#define PANEL_DISPLAY_UP (1u << 1)
 
 typedef struct CdjLatch {
     MemoryRegion iomem;
     uint16_t reg[LATCH_SIZE / 2];
     const CdjDspWires *dsp;
+    bool display;
 } CdjLatch;
 
 static uint64_t latch_read(void *opaque, hwaddr off, unsigned size)
@@ -34,6 +45,12 @@ static uint64_t latch_read(void *opaque, hwaddr off, unsigned size)
         val &= ~STATUS_DSP_BUSY;
         if (s->dsp->busy(s->dsp->opaque)) {
             val |= STATUS_DSP_BUSY;
+        }
+    }
+    if (off == REG_DISPLAY && s->display) {
+        val &= ~DISPLAY_PF1;
+        if (cdj2000_display_pf1()) {
+            val |= DISPLAY_PF1;
         }
     }
     return val;
@@ -57,11 +74,16 @@ static const MemoryRegionOps latch_ops = {
 };
 
 /* Over the unimplemented GPIO block, which keeps logging everything else. */
-void cdj2000_latch_init(MemoryRegion *sysmem, const CdjDspWires *dsp)
+void cdj2000_latch_init(MemoryRegion *sysmem, const CdjDspWires *dsp,
+                        bool display)
 {
     CdjLatch *s = g_new0(CdjLatch, 1);
 
     s->dsp = dsp;
+    s->display = display;
+    if (display) {
+        s->reg[REG_PANEL / 2] |= PANEL_DISPLAY_UP;
+    }
     memory_region_init_io(&s->iomem, NULL, &latch_ops, s, "cdj2000.latch",
                           LATCH_SIZE);
     memory_region_add_subregion_overlap(sysmem, LATCH_BASE, &s->iomem, 1);

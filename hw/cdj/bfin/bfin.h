@@ -18,7 +18,8 @@
 
 typedef struct bfin_core bfin_core;
 
-/* Anything the core does not own as RAM. Sizes are 1, 2 or 4 bytes. */
+/* Anything the core does not own as RAM. Sizes are 1, 2 or 4 bytes. A read
+ * must not change the RAM the core maps; a write may (a DMA it starts). */
 typedef struct bfin_bus {
     void     *opaque;
     uint32_t (*read)(void *opaque, uint32_t addr, unsigned size);
@@ -38,6 +39,10 @@ void       bfin_free(bfin_core *c);
 
 /* Host memory the core reads and writes directly (SDRAM, L1 banks). */
 void bfin_map_ram(bfin_core *c, uint32_t base, uint32_t size, uint8_t *host);
+/* Host memory the core reads directly but writes through the bus (the boot
+ * flash): it must not change while the core runs. */
+void bfin_map_rom(bfin_core *c, uint32_t base, uint32_t size,
+                  const uint8_t *host);
 
 /* The state the boot ROM hands over: supervisor, inside the reset event. */
 void      bfin_reset(bfin_core *c, uint32_t pc);

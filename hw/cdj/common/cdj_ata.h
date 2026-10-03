@@ -9,8 +9,11 @@
 #define CDJ_ATA_H
 #include "cdj_common.h"
 
-/* Modelled as an empty, healthy drive: enough for the firmware's boot-time
- * IDENTIFY to pass. Gated on CDJ_ATA=1 (off maps nothing). */
-void cdj_ata_init(MemoryRegion *sysmem, const char *name, hwaddr base);
+/* Modelled as an empty, healthy drive: IDENTIFY passes and every medium
+ * command reports no disc. irq is the drive's INTRQ gated by the controller's
+ * INT_ENABLE, or NULL where the board polls. Gated on CDJ_ATA=1 (off maps
+ * nothing). */
+void cdj_ata_init(MemoryRegion *sysmem, const char *name, hwaddr base,
+                  qemu_irq irq);
 
 #endif
