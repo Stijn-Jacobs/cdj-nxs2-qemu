@@ -1,16 +1,23 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "dsp_host.h"
 /*
- * The core runs in slices on QEMU's main loop, so MAIN's host-port accesses
- * and the DSP never run at the same time. On the board the DSP follows the
- * command pins within microseconds, so every change of command runs the core
- * in small pieces until the DSP has seen it: for a command, until it answers
- * on HINT; for the drop back to 0, until it has read the pins again. Without
- * the second, MAIN drops the command and raises the next one before the
- * loader, still waiting for the drop (0x1180292C), has looked.
+ * The core runs on its own thread in chunks, at most one quantum ahead of
+ * QEMU's virtual clock. Run on the main loop instead, a chunk of the
+ * interpreted core takes several times its own length in host time and every
+ * QEMU timer, MAIN's tick among them, fires late and in bursts. When the host
+ * cannot keep up the core lags; the worst lag is reported at exit.
+ *
+ * MAIN's host-port accesses and a chunk never run at the same time (@lock).
+ * On the board the DSP follows the command pins within microseconds, so every
+ * change of command runs the core in small pieces until the DSP has seen it:
+ * for a command, until it answers on HINT; for the drop back to 0, until it
+ * has read the pins again. Without the second, MAIN drops the command and
+ * raises the next one before the loader, still waiting for the drop
+ * (0x1180292C), has looked.
  */
 
-#define SLICE_NS        (1000 * 1000)       /* 1 ms of DSP time per slice */
+#define QUANTUM_NS      (1000 * 1000)
+#define CHUNK_NS        (100 * 1000)
 #define REACT_STEP      2000
 #define REACT_MAX       (4 * 1000 * 1000)
 
@@ -34,16 +41,61 @@ static bool host_stopped(CdjDspHost *h, c66x_stop stop)
     return true;
 }
 
-static void host_slice(void *opaque)
+static void *host_thread(void *opaque)
 {
     CdjDspHost *h = opaque;
-    uint64_t done = 0;
+    uint64_t done;
 
-    if (!h->running || host_stopped(h, c66x_step(h->core, h->cycles_per_slice,
-                                                 &done))) {
-        return;
+    while (qatomic_read(&h->running)) {
+        int64_t virt = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+
+        if (qatomic_read(&h->host_waiting)) {
+            g_usleep(0);
+            continue;
+        }
+        if (h->dsp_ns >= virt + QUANTUM_NS) {
+            g_usleep(1000);
+            continue;
+        }
+        h->lag_max_ns = MAX(h->lag_max_ns, virt - h->dsp_ns);
+        done = 0;
+        qemu_mutex_lock(&h->lock);
+        host_stopped(h, c66x_step(h->core, h->cycles_per_chunk, &done));
+        qemu_mutex_unlock(&h->lock);
+        /* An idle core has waited out the rest of the chunk. */
+        h->dsp_ns += CHUNK_NS;
     }
-    timer_mod(h->slice, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + SLICE_NS);
+    return NULL;
+}
+
+/*
+ * MAIN waits for a chunk to end, and then may run the core itself
+ * (host_react), for milliseconds of host time. Holding the BQL all that
+ * while stalls the main loop and every QEMU timer with it: MAIN's 1 kHz
+ * tick underflowed in bursts of four and the RTOS counted half its ticks.
+ * Nothing behind @lock needs the BQL, so MAIN's side lets it go.
+ */
+void cdj_dsp_host_lock(CdjDspHost *h)
+{
+    bool had_bql = bql_locked();
+
+    if (had_bql) {
+        bql_unlock();
+    }
+    qatomic_inc(&h->host_waiting);
+    qemu_mutex_lock(&h->lock);
+    qatomic_dec(&h->host_waiting);
+    h->host_had_bql = had_bql;
+}
+
+void cdj_dsp_host_unlock(CdjDspHost *h)
+{
+    bool had_bql = h->host_had_bql;
+
+    qemu_mutex_unlock(&h->lock);
+    if (had_bql) {
+        bql_lock();
+    }
 }
 
 static bool host_answered(CdjDspHost *h, uint64_t edges, uint64_t reads)
@@ -70,7 +122,7 @@ static void set_hpic(CdjDspHost *h, uint32_t hpic)
     if ((hpic ^ h->hpic) & HPIC_HINT) {
         h->hint_edges++;
     }
-    h->hpic = hpic;
+    qatomic_set(&h->hpic, hpic);
 }
 
 /* The HPIC as either side reads it; the port is always ready. */
@@ -97,7 +149,7 @@ static bool host_busy(void *opaque)
 {
     CdjDspHost *h = opaque;
 
-    return !(h->hpic & HPIC_HINT);
+    return !(qatomic_read(&h->hpic) & HPIC_HINT);
 }
 
 static void host_command(void *opaque, unsigned bits)
@@ -108,12 +160,14 @@ static void host_command(void *opaque, unsigned bits)
     if (bits == h->command) {
         return;
     }
+    cdj_dsp_host_lock(h);
     h->command = bits;
     h->set_pins(h->chip, bits);
     if (bits) {
         h->commands++;
     }
     host_react(h);
+    cdj_dsp_host_unlock(h);
 }
 
 void cdj_dsp_host_init(CdjDspHost *h, const char *name, const char *env_prefix,
@@ -127,8 +181,9 @@ void cdj_dsp_host_init(CdjDspHost *h, const char *name, const char *env_prefix,
 
     h->name = name;
     h->enabled = !(on && !strcmp(on, "0"));
-    h->cycles_per_slice = (mhz ? strtoull(mhz, NULL, 0) : default_mhz) * 1000;
-    h->slice = timer_new_ns(QEMU_CLOCK_VIRTUAL, host_slice, h);
+    h->cycles_per_chunk = (mhz ? strtoull(mhz, NULL, 0) : default_mhz)
+                          * CHUNK_NS / 1000;
+    qemu_mutex_init(&h->lock);
     /* The chip's ROM boot loader raises HINT at reset to tell the host it
      * is ready; MAIN waits for that before it loads anything. */
     h->hpic = HPIC_HINT;
@@ -147,8 +202,10 @@ void cdj_dsp_host_run(CdjDspHost *h, uint32_t entry)
 {
     c66x_reset(h->core, entry);
     h->running = true;
+    h->dsp_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
     info_report("%s: started at 0x%08x", h->name, entry);
-    timer_mod(h->slice, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + SLICE_NS);
+    qemu_thread_create(&h->thread, h->name, host_thread, h,
+                       QEMU_THREAD_DETACHED);
 }
 
 /* The GBLCTL register @addr is in, or -1; its McASP in @n. */
@@ -238,6 +295,7 @@ void cdj_dsp_host_report(CdjDspHost *h)
         info_report("%s: never started", h->name);
         return;
     }
+    cdj_dsp_host_lock(h);
     c66x_get_stats(h->core, &st);
     info_report("%s: %s, pc 0x%08x, %" PRIu64 " cycles, %" PRIu64
                 " packets, last stop %d", h->name,
@@ -249,6 +307,9 @@ void cdj_dsp_host_report(CdjDspHost *h)
     info_report("%s: %" PRIu64 " commands from MAIN, %" PRIu64
                 " HINT edges, HPIC 0x%08x, %" PRIu64 " cycles run to answer",
                 h->name, h->commands, h->hint_edges, h->hpic, h->react_cycles);
+    info_report("%s: at most %" PRId64 " ms behind the virtual clock",
+                h->name, h->lag_max_ns / SCALE_MS);
     print_counts(h->name, "bus read ", &h->busr);
     print_counts(h->name, "bus write", &h->busw);
+    cdj_dsp_host_unlock(h);
 }

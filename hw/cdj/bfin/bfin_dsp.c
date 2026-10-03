@@ -299,11 +299,12 @@ static uint16_t shift16(bfin_core *c, uint16_t v, int n, int logical, int sat)
     return r;
 }
 
-/* ROT: a 33-bit rotate through CC, positive counts to the left. */
+/* ROT: a 33-bit rotate through CC, positive counts to the left. Every form
+ * gives the count as six signed bits, -32 to 31. */
 static uint32_t rot32(bfin_core *c, uint32_t v, int n)
 {
     uint64_t x = (uint64_t)c->cc << 32 | v;
-    unsigned k = ((n % 33) + 33) % 33;
+    unsigned k = n < 0 ? n + 33 : n;
 
     if (k) {
         x = ((x << k) | (x >> (33 - k))) & 0x1FFFFFFFFull;
@@ -476,6 +477,20 @@ void bfin_dsp32shiftimm(bfin_core *c, uint16_t iw0, uint16_t iw1)
         break;
     }
     c->undef = 1;
+}
+
+/* The 32-bit form (sopcde 2), which bundles use most. */
+void bfin_dsp32shiftimm32(bfin_core *c, uint16_t iw0, uint16_t iw1)
+{
+    unsigned src1 = iw1 & 7, dst0 = (iw1 >> 9) & 7, sop = iw1 >> 14;
+    int n = (int8_t)(((iw1 >> 3) & 0x3F) << 2) >> 2;
+    uint32_t v = c->r[src1];
+
+    if (sop == 3) {
+        c->r[dst0] = rot32(c, v, n);
+    } else {
+        c->r[dst0] = shift32(c, v, n, sop == 2, sop == 1);
+    }
 }
 
 /* ---- multiply/accumulate ------------------------------------------------ */

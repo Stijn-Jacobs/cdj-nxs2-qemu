@@ -121,6 +121,19 @@ STATUS_SEND = dict(
     end=9,
 )
 
+# The DJcont output task's loop (the task at 0x082D86AC), after the call that
+# recomputes the play position word 0x09947488 from the DSP's frame: the call
+# of its DSP-output step with its delay slot and the fpscr reads around it.
+# The loop branches back to its wait right after the span, and nothing
+# branches into it. r13 holds the DJcont record, r14 the fpscr mask; r6, the
+# mask the loop applies on the way back, comes from the block.
+DJCONT_PASS = dict(
+    sig=[0xB015, 0x64D3, 0x056A, 0x64D3, 0x25E9, 0xD38F, 0x430B, 0x456A,
+         0x066A, 0x26E9, 0xAFD2, 0x466A],
+    start=2,
+    end=10,
+)
+
 # The colour-preview publisher's copy of the 600 six-byte overview records
 # into the link slot: the copy's call with its delay slot, then the fpscr read
 # and the load after it, which make the span long enough for the jump to the
@@ -247,6 +260,33 @@ MODS = {
         literal=False,
         hook=True,
         **BEAT_SEND,
+    ),
+    'tcnet': Mod(
+        what='TCNet Opt-IN and Status, once a second (UDP 60000)',
+        target='main',
+        fw_versions=('1.87',),
+        args=[],
+        literal=False,
+        hook=True,
+        **STATUS_SEND,
+    ),
+    'tcnettime': Mod(
+        what='TCNet Time packets, every 20 ms (UDP 60001)',
+        target='main',
+        fw_versions=('1.87',),
+        args=[],
+        literal=False,
+        hook=True,
+        **DJCONT_PASS,
+    ),
+    'tcnetdata': Mod(
+        what='TCNet listener (UDP 65023): Metrics and MetaData to requesting nodes',
+        target='main',
+        fw_versions=('1.87',),
+        args=[],
+        literal=False,
+        hook=True,
+        **DJCONT_PASS,
     ),
     'usbmidi': Mod(
         what='USB-MIDI start/stop/clock, sending',

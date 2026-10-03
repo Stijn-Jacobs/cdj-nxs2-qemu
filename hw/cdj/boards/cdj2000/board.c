@@ -3,6 +3,7 @@
 #include "cdj_getenv.h"
 #include "cdj_ether.h"
 #include "cdj_ata.h"
+#include "usb_r8a66597.h"
 /*
  * Pioneer CDJ-2000 and CDJ-2000NXS MAIN board (Renesas SH7763) -- bring-up.
  *
@@ -23,6 +24,8 @@
  * 54 MHz. The firmware picks 13500 over 11250 when FRQCR's top nibble is 3. */
 #define SH7763_PERIPH_HZ    54000000
 #define SH7763_FRQCR_BOOT   0x30000000
+
+#define CDJ2000_USBH_BASE   0xFE400000
 
 static const CdjBoardDesc cdj2000nxs_board = {
     .name = "cdj2000nxs",
@@ -75,17 +78,50 @@ static const CdjBoardDesc cdj2000_board = {
     .exit_report = cdj_sh7763_intc_report,
 };
 
+#ifdef _WIN32
+/*
+ * Windows sleeps in whole timer periods, so the main loop, which runs the
+ * TMU's timers, wakes every 15.6 ms (2-4 ms with a 1 ms period requested).
+ * The 1 kHz tick's underflows then arrive in bursts that the held UNF line
+ * merges into one interrupt each: the RTOS counted ~70 ticks a second. A
+ * high-resolution waitable timer wakes the loop every 250 us instead.
+ */
+#define SH7763_KICK_100NS 2500
+
+static QemuThread sh7763_kicker;
+
+static void *sh7763_kick_main_loop(void *opaque)
+{
+    HANDLE timer = CreateWaitableTimerExW(NULL, NULL,
+                                          CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                                          TIMER_ALL_ACCESS);
+    LARGE_INTEGER due = { .QuadPart = -SH7763_KICK_100NS };
+
+    for (;;) {
+        SetWaitableTimer(timer, &due, 0, NULL, NULL, FALSE);
+        WaitForSingleObject(timer, INFINITE);
+        qemu_notify_event();
+    }
+    return NULL;
+}
+#endif
+
 static void sh7763_board_init(MachineState *machine, const CdjBoardDesc *desc,
                               const CdjDspWires *dsp)
 {
     MemoryRegion *sysmem = get_system_memory();
     SuperHCPU *cpu = cdj_board_init(machine, desc);
     qemu_irq *irq;
+    bool display;
     static const CdjRegInit cpg[] = {
         { 0x00, SH7763_FRQCR_BOOT },
         { 0 },
     };
 
+#ifdef _WIN32
+    qemu_thread_create(&sh7763_kicker, "tmu-kick", sh7763_kick_main_loop,
+                       NULL, QEMU_THREAD_DETACHED);
+#endif
     /* The interrupt controller models the registers the firmware uses; the
      * rest of both blocks is logged underneath it. */
     cdj_sh7763_intc_init(sysmem, cpu);
@@ -104,7 +140,9 @@ static void sh7763_board_init(MachineState *machine, const CdjBoardDesc *desc,
     qemu_add_exit_notifier(&cdj_irqcount_exit);
 
     /* The same SH-4A DMAC as the NXS2's, at another base, with its resource
-     * selectors (DMARS) at +0x1000. No DREQ source until USB is modelled. */
+     * selectors (DMARS) at +0x1000. The USB host's FIFO window is its DREQ
+     * source: a sector read arms the channel (source 0xFE400180) before the
+     * data arrives, so it must wait for the host's request. */
     {
         CdjDmacDei dei[4] = {
             { cdj_count_irq(irq[S63_DMTE0], "DMAC DMTE0") },
@@ -113,7 +151,8 @@ static void sh7763_board_init(MachineState *machine, const CdjBoardDesc *desc,
             { cdj_count_irq(irq[S63_DMTE3], "DMAC DMTE3") },
         };
 
-        cdj_dmac_init(sysmem, "sh7763.dmac", 0xFF608000, 0, 0, dei);
+        cdj_dmac_init(sysmem, "sh7763.dmac", 0xFF608000,
+                      A7ADDR(CDJ2000_USBH_BASE), CDJ_USB_SIZE, dei);
     }
 
     /* The flash is 4 MB by its own sector table (71 sectors at 0x04075D94,
@@ -136,44 +175,41 @@ static void sh7763_board_init(MachineState *machine, const CdjBoardDesc *desc,
     /* The DMA-fed port to the front-panel microcontroller (M16C). */
     cdj2000_panel_init(sysmem, 0xFFE20000);
     /* The BF531 display processor, its own window; off unless asked for. */
-    cdj2000_display_init();
+    display = cdj2000_display_init();
 
     /* Same SH7724 fast-EtherC/E-DMAC layout as the NXS2's, at this SoC's own
      * base; its MDIO read routine needs one extra turnaround lead-in bit
      * (static trace only, not yet confirmed against a live MDIO read). */
     cdj_ether_init(sysmem, "sh7763.ether", 0xFEF00000,
                   cdj_count_irq(irq[S63_GETHER0], "GETHER0"), 1);
-    /* SDHI (TMIO-style): Sd_Test_Init 0x041FEE38 only reads SOFT_RST/INFO1/
-     * INFO2 back before deciding there is no card; a backed register file
-     * answers that with card-detect and every status bit clear, which is
-     * enough for SD init to return without a card fitted. */
-    cdj_regs(sysmem, "sh7763.sdhi", 0xFFE40000, 0x1000, NULL);
+    cdj2000_sdhi_init(sysmem);
     /* The ATAPI (CD drive) task file and control block, not GPIO: the
      * IDENTIFY sequence (0x042971EC) programs this range with the SH7724
-     * ATAPI_CONTROL* layout, offset for offset. GPIO/PFC is the next 64 KiB. */
-    cdj_ata_init(sysmem, "sh7763.atapi", 0xFFF00000);
+     * ATAPI_CONTROL* layout, offset for offset. GPIO/PFC is the next 64 KiB.
+     * Its ISR 0x04109180 is registered as INTEVT H'C00 (T_CISR 0x0405D31C),
+     * enabled through INT2PRI6 bits 31-24 and INT2MSKCR bit 20. */
+    cdj_ata_init(sysmem, "sh7763.atapi", 0xFFF00000,
+                 cdj_count_irq(irq[S63_ATAPI], "ATAPI"));
     cdj_unimp("sh7763.gpio",  0xFFF10000, 0x10000);
-    cdj2000_latch_init(sysmem, dsp);
-    /* On-chip USB host (the front stick port), driven by the same HCD as the
-     * NXS2's usb_r8a66597.c at its own base. A full boot trace of usbh_load()
-     * is one straight-line init pass at the same offsets that file's register
-     * layout names -- SYSCFG0 (+0x00), CFIFOSEL/D0FIFOSEL/D1FIFOSEL (+0x20/
-     * +0x28/+0x2C), INTENB0/1 (+0x30/+0x32), BRDYENB/NRDYENB/BEMPENB (+0x36/
-     * +0x38/+0x3A), then PIPESEL/PIPEBUF (+0x64/+0x6A) per pipe -- with every
-     * read immediately followed by a write to the same offset (read-modify-
-     * write) and no repeated read at one offset, so nothing here is a
-     * read-dependent poll. A plain read-back register file satisfies it. */
-    cdj_regs(sysmem, "sh7763.usbh", 0xFE400000, 0x1000, NULL);
-    /* Two identical 4 KB windows 1 MB apart (0xFF401000, 0xFF501000): a
-     * driver at 0x042A38FC (forced-disassembled, unreached by auto-analysis)
-     * writes both with the same offsets (0x08, 0x10, 0x18, 0x28, 0x40, 0x50)
-     * in lockstep, then a fixed-count software delay, never branching on
-     * what it reads back. 0x08/0x10/0x18 match the published sh_mmcif
-     * CE_ARG/CE_CMD_CTRL/CE_CLK_CTRL offsets, but 0x28 is read-modify-written
-     * where that layout has a read-only CE_RESP1, so the identity is not
-     * settled. A plain read-back register file satisfies every access seen. */
-    cdj_regs(sysmem, "sh7763.blk-ff40", 0xFF400000, 0x10000, NULL);
-    cdj_regs(sysmem, "sh7763.blk-ff50", 0xFF500000, 0x10000, NULL);
+    cdj2000_latch_init(sysmem, dsp, display);
+    /* On-chip USB host (the front stick port): the NXS2's R8A66597 host
+     * controller at its own base. usbh_load()'s boot pass is read-modify-write
+     * at that chip's SYSCFG0, FIFOSEL, INTENB, BRDYENB/NRDYENB/BEMPENB and
+     * PIPESEL/PIPEBUF offsets. */
+    cdj_usb_init(sysmem, CDJ2000_USBH_BASE,
+                 cdj_count_irq(irq[S63_USBH], "USBH"), true);
+    /* The display link's receive and transmit DMA blocks. Without the
+     * display processor they are plain read-back registers, which the
+     * driver's init (0x042A38FC) never branches on. */
+    if (display) {
+        cdj2000_display_link_init(sysmem,
+            cdj_count_irq(irq[S63_DISP_RX_DMA], "display rx DMA"),
+            cdj_count_irq(irq[S63_DISP_TX_DMA], "display tx DMA"),
+            cdj_count_irq(irq[S63_DISP_TX_SER], "display tx serial"));
+    } else {
+        cdj_regs(sysmem, "sh7763.blk-ff40", 0xFF400000, 0x10000, NULL);
+        cdj_regs(sysmem, "sh7763.blk-ff50", 0xFF500000, 0x10000, NULL);
+    }
     cdj_unimp("sh7763.blk-ffd3", 0xFFD30000, 0x10000);
     cdj_unimp("sh7763.blk-ff2f", 0xFF2F0000, 0x10000);
     /* The rear USB-B function chip (MIDI/HID/audio class), not the NXS2's

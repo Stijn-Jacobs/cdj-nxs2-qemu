@@ -8,6 +8,7 @@
  */
 #include "bf531.h"
 #include <stdarg.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -35,10 +36,11 @@ enum {
     PLL_CTL = 0x000, PLL_DIV = 0x004, PLL_STAT = 0x00C, CHIPID = 0x014,
     SIC_IMASK = 0x10C, SIC_IAR0 = 0x110, SIC_ISR = 0x120, SIC_IWR = 0x124,
     SPI_CTL = 0x500, SPI_STAT = 0x508, SPI_TDBR = 0x50C, SPI_RDBR = 0x510,
+    SPORT1_TCR1 = 0x900,
     TIMER0 = 0x600, TIMER_ENABLE = 0x640, TIMER_DISABLE = 0x644,
     TIMER_STATUS = 0x648,
     FIO_FLAG_D = 0x700, FIO_FLAG_C = 0x704, FIO_FLAG_S = 0x708,
-    FIO_FLAG_T = 0x70C,
+    FIO_FLAG_T = 0x70C, FIO_DIR = 0x730,
     EBIU_SDSTAT = 0xA1C,
     DMA0 = 0xC00, DMA_END = 0xE00,
     PPI_CONTROL = 0x1000,
@@ -53,6 +55,7 @@ enum {
 };
 
 #define DMAEN       0x0001
+#define TSPEN       0x0001
 #define DMA2D       0x0010
 #define DI_EN       0x0080
 #define DMA_DONE    0x0001
@@ -98,9 +101,11 @@ struct bf531 {
     uint64_t frames;
 
     /* One standing SPORT1 RX packet from the host, consumed the next time
-     * the firmware arms DMA3 (see bf531_sport1_rx). */
-    uint8_t  sport1_rx[128];
+     * the firmware arms DMA3 (see bf531_sport1_rx). MAIN's packets are at
+     * most its 2 KB transmit buffer. */
+    uint8_t  sport1_rx[2048];
     size_t   sport1_rx_len;
+    bool     sport1_rx_armed;
 };
 
 static void __attribute__((format(printf, 2, 3))) slog(bf531 *s, const char *fmt, ...)
@@ -335,6 +340,13 @@ static void ppi_frame(bf531 *s, bf531_dma *d)
     }
     s->fb = realloc(s->fb, (size_t)w * h * 2);
     for (unsigned y = 0; y < h; y++) {
+        uint8_t *row = xmod == 2 ? load_target(s, a, w * 2) : NULL;
+
+        if (row) {
+            memcpy(&s->fb[y * w], row, w * 2);
+            a += (w - 1) * 2 + ymod;
+            continue;
+        }
         for (unsigned x = 0; x < w; x++) {
             s->fb[y * w + x] = mem_read(s, a, 2);
             a += x + 1 < w ? xmod : ymod;
@@ -373,11 +385,11 @@ static void dma_unit_done(bf531 *s, int ch)
     dma_start_unit(s, d);
 }
 
-/* Copies one host packet into a just-armed DMA3 (SPORT1 RX) target and
+/* Copies one host packet into an armed DMA3 (SPORT1 RX) target and
  * completes the unit, as MAIN's own clock would over a real link. Nothing
  * in the firmware unmasks the SIC bit for this channel before it gets here
- * on a plain boot (checked to 2 G cycles with no packet waiting), so the
- * stub sets it here too; a live SPORT1 link is M3's job. */
+ * on a plain boot (checked to 2 G cycles with no packet waiting), so it is
+ * set here too. */
 static void sport1_rx_complete(bf531 *s, int ch)
 {
     bf531_dma *d = &s->dma[ch];
@@ -389,8 +401,30 @@ static void sport1_rx_complete(bf531 *s, int ch)
         memcpy(to, s->sport1_rx, len);
     }
     s->sport1_rx_len = 0;
+    s->sport1_rx_armed = false;
     s->mmr[SIC_IMASK / 4] |= 1u << (IRQ_PPI_DMA + ch);
     dma_unit_done(s, ch);
+}
+
+/* Hands DMA4's buffer (SPORT1 TX, the answer to MAIN) to the host and
+ * completes the unit, once both the channel and the transmitter are on: the
+ * firmware enables DMA4, fills the buffer, then sets TSPEN. */
+static void sport1_tx_start(bf531 *s)
+{
+    bf531_dma *d = &s->dma[4];
+    uint8_t pkt[128];
+    size_t len = (d->reg[D_XCOUNT / 4] & 0xFFFF) * 2;
+
+    if (len > sizeof(pkt)) {
+        len = sizeof(pkt);
+    }
+    for (size_t i = 0; i < len; i++) {
+        pkt[i] = mem_read(s, d->reg[D_START / 4] + i, 1);
+    }
+    if (s->host.sport1_tx) {
+        s->host.sport1_tx(s->host.opaque, pkt, len);
+    }
+    dma_unit_done(s, 4);
 }
 
 static void dma_write(bf531 *s, uint32_t off, uint32_t v)
@@ -410,11 +444,12 @@ static void dma_write(bf531 *s, uint32_t off, uint32_t v)
     }
     if (!(v & DMAEN)) {
         d->due = NEVER;
+        s->sport1_rx_armed &= ch != 3;
         d->reg[D_IRQ_STATUS / 4] &= ~DMA_RUN;
         return;
     }
-    /* Only the PPI channel moves data; the others are enabled only when a
-     * SPORT is, which nothing drives yet. */
+    /* The PPI channel moves frames; DMA3 and DMA4 are SPORT1's receive and
+     * transmit, MAIN's link. */
     if (ch == 0) {
         if (((v >> 12) & 7) >= 4) {
             if (((v >> 12) & 7) == 4) {
@@ -424,9 +459,18 @@ static void dma_write(bf531 *s, uint32_t off, uint32_t v)
         }
         dma_start_unit(s, d);
     } else {
-        slog(s, "DMA%u enabled, config 0x%04x", ch, v);
-        if (ch == 3 && s->sport1_rx_len) {
-            sport1_rx_complete(s, ch);
+        slog(s, "DMA%u enabled, config 0x%04x, start 0x%08x, %u words", ch, v,
+             d->reg[D_START / 4], d->reg[D_XCOUNT / 4] & 0xFFFF);
+        if (ch == 3) {
+            s->sport1_rx_armed = true;
+            if (s->sport1_rx_len) {
+                sport1_rx_complete(s, ch);
+            }
+        } else if (ch == 4) {
+            d->reg[D_IRQ_STATUS / 4] |= DMA_RUN;
+            if (s->mmr[SPORT1_TCR1 / 4] & TSPEN) {
+                sport1_tx_start(s);
+            }
         }
     }
 }
@@ -493,6 +537,14 @@ static void sys_write(bf531 *s, uint32_t off, uint32_t v)
         return;
     case PLL_STAT: case CHIPID: case SIC_ISR:
         return;
+    case SPORT1_TCR1:
+        if (v & ~s->mmr[off / 4] & TSPEN &&
+            s->dma[4].reg[D_IRQ_STATUS / 4] & DMA_RUN) {
+            s->mmr[off / 4] = v;
+            sport1_tx_start(s);
+            return;
+        }
+        break;
     case FIO_FLAG_C: s->mmr[FIO_FLAG_D / 4] &= ~v; return;
     case FIO_FLAG_S: s->mmr[FIO_FLAG_D / 4] |= v; return;
     case FIO_FLAG_T: s->mmr[FIO_FLAG_D / 4] ^= v; return;
@@ -561,6 +613,7 @@ bf531 *bf531_new(uint32_t sdram_size, const bf531_host *host, FILE *log)
     bfin_map_ram(s->core, L1_DATA_A, sizeof(s->l1_data_a), s->l1_data_a);
     bfin_map_ram(s->core, L1_DATA_B, sizeof(s->l1_data_b), s->l1_data_b);
     bfin_map_ram(s->core, L1_SCRATCH, sizeof(s->l1_scratch), s->l1_scratch);
+    bfin_map_rom(s->core, ASYNC_BASE, FLASH_SIZE, s->flash);
 
     /* Reset values: PLL_DIV SSEL 5, the default SIC assignment (PPI DMA
      * IVG8, SPORT DMA IVG9, the timers IVG11). */
@@ -592,6 +645,16 @@ void bf531_sport1_rx(bf531 *s, const uint8_t *data, size_t len)
         memcpy(s->sport1_rx, data, len);
     }
     s->sport1_rx_len = data ? len : 0;
+    /* Lands as the chip's next event, not from the host's call, so the
+     * interrupt it raises reaches the core inside bf531_run. */
+    if (data && s->sport1_rx_armed) {
+        s->dma[3].due = bfin_cycles(s->core);
+    }
+}
+
+uint16_t bf531_flags(const bf531 *s)
+{
+    return s->mmr[FIO_FLAG_D / 4] & s->mmr[FIO_DIR / 4];
 }
 
 /* LDR block: u32 destination, u32 byte count, u16 flags; bit 0 zero-fill
@@ -665,7 +728,9 @@ static void advance(bf531 *s)
         }
     }
     for (int n = 0; n < 8; n++) {
-        if (s->dma[n].due <= now) {
+        if (s->dma[n].due <= now && n == 3) {
+            sport1_rx_complete(s, n);
+        } else if (s->dma[n].due <= now) {
             dma_unit_done(s, n);
         }
     }

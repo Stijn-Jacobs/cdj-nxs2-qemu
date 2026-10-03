@@ -51,7 +51,6 @@
 
 /* USB 2.0 host module; the DMAC needs it to recognise its FIFO ports. */
 #define CDJ_USB_BASE 0x04D80000
-#define CDJ_USB_SIZE 0x1000
 
 /* NOR flash on CS0, 8 MB (127 x 64 KB + 8 x 8 KB per the firmware's sector
  * tables). Erased cells read 0xFF, which the settings-log scan relies on. */
@@ -600,7 +599,6 @@ uint64_t cdj_dsp_i2c_tx_bytes(void);
 void cdj_iic(MemoryRegion *sysmem, const char *name, hwaddr addr,
                     unsigned ch, qemu_irq *irq);
 void cdj_pnl_init(MemoryRegion *sysmem, hwaddr addr);
-void cdj_usb_init(MemoryRegion *sysmem, qemu_irq irq);
 /* The rear USB port's bus side: what a token gets back besides a length. */
 #define CDJ_USBF_NAK   (-1)
 #define CDJ_USBF_STALL (-2)

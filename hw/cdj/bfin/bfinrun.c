@@ -4,14 +4,15 @@
  * without QEMU and writes the last PPI frame as a PPM.
  *
  *   bfinrun [-n cycles] [-t from:to] [-b pc] [-o frame.ppm] [-m sdram.bin] [-q]
- *           [-s hex] C2KGUI.UPD
+ *           [-s hex]... C2KGUI.UPD
  *
  * -t traces every instruction whose cycle lies in [from, to) to stdout, in
  * the form bfin-elf-objdump can be lined up with; -b stops at a PC; -m saves
  * SDRAM at the end. -q drops the SoC's log of unmodelled registers. -s hands
- * the firmware one SPORT1 RX packet (hex bytes, no spaces) the moment it
- * next arms DMA3, standing in for MAIN's link. On an unimplemented
- * instruction it stops and prints the PC and its 16-bit words.
+ * the firmware a SPORT1 RX packet (hex bytes, no spaces), standing in for
+ * MAIN's link: the first lands the moment it arms DMA3, each further one
+ * after it has answered the one before; every answer is printed. On an
+ * unimplemented instruction it stops and prints the PC and its 16-bit words.
  */
 #include "bf531.h"
 #include <inttypes.h>
@@ -23,6 +24,12 @@ typedef struct runner {
     const char *ppm;
     unsigned w, h;
     uint16_t *last;
+    bf531 *chip;
+    /* SPORT1 packets in MAIN's order: the first is waiting at boot, each
+     * later one goes out once the firmware has answered the one before. */
+    uint8_t sport1[16][2048];
+    size_t sport1_len[16];
+    unsigned sport1_n, sport1_next;
 } runner;
 
 static void on_frame(void *opaque, const uint16_t *px, unsigned w, unsigned h)
@@ -33,6 +40,22 @@ static void on_frame(void *opaque, const uint16_t *px, unsigned w, unsigned h)
     memcpy(r->last, px, (size_t)w * h * 2);
     r->w = w;
     r->h = h;
+}
+
+static void on_answer(void *opaque, const uint8_t *data, size_t len)
+{
+    runner *r = opaque;
+
+    fprintf(stderr, "answer %zu bytes:", len);
+    for (size_t n = 0; n < len; n++) {
+        fprintf(stderr, " %02x", data[n]);
+    }
+    fputc('\n', stderr);
+    if (r->sport1_next < r->sport1_n) {
+        bf531_sport1_rx(r->chip, r->sport1[r->sport1_next],
+                        r->sport1_len[r->sport1_next]);
+        r->sport1_next++;
+    }
 }
 
 static void write_ppm(const runner *r)
@@ -92,13 +115,12 @@ static uint8_t *read_file(const char *path, size_t *len)
 int main(int argc, char **argv)
 {
     runner r = { .ppm = "frame.ppm" };
-    bf531_host host = { &r, on_frame };
+    bf531_host host = { .opaque = &r, .frame = on_frame,
+                        .sport1_tx = on_answer };
     uint64_t cycles = 400000000, from = 0, to = 0;
     uint32_t brk = 0;
     const char *dump = NULL;
     FILE *log = stderr;
-    uint8_t sport1[128];
-    size_t sport1_len = 0;
     bfin_stop stop;
     uint8_t *img;
     size_t len;
@@ -116,9 +138,15 @@ int main(int argc, char **argv)
         case 'b': brk = strtoul(optarg, NULL, 0); break;
         case 'm': dump = optarg; break;
         case 'q': log = NULL; break;
-        case 's': sport1_len = parse_hex(optarg, sport1, sizeof(sport1)); break;
+        case 's':
+            if (r.sport1_n < 16) {
+                r.sport1_len[r.sport1_n] = parse_hex(optarg, r.sport1[r.sport1_n],
+                                                     sizeof(r.sport1[0]));
+                r.sport1_n++;
+            }
+            break;
         default:
-            fprintf(stderr, "usage: %s [-n cycles] [-t from:to] [-b pc] [-o frame.ppm] [-m sdram.bin] [-q] [-s hex] update\n",
+            fprintf(stderr, "usage: %s [-n cycles] [-t from:to] [-b pc] [-o frame.ppm] [-m sdram.bin] [-q] [-s hex]... update\n",
                     argv[0]);
             return 2;
         }
@@ -127,9 +155,10 @@ int main(int argc, char **argv)
         fprintf(stderr, "%s: no update section to boot\n", argv[0]);
         return 2;
     }
-    s = bf531_new(16u << 20, &host, log);
-    if (sport1_len) {
-        bf531_sport1_rx(s, sport1, sport1_len);
+    s = r.chip = bf531_new(16u << 20, &host, log);
+    if (r.sport1_n) {
+        bf531_sport1_rx(s, r.sport1[0], r.sport1_len[0]);
+        r.sport1_next = 1;
     }
     if (bf531_load_update(s, img, len)) {
         fprintf(stderr, "%s: not an LDR boot stream\n", argv[optind]);

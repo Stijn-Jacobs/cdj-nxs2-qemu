@@ -8,12 +8,15 @@
  *   the HINT pin (active low) comes back to MAIN as the latch's busy input,
  *   and MAIN clears HINT through its own view of the HPIC.
  * The chip files (dsp_c6747.c, dsp_c6727.c) supply the memory map, the host
- * window and which pins carry the command; this runs the core.
+ * window and which pins carry the command; this runs the core, on its own
+ * thread. What the core and MAIN's host port share is under @lock, which the
+ * chip takes in its host-port handlers (CDJ_DSP_HOST_GUARD).
  */
 #ifndef CDJ2000_DSP_HOST_H
 #define CDJ2000_DSP_HOST_H
 #include "sh7763.h"
 #include "qemu/timer.h"
+#include "qemu/thread.h"
 #include "c6x/c66x.h"
 
 #define HPIC_HWOB       (1u << 0)
@@ -53,8 +56,13 @@ typedef struct CdjDspHost {
     bool enabled, running;
     c66x_stop last_stop;
     uint32_t trap_pc;
-    uint64_t cycles_per_slice;
-    QEMUTimer *slice;
+    uint64_t cycles_per_chunk;
+    QemuMutex lock;
+    unsigned host_waiting;      /* MAIN waits for @lock */
+    bool host_had_bql;          /* MAIN's holder of @lock let the BQL go */
+    QemuThread thread;
+    int64_t dsp_ns;             /* the virtual time the core has run up to */
+    int64_t lag_max_ns;
 
     uint32_t hpic;
     unsigned command;
@@ -76,6 +84,15 @@ void cdj_dsp_host_init(CdjDspHost *h, const char *name, const char *env_prefix,
  * cdj_dsp_host_run() starts it at @entry. */
 c66x_core *cdj_dsp_host_core(CdjDspHost *h, const c66x_bus *bus);
 void cdj_dsp_host_run(CdjDspHost *h, uint32_t entry);
+
+/* MAIN's side of @lock, for the chip's host-port handlers. The core's
+ * thread steps aside while MAIN waits: a mutex alone lets it take the lock
+ * straight back, chunk after chunk, and MAIN starves. */
+void cdj_dsp_host_lock(CdjDspHost *h);
+void cdj_dsp_host_unlock(CdjDspHost *h);
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(CdjDspHost, cdj_dsp_host_unlock)
+#define CDJ_DSP_HOST_GUARD(h) \
+    g_autoptr(CdjDspHost) host_guard_ = (cdj_dsp_host_lock(h), (h))
 
 uint32_t cdj_dsp_host_hpic(const CdjDspHost *h);
 /* The HPIC as MAIN writes it (clears HINT, raises DSPINT) and as the DSP

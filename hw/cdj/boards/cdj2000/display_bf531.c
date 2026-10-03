@@ -11,10 +11,10 @@
  * dependency (hw/cdj/bfin/); this file is the QEMU side of it, a display
  * surface and a timer that steps the chip on its own clock.
  *
- * SPORT1 is not wired to MAIN yet (that is the SH7763 0xFF400000/0xFF500000
- * blocks another board file owns): CDJ_BF531_SPORT1 hands the display
- * processor one hex-encoded RX packet, delivered the moment it next arms
- * its receive DMA, standing in for MAIN's link until the two are connected.
+ * SPORT1 is MAIN's link (display_link.c): a MAIN packet lands the moment
+ * the firmware arms its receive DMA, and each answer it transmits goes
+ * straight to MAIN's receive block. CDJ_BF531_SPORT1 hands it one
+ * hex-encoded packet the same way, for bring-up without MAIN's sender.
  */
 
 #define CDJ_BF531_SDRAM (16 * MiB)
@@ -36,6 +36,26 @@ typedef struct CdjBf531 {
 } CdjBf531;
 
 static CdjBf531 cdj_bf531;
+
+void cdj2000_display_send(const uint8_t *pkt, size_t len)
+{
+    bf531_sport1_rx(cdj_bf531.chip, pkt, len);
+}
+
+static void cdj_bf531_answer(void *opaque, const uint8_t *pkt, size_t len)
+{
+    cdj2000_display_link_receive(pkt, len);
+}
+
+/* PF1, which MAIN reads as bit 2 of its port latch +0x48: low once the
+ * firmware's link is up, and set (FIO_FLAG_S at 0xB7C13E) just before each
+ * answer it transmits. MAIN starts the link on a 0 and takes an answer only
+ * when the bit is 1; any other answer it logs as the display asking for the
+ * packet again (0x042134CC). */
+bool cdj2000_display_pf1(void)
+{
+    return bf531_flags(cdj_bf531.chip) & (1u << 1);
+}
 
 static void cdj_bf531_frame(void *opaque, const uint16_t *px, unsigned w, unsigned h)
 {
@@ -81,7 +101,8 @@ static void cdj_bf531_tick(void *opaque)
     bfin_stop stop = bf531_run(s->chip, CDJ_BF531_QUANTUM);
 
     if (stop == BFIN_STOP_UNDEF) {
-        error_report("cdj_bf531: unimplemented instruction at 0x%08x",
+        error_report("cdj_bf531: unimplemented instruction 0x%" PRIx64
+                     " at 0x%08x", bfin_trap_insn(bf531_core(s->chip)),
                      bfin_trap_pc(bf531_core(s->chip)));
         return;
     }
@@ -114,21 +135,21 @@ static size_t cdj_bf531_parse_hex(const char *s, uint8_t *out, size_t cap)
 
 /* CDJ_BF531_UPD=<path to a Pioneer GUI .UPD section> turns the display
  * processor on; without it this board runs MAIN alone, as before. */
-void cdj2000_display_init(void)
+bool cdj2000_display_init(void)
 {
     CdjBf531 *s = &cdj_bf531;
-    bf531_host host = { s, cdj_bf531_frame };
+    bf531_host host = { s, cdj_bf531_frame, cdj_bf531_answer };
     const char *img_path = getenv("CDJ_BF531_UPD");
     const char *sport1 = getenv("CDJ_BF531_SPORT1");
     uint8_t *img;
     gsize len;
 
     if (!img_path) {
-        return;
+        return false;
     }
     if (!g_file_get_contents(img_path, (gchar **)&img, &len, NULL)) {
         error_report("cdj_bf531: cannot read '%s'", img_path);
-        return;
+        return false;
     }
 
     s->chip = bf531_new(CDJ_BF531_SDRAM, &host, stderr);
@@ -143,7 +164,7 @@ void cdj2000_display_init(void)
         bf531_free(s->chip);
         s->chip = NULL;
         g_free(img);
-        return;
+        return false;
     }
     g_free(img);
 
@@ -158,4 +179,5 @@ void cdj2000_display_init(void)
 
     s->tick = timer_new_ns(QEMU_CLOCK_VIRTUAL, cdj_bf531_tick, s);
     timer_mod(s->tick, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
+    return true;
 }

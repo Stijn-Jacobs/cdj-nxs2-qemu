@@ -185,6 +185,7 @@ static uint64_t hpi_read(void *opaque, hwaddr off, unsigned size)
     uint32_t addr;
     uint8_t *p;
     uint64_t val = 0;
+    CDJ_DSP_HOST_GUARD(&s->host);
 
     if (off == 0) {
         return cdj_dsp_host_hpic(&s->host);
@@ -208,6 +209,7 @@ static void hpi_write(void *opaque, hwaddr off, uint64_t val, unsigned size)
     CdjC6727 *s = opaque;
     uint32_t addr;
     uint8_t *p;
+    CDJ_DSP_HOST_GUARD(&s->host);
 
     if (off == 0) {
         cdj_dsp_host_main_hpic(&s->host, val);

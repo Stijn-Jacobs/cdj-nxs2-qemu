@@ -244,6 +244,7 @@ static uint64_t hpi_read(void *opaque, hwaddr off, unsigned size)
     CdjC6747 *s = opaque;
     uint8_t *p;
     uint32_t val;
+    CDJ_DSP_HOST_GUARD(&s->host);
 
     switch (off >> 18) {
     case 0:
@@ -266,6 +267,7 @@ static void hpi_write(void *opaque, hwaddr off, uint64_t val, unsigned size)
 {
     CdjC6747 *s = opaque;
     uint8_t *p;
+    CDJ_DSP_HOST_GUARD(&s->host);
 
     switch (off >> 18) {
     case 0:
