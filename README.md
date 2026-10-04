@@ -249,8 +249,6 @@ Each window drives its own deck.
 | `V` | SLIP | `Z` | REVERSE |
 | `J` | JOG MODE | | |
 
-The CDJ-2000 window takes the same keys where the panel report has a bit for them: Space, `C`, `,` `.` `[` `]`, `Enter`/`→`, `Esc`/`←`/`Backspace`, `B`, `T`, `I`, `M`, `U`, `L`, `D`, the arrow keys for the knob, and `F` for its extra SD source. Loop, slip, reverse, sync, master, tempo range, master tempo and jog mode are left out until their bits are measured.
-
 The mouse is the touch screen. A typical start: `U` (or click the source), `↓`
 to a track, `Enter` to load, `Space` to play.
 
