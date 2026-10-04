@@ -64,7 +64,7 @@ real update (firmware 1.87). The broadcasts go through the same firmware
 routine as the Pro DJ Link beat packet, from MAIN's Pro DJ Link socket; the
 listener is a second socket of the firmware's own UDP layer, opened and polled
 with the firmware's calls, and sends from port 65023. It is a firmware patch
-like the other [mods](../README.md#mods).
+like the other [mods](../../README.md#mods).
 
 **What is verified.** The patch sites are found by signature in firmware 1.87,
 and the routines are run in an SH-4 interpreter against packets decoded from
@@ -74,4 +74,4 @@ listener answers Metrics and MetaData, but to the port a request came from
 rather than the listener port Arena names in it, so Arena does not show the
 BPM or the title yet. None of it has been tried on a real deck.
 
-Back to the [mods](../README.md#mods).
+Back to the [mods](../../README.md#mods).

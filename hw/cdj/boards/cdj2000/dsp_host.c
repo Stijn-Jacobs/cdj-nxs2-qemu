@@ -8,6 +8,15 @@
  * cannot keep up the core lags; the worst lag is reported at exit.
  *
  * MAIN's host-port accesses and a chunk never run at the same time (@lock).
+ * On the chip the UHPI is a bus master of its own: a host access takes no CPU
+ * cycles and is served while the CPU runs, so the core runs a chunk in slices
+ * and hands the lock to a waiting MAIN between two. With whole chunks under
+ * the lock each of MAIN's accesses waited about half a millisecond: on the
+ * CDJ-2000, MAIN spent 286 s of a 366 s run waiting, its player task
+ * (priority 4, in the window on every pass) looked busy for all of it, and the
+ * lower-priority media manager took five minutes to read the USB stick's
+ * database instead of seconds.
+ *
  * On the board the DSP follows the command pins within microseconds, so every
  * change of command runs the core in small pieces until the DSP has seen it:
  * for a command, until it answers on HINT; for the drop back to 0, until it
@@ -18,6 +27,7 @@
 
 #define QUANTUM_NS      (1000 * 1000)
 #define CHUNK_NS        (100 * 1000)
+#define SLICE_CYCLES    2000
 #define REACT_STEP      2000
 #define REACT_MAX       (4 * 1000 * 1000)
 
@@ -44,7 +54,7 @@ static bool host_stopped(CdjDspHost *h, c66x_stop stop)
 static void *host_thread(void *opaque)
 {
     CdjDspHost *h = opaque;
-    uint64_t done;
+    uint64_t done, run;
 
     while (qatomic_read(&h->running)) {
         int64_t virt = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
@@ -58,12 +68,17 @@ static void *host_thread(void *opaque)
             continue;
         }
         h->lag_max_ns = MAX(h->lag_max_ns, virt - h->dsp_ns);
-        done = 0;
         qemu_mutex_lock(&h->lock);
-        host_stopped(h, c66x_step(h->core, h->cycles_per_chunk, &done));
+        for (run = 0; run < h->cycles_per_chunk
+                      && !qatomic_read(&h->host_waiting); run += SLICE_CYCLES) {
+            done = 0;
+            if (host_stopped(h, c66x_step(h->core, SLICE_CYCLES, &done))) {
+                break;
+            }
+        }
         qemu_mutex_unlock(&h->lock);
-        /* An idle core has waited out the rest of the chunk. */
-        h->dsp_ns += CHUNK_NS;
+        /* An idle core has waited out the rest of its slices. */
+        h->dsp_ns += CHUNK_NS * run / h->cycles_per_chunk;
     }
     return NULL;
 }
@@ -78,6 +93,7 @@ static void *host_thread(void *opaque)
 void cdj_dsp_host_lock(CdjDspHost *h)
 {
     bool had_bql = bql_locked();
+    int64_t t0 = get_clock();
 
     if (had_bql) {
         bql_unlock();
@@ -86,6 +102,8 @@ void cdj_dsp_host_lock(CdjDspHost *h)
     qemu_mutex_lock(&h->lock);
     qatomic_dec(&h->host_waiting);
     h->host_had_bql = had_bql;
+    h->host_locks++;
+    h->host_wait_ns += get_clock() - t0;
 }
 
 void cdj_dsp_host_unlock(CdjDspHost *h)
@@ -121,6 +139,9 @@ static void set_hpic(CdjDspHost *h, uint32_t hpic)
 {
     if ((hpic ^ h->hpic) & HPIC_HINT) {
         h->hint_edges++;
+    }
+    if (h->core && h->dspint_line && (hpic ^ h->hpic) & HPIC_DSPINT) {
+        c66x_set_irq(h->core, h->dspint_line, hpic & HPIC_DSPINT);
     }
     qatomic_set(&h->hpic, hpic);
 }
@@ -309,6 +330,9 @@ void cdj_dsp_host_report(CdjDspHost *h)
                 h->name, h->commands, h->hint_edges, h->hpic, h->react_cycles);
     info_report("%s: at most %" PRId64 " ms behind the virtual clock",
                 h->name, h->lag_max_ns / SCALE_MS);
+    info_report("%s: MAIN waited %" PRId64 " ms for the core over %" PRIu64
+                " host-port accesses", h->name, h->host_wait_ns / SCALE_MS,
+                h->host_locks);
     print_counts(h->name, "bus read ", &h->busr);
     print_counts(h->name, "bus write", &h->busw);
     cdj_dsp_host_unlock(h);

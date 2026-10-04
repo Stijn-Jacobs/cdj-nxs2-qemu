@@ -27,6 +27,10 @@
  * handshake itself is in dsp_host.c. The ROM loader is not modelled: a
  * write of the start word is taken as its signal.
  *
+ * MAIN's DSPINT is the core's INT6: the application enables INT6 in IER, and
+ * the INT6 handler (vector at 0x100000C0, ISTP 0x10000000) is the one that
+ * takes MAIN's command block and then writes 1 to HPIC.DSPINT to clear it.
+ *
  * Image B's 0x8004CDA0 moves A4 into control register 9 (mvc at 0x8004CDB0),
  * which the core does not decode; a hook stands in for that function and
  * counts the values.
@@ -58,6 +62,8 @@
 #define MCASP_STRIDE    0x01000000
 #define SPI_CMD_BIT0    (1u << 9)       /* MAIN's command bit 0 */
 #define SPI_CMD_BIT1    (1u << 11)      /* MAIN's command bit 1 */
+
+#define DSPINT_IRQ      6
 
 #define WIN_OFF         0xC0000
 #define WIN_SIZE        0x10000
@@ -276,6 +282,7 @@ const CdjDspWires *cdj_c6727_init(MemoryRegion *sysmem, hwaddr hpi_base)
      * first image before the DSP has run anything of it. */
     s->cfg[CFG_HPIAMSB / 4] = IRAM_BASE >> 24;
     cdj_dsp_host_init(&s->host, "c6727", "C6727", 300, set_command_pins, s);
+    s->host.dspint_line = DSPINT_IRQ;
     s->mcasps = (DspMcasps){ MCASP_BASE, MCASP_STRIDE };
 
     memory_region_init_io(&s->iomem, NULL, &hpi_ops, s, "c6727.hpi", 0x100000);

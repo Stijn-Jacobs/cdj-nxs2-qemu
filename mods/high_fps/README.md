@@ -27,4 +27,4 @@ it, so the BROWSE list's scrolling title is held to its old pace.
 patch: a real deck is paced by its own hardware, and the mod does not appear in
 `mods/patch_update.py`.
 
-Back to the [mods](../README.md#mods).
+Back to the [mods](../../README.md#mods).

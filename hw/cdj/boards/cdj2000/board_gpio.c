@@ -12,6 +12,11 @@
  * an input that reads 1 while the display processor is fitted: with it clear
  * the start-up panel check (0x0428D3CC) leaves the display mode word at 0 and
  * the send task (0x04215722) never counts its idle passes towards a packet.
+ * Bit 4 is an active-low input that only the tick hook reads (0x042918D0,
+ * 0x042FA512 on the CDJ-2000NXS): every 51st tick that finds it low posts
+ * event 0x92, which the display's message table maps to "USB Error. Remove
+ * the device.", the same poll the CDJ-2000NXS2 runs on the overcurrent pin
+ * of its USB power switch. Nothing writes it, so it reads high: no fault.
  * +0x48 bit 2 is the display processor's PF1 when it runs: the GUI link
  * tasks (0x04215268, 0x0421566E) start the link once it reads 0, and the
  * answer handler (0x042134CC) accepts an answer only while it reads 1.
@@ -28,6 +33,7 @@
 #define DISPLAY_PF1     (1u << 2)
 #define REG_PANEL       0x60
 #define PANEL_DISPLAY_UP (1u << 1)
+#define PANEL_USB_OC_N  (1u << 4)
 
 typedef struct CdjLatch {
     MemoryRegion iomem;
@@ -52,6 +58,9 @@ static uint64_t latch_read(void *opaque, hwaddr off, unsigned size)
         if (cdj2000_display_pf1()) {
             val |= DISPLAY_PF1;
         }
+    }
+    if (off == REG_PANEL) {
+        val |= PANEL_USB_OC_N;
     }
     return val;
 }

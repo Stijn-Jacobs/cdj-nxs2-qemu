@@ -659,10 +659,40 @@ uint16_t bf531_flags(const bf531 *s)
 
 /* LDR block: u32 destination, u32 byte count, u16 flags; bit 0 zero-fill
  * (no payload), bit 4 ignore (payload skipped), bit 15 the last block. */
+/* A whole .UPD starts with the section lengths as decimal lines; the display
+ * program is the first section. A bare section starts with its title. */
+static void first_section(const uint8_t **img, size_t *len)
+{
+    const uint8_t *p = *img, *end = *img + *len;
+    size_t first = 0;
+    bool seen = false;
+
+    while (p < end && *p >= '0' && *p <= '9') {
+        size_t n = 0;
+
+        while (p < end && *p >= '0' && *p <= '9') {
+            n = n * 10 + *p++ - '0';
+        }
+        if (end - p < 2 || p[0] != '\r' || p[1] != '\n') {
+            return;
+        }
+        p += 2;
+        if (!seen) {
+            first = n;
+            seen = true;
+        }
+    }
+    if (seen && first <= (size_t)(end - p)) {
+        *img = p;
+        *len = first;
+    }
+}
+
 int bf531_load_update(bf531 *s, const uint8_t *img, size_t len)
 {
     size_t off = 0x20;
 
+    first_section(&img, &len);
     if (len - off > FLASH_SIZE - FLASH_APP) {
         return -1;
     }

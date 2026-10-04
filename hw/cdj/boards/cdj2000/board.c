@@ -106,8 +106,16 @@ static void *sh7763_kick_main_loop(void *opaque)
 }
 #endif
 
+/* What the check at 0x0410FE7C needs from the auth chip. */
+static const CdjAuthAnswer nxs_auth_answers[] = {
+    { 0x00, 0x05 },
+    { 0x01, 0x01 },
+};
+
 static void sh7763_board_init(MachineState *machine, const CdjBoardDesc *desc,
-                              const CdjDspWires *dsp)
+                              const CdjDspWires *dsp,
+                              const Cdj2000Display *display_desc,
+                              bool auth_chip)
 {
     MemoryRegion *sysmem = get_system_memory();
     SuperHCPU *cpu = cdj_board_init(machine, desc);
@@ -175,7 +183,7 @@ static void sh7763_board_init(MachineState *machine, const CdjBoardDesc *desc,
     /* The DMA-fed port to the front-panel microcontroller (M16C). */
     cdj2000_panel_init(sysmem, 0xFFE20000);
     /* The BF531 display processor, its own window; off unless asked for. */
-    display = cdj2000_display_init();
+    display = cdj2000_display_init(display_desc);
 
     /* Same SH7724 fast-EtherC/E-DMAC layout as the NXS2's, at this SoC's own
      * base; its MDIO read routine needs one extra turnaround lead-in bit
@@ -183,6 +191,10 @@ static void sh7763_board_init(MachineState *machine, const CdjBoardDesc *desc,
     cdj_ether_init(sysmem, "sh7763.ether", 0xFEF00000,
                   cdj_count_irq(irq[S63_GETHER0], "GETHER0"), 1);
     cdj2000_sdhi_init(sysmem);
+    if (auth_chip) {
+        cdj2000_iic_init(sysmem, nxs_auth_answers,
+                         ARRAY_SIZE(nxs_auth_answers));
+    }
     /* The ATAPI (CD drive) task file and control block, not GPIO: the
      * IDENTIFY sequence (0x042971EC) programs this range with the SH7724
      * ATAPI_CONTROL* layout, offset for offset. GPIO/PFC is the next 64 KiB.
@@ -230,7 +242,8 @@ static void cdj2000nxs_init(MachineState *machine)
 {
     /* The NXS's DSP is a C674x behind its host port, addressed through HPIA. */
     sh7763_board_init(machine, &cdj2000nxs_board,
-                      cdj_c6747_init(get_system_memory(), 0x0C000000));
+                      cdj_c6747_init(get_system_memory(), 0x0C000000),
+                      &cdj2000nxs_display, true);
 }
 
 static void cdj2000_init(MachineState *machine)
@@ -239,7 +252,8 @@ static void cdj2000_init(MachineState *machine)
      * uncached area-3 window at 0x0C0C0000 (454 references in the image) is
      * DSP memory. */
     sh7763_board_init(machine, &cdj2000_board,
-                      cdj_c6727_init(get_system_memory(), 0x0C000000));
+                      cdj_c6727_init(get_system_memory(), 0x0C000000),
+                      &cdj2000_display, false);
 }
 
 /* The SH7763 is SH-4A; QEMU only accepts icbi/synco on a CPU with

@@ -51,6 +51,7 @@ MAX_KNOWN = 4          # registers with a compile-time value carried in the stat
 KNOWN_AGE = 3          # ... for this many commits after the write that made it known
 CHAIN_DEPTH = 24       # a region hands over to another root only this many cycles in
 CAP_MAX = 16           # C66X_JIT_CAP
+RET_REG = 35           # B3, the return-address register of the TI C6000 calling convention
 WIDE_MEM = False      # opt-in paired RAM accesses; preserve the default output
 # the module is compiled with the same float semantics as the core
 JIT_CFLAGS = ["-std=gnu11", "-fPIC", "-fvisibility=hidden", "-ffp-contract=off", "-frounding-math",
@@ -275,22 +276,30 @@ def compilable(dec, pk):
 #   imm   : last cycle's delay-0 writes, committed after the ring;  m<j>, mf<j>
 #   queue : branches in flight, oldest first;  bt<k> dynamic target, bf<k> flag
 #   known : registers whose committed value is a compile-time constant
-# A flag exists only when the write or branch was conditional.
+#   ret   : (--ret-predict) B3's committed value when a constant return address
+#           put it there and nothing has written, stored or branched through B3
+#           since; a branch through B3 carries it as the queue entry's "tpred"
+# A flag exists only when the write or branch was conditional. ret and tpred
+# join the key only when set, so without --ret-predict the module is unchanged.
 
 class State:
-    __slots__ = ("pc", "mcnop", "queue", "ring", "imm", "pre", "known", "pc_expr")
+    __slots__ = ("pc", "mcnop", "queue", "ring", "imm", "pre", "known", "pc_expr", "ret", "pred")
 
-    def __init__(self, pc, mcnop, queue, ring, imm, pre, known):
+    def __init__(self, pc, mcnop, queue, ring, imm, pre, known, ret=None):
         self.pc, self.mcnop, self.queue, self.ring, self.imm, self.pre = pc, mcnop, queue, ring, imm, pre
         self.known = known
         self.pc_expr = None
+        self.ret = ret
+        self.pred = None          # the predicted value of pc_expr, when pc is dynamic
 
     def key(self):
-        return (self.pc, self.mcnop,
-                tuple((q["rem"], q["tconst"], q["flag"] is not None) for q in self.queue),
-                tuple((w["land"], w["kind"], w["idx"], w["flag"] is not None, w["const"]) for w in self.ring),
-                tuple((w["kind"], w["idx"], w["flag"] is not None, w["const"]) for w in self.imm),
-                self.pre, tuple(sorted(self.known.items())))
+        k = (self.pc, self.mcnop,
+             tuple((q["rem"], q["tconst"], q["flag"] is not None) + ((q["tpred"],) if q.get("tpred") is not None else ())
+                   for q in self.queue),
+             tuple((w["land"], w["kind"], w["idx"], w["flag"] is not None, w["const"]) for w in self.ring),
+             tuple((w["kind"], w["idx"], w["flag"] is not None, w["const"]) for w in self.imm),
+             self.pre, tuple(sorted(self.known.items())))
+        return k if self.ret is None else k + (self.ret,)
 
 
 def guarded(flag, stmt):
@@ -318,6 +327,9 @@ class RegionGen:
         self.cold = []            # exit stubs, emitted after every state's code
         self.kernel = False
         self.ins_name = "ins"     # the array of captured instruction pointers
+        self.ret_cap = 0          # --ret-predict: return addresses carried into one pc (0 = off)
+        self.ret_seen = {}        # pc -> return addresses already carried into it
+        self.cur_ret = None       # B3's tracked value during the cycle being emitted
 
     def t(self):
         self.tmp += 1
@@ -359,8 +371,21 @@ class RegionGen:
     # --- a state reached: jump to its code, or exit where it cannot run compiled
     def transition(self, st, ind="    "):
         if st.pc is None:
+            if st.pred is not None and self.worth_predicting(st.pred):
+                # Behind the compare this is exactly a constant branch landing at
+                # st.pred; a miss exits as any computed branch does.
+                self.emit(ind + "if (__builtin_expect(%s == %s, 1)) {" % (st.pc_expr, u32(st.pred)))
+                self.transition(State(st.pred, st.mcnop, st.queue, st.ring, st.imm, st.pre, {}), ind + "    ")
+                self.emit(ind + "}")
             self.materialize(st, st.pc_expr, ind, EXIT_DYNPC, (self.cur_pc, "dynamic pc (from here)"))
             return
+        if st.ret is not None:
+            seen = self.ret_seen.setdefault(st.pc, set())
+            if st.ret not in seen and len(seen) >= self.ret_cap:
+                # a callee reached from many call sites: share its states, stop predicting
+                st = State(st.pc, st.mcnop, st.queue, st.ring, st.imm, st.pre, st.known)
+            else:
+                seen.add(st.ret)
         if st.mcnop == 0:
             why = compilable(self.dec, self.dec.packet(st.pc))
             if why:
@@ -412,6 +437,12 @@ class RegionGen:
     def goto(self, label):
         return "goto L%d;" % label
 
+    def worth_predicting(self, pc):
+        return True
+
+    def worth_carrying(self, ret):
+        return True
+
     @staticmethod
     def positional(st):
         ring = [dict(w, val=(u32(w["const"]) if w["const"] is not None else "r%d" % i),
@@ -420,7 +451,7 @@ class RegionGen:
                     flag=("mf%d" % j if w["flag"] else None)) for j, w in enumerate(st.imm)]
         queue = [dict(q, tvar=(None if q["tconst"] is not None else "bt%d" % k),
                       flag=("bf%d" % k if q["flag"] else None)) for k, q in enumerate(st.queue)]
-        return State(st.pc, st.mcnop, queue, ring, imm, st.pre, dict(st.known))
+        return State(st.pc, st.mcnop, queue, ring, imm, st.pre, dict(st.known), st.ret)
 
     # --- one cycle
     def cycle(self, label, st, root=False):
@@ -431,6 +462,9 @@ class RegionGen:
         e("L%d: ; /* pc 0x%08x mcnop %d pre %d q%d r%d m%d known %d */" % (
             label, st.pc, st.mcnop, st.pre, len(st.queue), len(st.ring), len(st.imm), len(st.known)))
         known = dict(st.known)
+        # A stale ret costs a missed prediction, never a wrong landing (it is only
+        # ever compared), so writes landing from before entry need not clear it.
+        ret = st.ret
         ring = [dict(w) for w in st.ring]
         post_used = False
         if not root:
@@ -450,6 +484,9 @@ class RegionGen:
                     known.pop(w["idx"], None)
                     if w["const"] is not None and not w["flag"]:
                         known[w["idx"]] = (w["const"], 0)
+                    if w["idx"] == RET_REG:
+                        ret = (w["const"] if self.ret_cap and not w["flag"] and w["const"] is not None
+                               and self.worth_carrying(w["const"]) else None)
                 else:
                     e("    " + guarded(w["flag"], "c->api->ctrl_write(c, %d, %s);" % (w["idx"], w["val"])))
                     ctrl.append(w["flag"] or "1")
@@ -463,7 +500,7 @@ class RegionGen:
                 if any(not w["flag"] for w in hits):
                     e("    c->st.stalls++; c->wq_base--; c->cycle++;")
                     self.transition(State(st.pc, st.mcnop, [dict(q) for q in st.queue], ring, [], st.pre,
-                                          self.trim(known)))
+                                          self.trim(known), ret))
                     self.stubs(label, st, post_used)
                     return
                 if hits:
@@ -481,9 +518,11 @@ class RegionGen:
             e("    c->exec_pc = %s;" % u32(pk.pc))
             if stores and not pk.load:
                 e("    c->store_now = 1;")
+            self.cur_ret = ret
             for ins in pk.insns:
                 self.deps.add(ins.addr & ~31)
                 self.insn(ins, pk, new_ring, new_imm, queue, known)
+            ret = self.cur_ret
             if stores and not pk.load:
                 e("    c->store_now = 0;")
             elif stores:
@@ -496,7 +535,7 @@ class RegionGen:
         ring = ring + new_ring
         for q in queue:
             q["rem"] -= 1
-        self.land(queue, ring, new_imm, next_pc, mcnop, pre, self.trim(known), "    ")
+        self.land(queue, ring, new_imm, next_pc, mcnop, pre, self.trim(known), "    ", ret)
         self.stubs(label, st, post_used)
 
     @staticmethod
@@ -529,21 +568,23 @@ class RegionGen:
     def root_label(self, label):
         return label == 0
 
-    def land(self, queue, ring, imm, next_pc, mcnop, pre, known, ind):
+    def land(self, queue, ring, imm, next_pc, mcnop, pre, known, ind, ret=None):
         """land_branches: the oldest branch present lands when its slots ran out."""
         if not queue or (queue[0]["rem"] > 0 and queue[0]["flag"] is None):
-            self.transition(State(next_pc, mcnop, queue, ring, imm, pre, dict(known)), ind)
+            self.transition(State(next_pc, mcnop, queue, ring, imm, pre, dict(known), ret), ind)
             return
         q0, rest = queue[0], queue[1:]
 
         def present(ind2):
             if q0["rem"] <= 0:
-                st = State(q0["tconst"], 0, rest, ring, imm, pre, dict(known))
+                st = State(q0["tconst"], 0, rest, ring, imm, pre, dict(known), ret)
                 if q0["tconst"] is None:
                     st.pc_expr = q0["tvar"]
+                    st.pred = q0.get("tpred")
                 self.transition(st, ind2)
             else:
-                self.transition(State(next_pc, mcnop, [dict(q0, flag=None)] + rest, ring, imm, pre, dict(known)), ind2)
+                self.transition(State(next_pc, mcnop, [dict(q0, flag=None)] + rest, ring, imm, pre, dict(known), ret),
+                                ind2)
 
         if q0["flag"] is None:
             present(ind)
@@ -551,7 +592,7 @@ class RegionGen:
         self.emit(ind + "if (%s) {" % q0["flag"])
         present(ind + "    ")
         self.emit(ind + "} else {")
-        self.land(rest, ring, imm, next_pc, mcnop, pre, known, ind + "    ")
+        self.land(rest, ring, imm, next_pc, mcnop, pre, known, ind + "    ", ret)
         self.emit(ind + "}")
 
     # --- instructions
@@ -671,7 +712,10 @@ class RegionGen:
             if k is None:
                 tv = self.t()
                 e("    uint32_t %s = %s;" % (tv, reg(0)))
-                queue.append({"rem": 6, "tconst": None, "tvar": tv, "flag": flag})
+                q = {"rem": 6, "tconst": None, "tvar": tv, "flag": flag}
+                if ops[0].reg == RET_REG and self.cur_ret is not None:
+                    q["tpred"], self.cur_ret = self.cur_ret, None
+                queue.append(q)
             else:
                 queue.append({"rem": 6, "tconst": k, "tvar": None, "flag": flag})
             return
@@ -703,6 +747,8 @@ class RegionGen:
 
         if f == "store":
             b, s = ops[1].reg, ops[0]
+            if RET_REG in (s.reg, s.reg_hi if dw else -1):
+                self.cur_ret = None     # B3 saved: a non-leaf callee, not worth copying per caller
             body = ["uint32_t base = c->reg[%d], ea = base + %s, v = c->reg[%d];" % (b, u32(ins.ea_delta), s.reg)]
             if wb:
                 wv = self.t()
@@ -1162,6 +1208,15 @@ class ModuleGen(RegionGen):
     def root_label(self, label):
         return label in self.entry_labels
 
+    def worth_predicting(self, pc):
+        """A predicted landing that would only exit cold is code for nothing."""
+        return (self.prof_n.get(pc, 0) >= self.cold_min or pc in self.entries
+                or State(pc, 0, [], [], [], 0, {}).key() in self.labels)
+
+    def worth_carrying(self, ret):
+        """Copy a callee per caller only for a caller that runs as often as a root must."""
+        return self.prof_n.get(ret, 0) >= self.ret_min
+
     def transition(self, st, ind="    "):
         if (st.pc is not None and st.pc in self.dec.have and not st.queue and st.mcnop == 0
                 and st.key() not in self.labels):
@@ -1266,6 +1321,8 @@ class ModuleGen(RegionGen):
 
     @staticmethod
     def is_clean(key):
+        if len(key) != 7:
+            return False          # one caller's copy of a callee (--ret-predict) is never an entry
         pc, mcnop, queue, ring, imm, pre, known = key
         return pc is not None and not mcnop and not queue and not ring and not imm and not pre and not known
 
@@ -2385,6 +2442,9 @@ def main():
     ap.add_argument("--kind-w", dest="kind_w", type=int, default=-1,
                     help="handler number of SPLOOPW (default: read from c66x_priv.h)")
     ap.add_argument("--census", type=int, default=0, help="print the top N uncompilable reasons and stop")
+    ap.add_argument("--ret-predict", dest="ret_predict", type=int, default=0,
+                    help="carry a constant call's return address in the state and compile the return's landing "
+                         "behind a compare, for callees reached from at most N call sites (0 = off)")
     ap.add_argument("--idle-head", dest="idle_head", type=lambda x: int(x, 0), default=None,
                     help="the busy-wait head regions stop at (the machine's CDJ_C6X_IDLE, 0x80076F00)")
     a = ap.parse_args()
@@ -2461,6 +2521,7 @@ def main():
     sites, table, nodes, codes, extern = [], [], 0, [], []
     mg = ModuleGen(dec, sites, a.nodes, a.total)
     mg.cold_min = a.cold
+    mg.ret_cap, mg.ret_min = a.ret_predict, a.min
     mg.fn_nodes = a.fn_nodes
     mg.clean = a.clean
     for pc in roots:

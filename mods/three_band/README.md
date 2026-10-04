@@ -39,4 +39,4 @@ in the emulator. Drawing from the track's real 3-band data has been tested
 offline only, against the byte layouts the firmware uses. It has not run on a
 real deck, and has not been tried on a range of tracks.
 
-Back to the [mods](../README.md#mods).
+Back to the [mods](../../README.md#mods).

@@ -29,6 +29,7 @@ generic -- see sigpatch.py). That reading fits every record of v1.80 and
 v1.81, but the boot loader that walks the table is not in the image, so it is
 inferred, not read.
 """
+import glob
 import os
 import subprocess
 import sys
@@ -91,11 +92,12 @@ MODS = {
 
 
 def source(name):
-    return os.path.join(HERE, 'gui_%s.s' % name)
+    """Each routine sits in its own mod's folder, mods/<mod>/."""
+    return glob.glob(os.path.join(HERE, '*', 'gui_%s.s' % name))[0]
 
 
 def blob_path(name):
-    return os.path.join(HERE, 'gui_%s.bin' % name)
+    return source(name)[:-2] + '.bin'
 
 
 def patch(data, names):

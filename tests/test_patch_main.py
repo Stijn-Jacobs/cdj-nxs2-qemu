@@ -324,7 +324,7 @@ def test_real_main_dummy_mod_lands_in_the_confirmed_code_cave(tmp_path, monkeypa
 
 
 @needs_real_main
-def test_patch_flash_erases_its_window_and_leaves_everything_else_alone(tmp_path):
+def test_patch_flash_erases_its_window_and_leaves_everything_else_alone(tmp_path, monkeypatch):
     section = open(REAL_SECTION3, 'rb').read()
     settings = tmp_path / 'settings.bin'
     settings.write_bytes(b'\xff' * 0x2000)
@@ -340,18 +340,13 @@ def test_patch_flash_erases_its_window_and_leaves_everything_else_alone(tmp_path
     sig = list(struct.unpack_from('<8H', image, off))
     dummy = Mod(what='test-only dummy', target='main', fw_versions=('1.87',),
                sig=sig, start=0, end=len(sig), args=[], literal=False)
-    # patch_flash() goes through patch_main.patch(), whose blob_path() is
-    # fixed to mods/ -- unlike the direct sigpatch.patch() calls elsewhere in
-    # this file, this one needs the routine there, not under tmp_path.
-    blob = patch_main.blob_path('dummy')
-    with open(blob, 'wb') as f:
-        f.write(b'\x00\x09' * 2)
-    patch_main.MODS['dummy'] = dummy
-    try:
-        new_flat = patch_main.patch_flash(orig_flat, ['dummy'])
-    finally:
-        del patch_main.MODS['dummy']
-        os.remove(blob)
+    # patch_flash() goes through patch_main.patch(), which looks the routine
+    # up with patch_main.blob_path(), so point that at tmp_path.
+    blob = tmp_path / 'dummy.bin'
+    blob.write_bytes(b'\x00\x09' * 2)
+    monkeypatch.setattr(patch_main, 'blob_path', lambda name: str(blob))
+    monkeypatch.setitem(patch_main.MODS, 'dummy', dummy)
+    new_flat = patch_main.patch_flash(orig_flat, ['dummy'])
 
     assert len(new_flat) == len(orig_flat)
     assert new_flat[:main_decode.MAIN_IMG_OFF] == orig_flat[:main_decode.MAIN_IMG_OFF]

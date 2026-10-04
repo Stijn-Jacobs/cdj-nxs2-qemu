@@ -60,11 +60,14 @@ typedef struct CdjDspHost {
     QemuMutex lock;
     unsigned host_waiting;      /* MAIN waits for @lock */
     bool host_had_bql;          /* MAIN's holder of @lock let the BQL go */
+    uint64_t host_locks;
+    int64_t host_wait_ns;
     QemuThread thread;
     int64_t dsp_ns;             /* the virtual time the core has run up to */
     int64_t lag_max_ns;
 
     uint32_t hpic;
+    int dspint_line;            /* CPU interrupt MAIN's DSPINT raises, 0 = none */
     unsigned command;
     uint64_t commands, hint_edges, react_cycles;
     uint64_t pin_reads;         /* DSP reads of the command pins */

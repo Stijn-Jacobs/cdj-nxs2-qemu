@@ -2,7 +2,9 @@
 /* The SH7763's interrupt sources, for the CDJ-2000 / CDJ-2000NXS board. */
 #ifndef CDJ_SH7763_H
 #define CDJ_SH7763_H
+#include "cdj_auth_chip.h"
 #include "cdj_common.h"
+#include "cdj_gui_keys.h"
 
 /* One source per interrupt event: sh_intc keeps one vector per source, so a
  * module's events are separate sources and its group shares their mask bit
@@ -56,7 +58,14 @@ void cdj2000_panel_init(MemoryRegion *sysmem, hwaddr addr);
 
 /* The ADSP-BF531 display processor on the other end of SPORT1. Does nothing
  * and returns false unless CDJ_BF531_UPD names a GUI image to boot it with. */
-bool cdj2000_display_init(void);
+typedef struct {
+    uint32_t sdram_size;
+    const CdjGuiKey *keys;
+    size_t key_count;
+} Cdj2000Display;
+
+extern const Cdj2000Display cdj2000_display, cdj2000nxs_display;
+bool cdj2000_display_init(const Cdj2000Display *desc);
 /* One MAIN packet for it: the 64-byte fixed part or an extension part. */
 void cdj2000_display_send(const uint8_t *pkt, size_t len);
 bool cdj2000_display_pf1(void);
@@ -70,4 +79,9 @@ void cdj2000_display_link_receive(const uint8_t *pkt, size_t len);
 
 /* The SDHI at 0xFFE40000, with no card in the slot. */
 void cdj2000_sdhi_init(MemoryRegion *sysmem);
+
+/* The I2C master at 0xFFE70000 with the authentication chip on it; answers
+ * is the chip's per-model reply table (see cdj_auth_chip.h). */
+void cdj2000_iic_init(MemoryRegion *sysmem,
+                      const CdjAuthAnswer *answers, unsigned n);
 #endif

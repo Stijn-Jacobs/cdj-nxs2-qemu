@@ -69,7 +69,7 @@ static void write_ppm(const runner *r)
     fprintf(f, "P6\n%u %u\n255\n", r->w, r->h);
     for (size_t n = 0; n < (size_t)r->w * r->h; n++) {
         uint16_t p = r->last[n];
-        uint8_t rgb[3] = { (p >> 11) << 3, ((p >> 5) & 0x3F) << 2, (p & 0x1F) << 3 };
+        uint8_t rgb[3] = { ((p >> 10) & 0x1F) << 3, ((p >> 5) & 0x1F) << 3, (p & 0x1F) << 3 };
 
         fwrite(rgb, 1, 3, f);
     }
@@ -118,7 +118,7 @@ int main(int argc, char **argv)
     bf531_host host = { .opaque = &r, .frame = on_frame,
                         .sport1_tx = on_answer };
     uint64_t cycles = 400000000, from = 0, to = 0;
-    uint32_t brk = 0;
+    uint32_t brk = 0, sdram_mib = 16;
     const char *dump = NULL;
     FILE *log = stderr;
     bfin_stop stop;
@@ -127,7 +127,7 @@ int main(int argc, char **argv)
     bf531 *s;
     int opt;
 
-    while ((opt = getopt(argc, argv, "n:t:o:b:m:qs:")) != -1) {
+    while ((opt = getopt(argc, argv, "n:t:o:b:m:qs:r:")) != -1) {
         switch (opt) {
         case 'n': cycles = strtoull(optarg, NULL, 0); break;
         case 't':
@@ -138,6 +138,7 @@ int main(int argc, char **argv)
         case 'b': brk = strtoul(optarg, NULL, 0); break;
         case 'm': dump = optarg; break;
         case 'q': log = NULL; break;
+        case 'r': sdram_mib = strtoul(optarg, NULL, 0); break;
         case 's':
             if (r.sport1_n < 16) {
                 r.sport1_len[r.sport1_n] = parse_hex(optarg, r.sport1[r.sport1_n],
@@ -146,7 +147,7 @@ int main(int argc, char **argv)
             }
             break;
         default:
-            fprintf(stderr, "usage: %s [-n cycles] [-t from:to] [-b pc] [-o frame.ppm] [-m sdram.bin] [-q] [-s hex]... update\n",
+            fprintf(stderr, "usage: %s [-n cycles] [-t from:to] [-b pc] [-o frame.ppm] [-m sdram.bin] [-r sdram_mib] [-q] [-s hex]... update\n",
                     argv[0]);
             return 2;
         }
@@ -155,7 +156,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "%s: no update section to boot\n", argv[0]);
         return 2;
     }
-    s = r.chip = bf531_new(16u << 20, &host, log);
+    s = r.chip = bf531_new(sdram_mib << 20, &host, log);
     if (r.sport1_n) {
         bf531_sport1_rx(s, r.sport1[0], r.sport1_len[0]);
         r.sport1_next = 1;

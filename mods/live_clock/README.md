@@ -31,4 +31,4 @@ measured time.
 **Emulator only.** This corrects a pacing difference of the emulated board, not
 a firmware behaviour, and does not appear in `mods/patch_update.py`.
 
-Back to the [mods](../README.md#mods).
+Back to the [mods](../../README.md#mods).

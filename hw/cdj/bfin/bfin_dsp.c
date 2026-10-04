@@ -109,6 +109,156 @@ static int32_t minmax(int32_t a, int32_t b, int max)
     return max ? (a > b ? a : b) : (a < b ? a : b);
 }
 
+/* The four bytes of a register pair that the byte ops read, starting at byte
+ * I0 (or I1) & 3 of the pair. rev swaps which register holds the low bytes. */
+static uint32_t pair_bytes(bfin_core *c, unsigned pair, int rev, unsigned ireg)
+{
+    uint32_t lo = c->r[rev ? pair + 1 : pair], hi = c->r[rev ? pair : pair + 1];
+    unsigned shift = 8 * (c->i[ireg] & 3);
+
+    return shift ? lo >> shift | hi << (32 - shift) : lo;
+}
+
+static inline unsigned byte_at(uint32_t v, unsigned n)
+{
+    return v >> 8 * n & 0xFF;
+}
+
+static uint16_t sat_u16(uint32_t v)
+{
+    return v > 0xFFFF ? 0xFFFF : v;
+}
+
+static uint8_t sat_u8(int32_t v)
+{
+    return v < 0 ? 0 : v > 255 ? 255 : v;
+}
+
+/* The byte-oriented ops of the ALU group (aopcde 18 and 20-24), which take
+ * register pairs R1:0 and R3:2. Returns 0 for an encoding that is not one. */
+static int byte_ops(bfin_core *c, unsigned aopcde, unsigned aop, unsigned hl,
+                    unsigned s, unsigned dst0, unsigned dst1, unsigned src0,
+                    unsigned src1)
+{
+    uint32_t s0, s1;
+    int pairs_ok = (src0 == 0 || src0 == 2) && (src1 == 0 || src1 == 2);
+
+    if (aopcde == 24 && aop == 0 && !s && !hl) {        /* BYTEPACK */
+        c->r[dst0] = byte_at(c->r[src0], 0) | byte_at(c->r[src0], 2) << 8 |
+                     byte_at(c->r[src1], 0) << 16 | byte_at(c->r[src1], 2) << 24;
+        return 1;
+    }
+    if (aopcde == 18 && aop == 3 && !s && !hl) {        /* DISALGNEXCPT */
+        return 1;
+    }
+    if (!pairs_ok || (hl && aopcde != 22 && aopcde != 23)) {
+        return 0;
+    }
+    switch (aopcde) {
+    case 18:                                            /* SAA */
+        if (aop || hl) {
+            return 0;
+        }
+        s0 = pair_bytes(c, src0, s, 0);
+        s1 = pair_bytes(c, src1, s, 1);
+        {
+            uint32_t acc[2] = { c->a[0], c->a[1] };
+            uint32_t sum[2] = { 0, 0 };
+
+            for (unsigned n = 0; n < 4; n++) {
+                int diff = byte_at(s0, n) - byte_at(s1, n);
+                unsigned half = n & 1;
+                uint32_t old = acc[n >> 1] >> (16 * half) & 0xFFFF;
+
+                sum[n >> 1] |= (uint32_t)sat_u16(abs(diff) + old) << (16 * half);
+            }
+            c->a[0] = sum[0];
+            c->a[1] = sum[1];
+        }
+        return 1;
+    case 20:                                            /* BYTEOP1P */
+        if (aop > 1) {
+            return 0;
+        }
+        s0 = pair_bytes(c, src0, s, 0);
+        s1 = pair_bytes(c, src1, s, 1);
+        c->r[dst0] = 0;
+        for (unsigned n = 0; n < 4; n++) {
+            c->r[dst0] |= ((byte_at(s0, n) + byte_at(s1, n) + !aop) >> 1) << 8 * n;
+        }
+        return 1;
+    case 21:                                            /* BYTEOP16P/M */
+        if (aop > 1) {
+            return 0;
+        }
+        if (dst0 == dst1) {
+            c->undef = 1;
+            return 1;
+        }
+        s0 = pair_bytes(c, src0, s, 0);
+        s1 = pair_bytes(c, src1, s, 1);
+        {
+            int sign = aop ? -1 : 1;
+            uint32_t r[4];
+
+            for (unsigned n = 0; n < 4; n++) {
+                r[n] = byte_at(s0, n) + sign * (int)byte_at(s1, n);
+            }
+            c->r[dst0] = (r[0] & 0xFFFF) | r[1] << 16;
+            c->r[dst1] = (r[2] & 0xFFFF) | r[3] << 16;
+        }
+        return 1;
+    case 22:                                            /* BYTEOP2P */
+        if (aop > 1) {
+            return 0;
+        }
+        s0 = pair_bytes(c, src0, s, 0);
+        s1 = pair_bytes(c, src1, s, 0);
+        {
+            unsigned round = !aop * 2;
+            uint32_t lo = (byte_at(s1, 1) + byte_at(s1, 0) + byte_at(s0, 1) +
+                           byte_at(s0, 0) + round) >> 2 & 0xFF;
+            uint32_t hi = (byte_at(s1, 3) + byte_at(s1, 2) + byte_at(s0, 3) +
+                           byte_at(s0, 2) + round) >> 2 & 0xFF;
+
+            c->r[dst0] = hi << (16 + 8 * hl) | lo << 8 * hl;
+        }
+        return 1;
+    case 23:                                            /* BYTEOP3P */
+        if (aop) {
+            return 0;
+        }
+        s0 = pair_bytes(c, src0, s, 0);
+        s1 = pair_bytes(c, src1, s, 1);
+        {
+            int lo = (int16_t)s0 + (int)byte_at(s1, hl ? 0 : 1);
+            int hi = (int16_t)(s0 >> 16) + (int)byte_at(s1, hl ? 2 : 3);
+
+            c->r[dst0] = (uint32_t)sat_u8(hi) << (16 + 8 * hl) |
+                         (uint32_t)sat_u8(lo) << 8 * hl;
+        }
+        return 1;
+    case 24:                                            /* BYTEUNPACK */
+        if (aop != 1 || hl) {
+            return 0;
+        }
+        if (dst0 == dst1) {
+            c->undef = 1;
+            return 1;
+        }
+        {
+            uint64_t pair = s ? (uint64_t)c->r[src0] << 32 | c->r[src0 + 1]
+                              : (uint64_t)c->r[src0 + 1] << 32 | c->r[src0];
+
+            pair >>= 8 * (c->i[0] & 3);
+            c->r[dst0] = (pair & 0xFF) | (pair >> 8 & 0xFF) << 16;
+            c->r[dst1] = (pair >> 16 & 0xFF) | (pair >> 24 & 0xFF) << 16;
+        }
+        return 1;
+    }
+    return 0;
+}
+
 void bfin_dsp32alu(bfin_core *c, uint16_t iw0, uint16_t iw1)
 {
     unsigned aopcde = iw0 & 0x1F, hl = (iw0 >> 5) & 1;
@@ -247,6 +397,9 @@ void bfin_dsp32alu(bfin_core *c, uint16_t iw0, uint16_t iw1)
         case 3: c->a[1] = c->a[1] < 0 ? sext40(-c->a[1]) : c->a[1]; return;
         }
         break;
+    }
+    if (!x && byte_ops(c, aopcde, aop, hl, s, dst0, dst1, src0, src1)) {
+        return;
     }
     c->undef = 1;
 }

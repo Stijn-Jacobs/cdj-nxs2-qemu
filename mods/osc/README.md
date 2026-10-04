@@ -86,4 +86,4 @@ unchanged. The state and event messages are tested offline only, and nothing has
 a real deck. The deck clock in `timing` is the firmware's millisecond tick
 word, not measured against a real clock.
 
-Back to the [mods](../README.md#mods).
+Back to the [mods](../../README.md#mods).

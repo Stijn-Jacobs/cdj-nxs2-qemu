@@ -18,7 +18,7 @@ environment.
 
 **Seeing it.** On the emulator the apps have to be on the deck's network, which
 on Windows means the TAP adapter: the steps, for Live and rekordbox, are in
-[Connecting rekordbox and Ableton Live on this PC](../README.md#rekordbox-ableton).
+[Connecting rekordbox and Ableton Live on this PC](../../README.md#rekordbox-ableton).
 
 ## How it works
 
@@ -44,7 +44,7 @@ does not reach the deck.
 **In the firmware.** Two MAIN patches, `abletonlink` and `abletonlinkpong`:
 `python mods/patch_update.py C2KNXS2.UPD out.UPD ableton_link`
 writes both into a real update (firmware 1.87). It is a firmware patch like
-the other [mods](../README.md#mods).
+the other [mods](../../README.md#mods).
 
 **What is verified.** On the emulated deck, live: one announcement per beat at
 the deck's tempo, every ping answered, the deck's beat timing unchanged, Live 12
@@ -52,4 +52,4 @@ showing `1 Link` with its tempo following the deck's, and rekordbox in
 Performance mode showing the deck as a Link peer and syncing. Not tried on a
 real deck.
 
-Back to the [mods](../README.md#mods).
+Back to the [mods](../../README.md#mods).

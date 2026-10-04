@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "cdj.h"
 #include "cdj_getenv.h"
+#include "cdj_auth_chip.h"
 /* ---------------------------------------------------------------------------
  * IIC0 and IIC1, I2C bus interface (manual section 32).
  *
@@ -93,9 +94,7 @@ typedef struct CdjIicState {
     uint8_t addr7;              /* 7-bit address of the current transfer    */
     bool addressed;
     bool reading;               /* R/W bit of the address byte              */
-    uint8_t rx;                 /* byte the slave hands back on a read      */
-    uint8_t reply[256];         /* read answer, indexed by the last byte written */
-    uint8_t cmd;                /* last data byte written to an addressed slave */
+    CdjAuthChip chip;           /* answers a read after a written command   */
     bool rx_hold;               /* a received byte is held at the ack point */
     bool stop_pending;          /* stop asked for at that ack point         */
 
@@ -125,6 +124,11 @@ typedef struct CdjIicState {
 /* The DSP bring-up channel (IIC1), when modelled. The PFC uses its byte
  * count to decide when to report the DSP ready. */
 static CdjIicState *cdj_iic_dsp_channel;
+
+static const CdjAuthAnswer nxs2_auth_answers[] = {
+    { 0x00, 0x05 },
+    { 0x01, 0x01 },
+};
 
 uint64_t cdj_dsp_i2c_tx_bytes(void)
 {
@@ -353,7 +357,7 @@ static void cdj_iic_tx_byte(CdjIicState *s, uint8_t v)
         }
         /* The auth chip answers a read according to the byte written in
          * the previous transaction; see cdj_iic_rx_byte. */
-        s->cmd = v;
+        cdj_auth_chip_write(&s->chip, v);
         if (s->debug) {
             info_report("%s: tx 0x%02x", s->name, v);
         }
@@ -362,7 +366,7 @@ static void cdj_iic_tx_byte(CdjIicState *s, uint8_t v)
     cdj_iic_update_irq(s);
 }
 
-/* Hand the guest the received byte: s->reply[] indexed by the last byte
+/* Hand the guest the received byte, the auth chip's answer to the last byte
  * written (CDJ_IIC_REPLY, CDJ_IIC_RX_BYTE). The DSP transaction itself is
  * write-only. */
 static uint8_t cdj_iic_rx_byte(CdjIicState *s)
@@ -372,7 +376,7 @@ static uint8_t cdj_iic_rx_byte(CdjIicState *s)
     if (!(s->status & CDJ_ICSR_BUSY) || (s->reg[CDJ_IIC_ICCR] & CDJ_ICCR_TRS)) {
         return 0xFF;
     }
-    v = s->reply[s->cmd];
+    v = cdj_auth_chip_read(&s->chip);
     s->status &= ~CDJ_ICSR_DTE;
     s->rx_bytes++;
     s->rx_hold = false;
@@ -394,7 +398,7 @@ static uint8_t cdj_iic_rx_byte(CdjIicState *s)
     }
     cdj_iic_update_irq(s);
     if (s->debug) {
-        info_report("%s: rx 0x%02x (answer to cmd 0x%02x)", s->name, v, s->cmd);
+        info_report("%s: rx 0x%02x (answer to cmd 0x%02x)", s->name, v, s->chip.cmd);
     }
     return v;
 }
@@ -657,7 +661,6 @@ void cdj_iic(MemoryRegion *sysmem, const char *name, hwaddr addr,
 
     s->name = g_strdup(name);
     s->ch = ch;
-    s->rx = 0xFF;
     s->exit.notify = cdj_iic_summary;
     qemu_add_exit_notifier(&s->exit);
 
@@ -686,37 +689,11 @@ void cdj_iic(MemoryRegion *sysmem, const char *name, hwaddr addr,
                 }
             }
         }
-        /* Default read answer; 0xFF is ICDR's reset value. */
-        e = getenv("CDJ_IIC_RX_BYTE");
-        s->rx = e ? (uint8_t)strtoul(e, NULL, 0) : 0xFF;
-        memset(s->reply, s->rx, sizeof(s->reply));
         /* The auth-chip check at 0x08214D98 writes 0x00 and expects 0x05
          * back, then writes 0x01 and expects 0x01. Failing it raises E-7206
          * AUTH CHIP ERROR. */
-        s->reply[0x00] = 0x05;
-        s->reply[0x01] = 0x01;
-        e = getenv("CDJ_IIC_REPLY");
-        if (e) {
-            const char *p = e;
-
-            while (*p) {
-                char *end;
-                unsigned long cmd = strtoul(p, &end, 0);
-
-                if (end == p || *end != ':') {
-                    break;      /* not a cmd:answer pair -- stop rather than spin */
-                }
-                p = end + 1;
-                s->reply[cmd & 0xFF] = (uint8_t)strtoul(p, &end, 0);
-                if (end == p) {
-                    break;
-                }
-                p = end;
-                while (*p == ',' || *p == ' ') {
-                    p++;
-                }
-            }
-        }
+        cdj_auth_chip_init(&s->chip, nxs2_auth_answers,
+                           ARRAY_SIZE(nxs2_auth_answers));
         e = getenv("CDJ_IIC_BYTE_US");
         s->byte_ns = (e ? (int64_t)strtoll(e, NULL, 0) : 90) * 1000;
         e = getenv("CDJ_IIC_STUCK_MS");

@@ -251,9 +251,10 @@ static void cdj_dmac_write(void *opaque, hwaddr off, uint64_t val, unsigned size
         unsigned ch = chn < 0 ? ARRAY_SIZE(s->dei) : (unsigned)chn;
         unsigned slot = chan / 16;
 
-        /* DEI is held while TE is set; the ack is a write clearing a TE
-         * that was set (not the arming write). */
-        if ((was & 0x02) && !(val & 0x02) &&
+        /* DEI is held while TE and IE are both set; the ack is a write
+         * clearing a TE or IE that was set (not the arming write). */
+        if ((((was & 0x02) && !(val & 0x02)) ||
+             ((was & 0x04) && !(val & 0x04))) &&
             ch < ARRAY_SIZE(s->dei) && s->dei[ch]) {
             if (s->dei_bh[ch]) {
                 qemu_bh_cancel(s->dei_bh[ch]);

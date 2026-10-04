@@ -249,6 +249,8 @@ Each window drives its own deck.
 | `V` | SLIP | `Z` | REVERSE |
 | `J` | JOG MODE | | |
 
+The CDJ-2000 window takes the same keys where the panel report has a bit for them: Space, `C`, `,` `.` `[` `]`, `Enter`/`→`, `Esc`/`←`/`Backspace`, `B`, `T`, `I`, `M`, `U`, `L`, `D`, the arrow keys for the knob, and `F` for its extra SD source. Loop, slip, reverse, sync, master, tempo range, master tempo and jog mode are left out until their bits are measured.
+
 The mouse is the touch screen. A typical start: `U` (or click the source), `↓`
 to a track, `Enter` to load, `Space` to play.
 
@@ -369,13 +371,13 @@ listed in `mods/mods.conf`:
 
 | mod | what it does | default |
 |---|---|---|
-| [`high_fps`](mods/high_fps.md) | Draw the zoomed-in waveform about twice as often (~70 fps instead of ~33). | on |
-| [`live_clock`](mods/live_clock.md) | Repaint the REMAIN clock every frame instead of about three times a second. | on |
-| [`three_band`](mods/three_band.md) | Draw the centre waveform and the overview as three bands (low blue, mid amber, high white), CDJ-3000 style, from the track's own 3-band data (.2EX). | off |
-| [`osc`](mods/osc.md) | Send the deck's beats, state and load/play/stop/cue/loop events as OSC messages on UDP broadcast port 50010, for lighting desks and scripts. | off |
-| [`usb_midi`](mods/usb_midi.md) | Send MIDI Start, Stop, Continue and Timing Clock over the rear USB-B port, so a DAW or drum machine follows the deck. | off |
-| [`ableton_link`](mods/ableton_link.md) | Join Ableton Link as a peer: Live or any Link app on the deck's network follows its tempo and beat. | off |
-| [`tcnet`](mods/tcnet.md) | Act as a TCNet Master node, broadcasting the deck's play position, track length, beat in the bar and play state on UDP 60000/60001 and answering Metrics (BPM, speed) and MetaData requests on UDP 65023, so ShowKontrol, Resolume or other TCNet receivers can follow it. | off |
+| [`high_fps`](mods/high_fps/README.md) | Draw the zoomed-in waveform about twice as often (~70 fps instead of ~33). | on |
+| [`live_clock`](mods/live_clock/README.md) | Repaint the REMAIN clock every frame instead of about three times a second. | on |
+| [`three_band`](mods/three_band/README.md) | Draw the centre waveform and the overview as three bands (low blue, mid amber, high white), CDJ-3000 style, from the track's own 3-band data (.2EX). | off |
+| [`osc`](mods/osc/README.md) | Send the deck's beats, state and load/play/stop/cue/loop events as OSC messages on UDP broadcast port 50010, for lighting desks and scripts. | off |
+| [`usb_midi`](mods/usb_midi/README.md) | Send MIDI Start, Stop, Continue and Timing Clock over the rear USB-B port, so a DAW or drum machine follows the deck. | off |
+| [`ableton_link`](mods/ableton_link/README.md) | Join Ableton Link as a peer: Live or any Link app on the deck's network follows its tempo and beat. | off |
+| [`tcnet`](mods/tcnet/README.md) | Act as a TCNet Master node, broadcasting the deck's play position, track length, beat in the bar and play state on UDP 60000/60001 and answering Metrics (BPM, speed) and MetaData requests on UDP 65023, so ShowKontrol, Resolume or other TCNet receivers can follow it. | off |
 
 Each mod has a page of its own: its knobs, what it patches, and what has and has
 not been verified. `osc` needs a relay on the emulator

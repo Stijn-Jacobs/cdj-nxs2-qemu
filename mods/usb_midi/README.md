@@ -38,4 +38,4 @@ previous version, which sent from the panel task, worked in the emulator
 PLAY, playback unchanged) but in clumps at the panel's pace, which a DAW reads
 as a wavering tempo. The new timing is checked in an SH-4 interpreter only.
 
-Back to the [mods](../README.md#mods).
+Back to the [mods](../../README.md#mods).

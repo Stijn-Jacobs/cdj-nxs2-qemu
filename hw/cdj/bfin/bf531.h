@@ -15,7 +15,7 @@ typedef struct bf531 bf531;
 
 typedef struct bf531_host {
     void *opaque;
-    /* One PPI frame, RGB565 pixels, row after row. */
+    /* One PPI frame, RGB555 pixels, row after row. */
     void (*frame)(void *opaque, const uint16_t *px, unsigned w, unsigned h);
     /* One SPORT1 TX packet for MAIN, as the firmware armed DMA4 with it. */
     void (*sport1_tx)(void *opaque, const uint8_t *data, size_t len);
@@ -28,7 +28,7 @@ typedef struct bf531_host {
 bf531 *bf531_new(uint32_t sdram_size, const bf531_host *host, FILE *log);
 void   bf531_free(bf531 *s);
 
-/* A Pioneer GUI update section: a 0x20-byte title, then the LDR boot stream
+/* A Pioneer GUI update section (or a whole .UPD, whose first section it is): a 0x20-byte title, then the LDR boot stream
  * and the resources the firmware reads back from flash. The stream is loaded
  * as the boot loader would load it from flash, and the section is placed
  * in flash where the firmware reads it back. Returns 0, or -1 when it is

@@ -33,6 +33,7 @@ engine moves the site's span into one trampoline that runs it once and then
 calls each selected mod's routine in registry order -- see
 sigpatch.trampoline() for the code and the contract a hook routine follows.
 """
+import glob
 import os
 import subprocess
 import sys
@@ -310,11 +311,12 @@ MODS = {
 
 
 def source(name):
-    return os.path.join(HERE, 'main_%s.s' % name)
+    """Each routine sits in its own mod's folder, mods/<mod>/."""
+    return glob.glob(os.path.join(HERE, '*', 'main_%s.s' % name))[0]
 
 
 def blob_path(name):
-    return os.path.join(HERE, 'main_%s.bin' % name)
+    return source(name)[:-2] + '.bin'
 
 
 def patch(data, names):
@@ -341,7 +343,8 @@ def assemble():
     with tempfile.TemporaryDirectory() as tmp:
         for name in MODS:
             obj = os.path.join(tmp, name + '.o')
-            subprocess.run(['sh4-linux-gnu-as', '--isa=sh4', '-little', '-I', HERE,
+            subprocess.run(['sh4-linux-gnu-as', '--isa=sh4', '-little',
+                            '-I', os.path.dirname(source(name)),
                             '-o', obj, source(name)], check=True)
             subprocess.run(['sh4-linux-gnu-objcopy', '-O', 'binary',
                             obj, blob_path(name)], check=True)
