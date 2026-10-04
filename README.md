@@ -1,8 +1,8 @@
 <div align="center">
 
-# CDJ-2000NXS2 Emulator
+# Pioneer CDJ Emulator
 
-**A Pioneer DJ CDJ-2000NXS2 on your computer: its own firmware on emulated hardware, played from a virtual deck or a MIDI controller, with mods and a patcher that builds them into your own firmware update.**
+**Pioneer DJ CDJ players on your computer: their own firmware on emulated hardware. The CDJ-2000NXS2 is fully supported: played from a virtual deck or a MIDI controller, with mods and a patcher that builds them into your own firmware update; the older players are in progress.**
 
 [![License: GPL-2.0-or-later](https://img.shields.io/badge/license-GPL--2.0--or--later-blue.svg)](LICENSE)
 [![Platform: Windows | Linux | macOS](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)](#quick-start)
@@ -13,17 +13,20 @@
 
 </div>
 
-It boots, mounts a virtual USB stick, and loads and plays tracks from it. The waveform
+The CDJ-2000NXS2 boots, mounts a virtual USB stick, and loads and plays tracks from it. The waveform
 scrolls, the time counts down, and the sound you hear is computed by the
 player's own DSP program on an emulated DSP. Start two and they find each other
 on an emulated Pro DJ Link network, where MASTER and SYNC work between them.
 Plug in a MIDI controller and it plays them.
 
 <p align="center">
-<img src="docs/img/app-screen.gif" alt="The player's own screen, emulated: the colour waveform scrolling and the time counting down while a track plays" width="720">
+<img src="docs/img/app-screen.gif" alt="The CDJ-2000NXS2's own screen, emulated: the colour waveform scrolling and the time counting down while a track plays" width="720">
 </p>
 
 ## ✨ Features
+
+The features below are the CDJ-2000NXS2's; the older players are covered under
+[Supported players](#supported-players).
 
 | | |
 |---|---|
@@ -35,14 +38,28 @@ Plug in a MIDI controller and it plays them.
 | 🌀 **Jog and touch** | The jog bends the DSP's playback speed through the firmware's own jog engine; a click in the window is a touch on the screen. |
 | 🧪 **Built for modding** | Trace any firmware address, watch memory, change it while it runs, call firmware functions, script every input. |
 
+<a id="supported-players"></a>
+
+## 🎧 Supported players
+
+| player | status | what works |
+|---|---|---|
+| **CDJ-2000NXS2** | ✅ Fully supported | Boots, loads and plays tracks from USB: the waveform and playhead move and the time counts down. The sound is computed by the firmware's own DSP program. Pro DJ Link, MIDI controllers and [mods](#mods). |
+| **CDJ-2000** | 🚧 In progress | Boots to its idle screen, with its display and keys. Lists and browses the USB stick and shows a track's title, artist, BPM and key; the load does not finish yet. |
+| **CDJ-2000NXS** | 🚧 In progress | Boots with its display and keys, and finds the USB stick. Loading a track is not working yet. |
+| **XDJ-1000** | 🧪 In development | Boots to its home screen. Not in this repository yet. |
+
+Everything below, from the quick start on, describes the CDJ-2000NXS2 unless it
+says otherwise.
+
 <a id="not-included"></a>
 
 ## 🧭 Nothing from Pioneer DJ is included
 
 > **This repository distributes no firmware, no ROM or flash images, no fonts,
 > no artwork files and no manuals or schematics.** Everything here was written
-> for this project. To run it you supply your own copy of the player's public
-> firmware update file, which the setup unpacks on your machine, into a folder
+> for this project. To run it you supply your own copy of the public
+> firmware update file for the player, which the setup unpacks on your machine, into a folder
 > that is never committed.
 >
 > The screenshots below show the emulated firmware's own interface, running in
@@ -103,7 +120,7 @@ skipped when it is already done:
 ./start.sh          # Ctrl-C stops everything
 ```
 
-The deck window opens and the player boots to its screen. Click the window,
+The deck window opens and the CDJ-2000NXS2 boots to its screen. Click the window,
 press `U` for the USB stick, `↓` to a track, `Enter` to load it and `Space` to
 play (every key: [Keyboard](#keyboard)). Click the screen to touch it.
 
@@ -178,7 +195,8 @@ version), and your own music.
 
 ## ⚙️ How it works
 
-A CDJ-2000NXS2 is three computers in one box, and all three run here:
+A CDJ-2000NXS2 is three computers in one box, and all three run here (the
+older players are built the same way, from their own parts):
 
 | chip | job in the player | here |
 |---|---|---|
@@ -205,6 +223,11 @@ flowchart LR
     RELAY -- "panel report" --> MAIN2
 ```
 
+The CDJ-2000 and CDJ-2000NXS have a board model of their own
+(`hw/cdj/boards/cdj2000/`): an SH7763 MAIN, a Blackfin BF531 display
+processor, and a DSP behind a host port (a C6727 on the CDJ-2000, a C6747 on
+the CDJ-2000NXS). Neither plays audio yet, and the launcher does not start them yet.
+
 None of the three knows it is emulated. MAIN talks to the display processor
 over the same SPI link, to the DSP over the same host port and McBSP audio bus,
 and reads its front panel through the same report from the panel
@@ -221,7 +244,7 @@ best documentation: it logs to an internal ring, it names its tasks, its keys
 and its errors, and a trace hook at any firmware address plus a memory watch
 said the rest.
 
-**The DSP** needed the most work. There is no usable C66x emulator, so this
+**The NXS2's DSP** needed the most work. There is no usable C66x emulator, so this
 project has its own: a VLIW core that issues up to eight instructions a cycle,
 with the SoC peripherals the program uses. Interpreted, it is far too slow for
 real-time audio, so a **JIT** compiles the hot parts of the DSP program to
@@ -361,6 +384,8 @@ to the deck three ways:
   controller, which can stay connected alongside.
 
 </details>
+
+<a id="mods"></a>
 
 ## 🧩 Mods
 
@@ -576,7 +601,7 @@ the mapping format and the full action catalogue: [`midi/README.md`](midi/README
 
 ## 🧪 A platform for modding the firmware
 
-Running the firmware is the first step; changing what the player does is the
+Running the firmware is the first step; changing what a player does is the
 next, and this is built for it. The emulator makes the whole machine
 observable and every part of it adjustable, without touching a real deck:
 
@@ -612,8 +637,9 @@ machine: the update file, and anything built from it, is Pioneer's.
 - **MASTER TEMPO is heavy.** It makes the DSP program do far more work per
   sample, and it is currently the most demanding thing you can ask of the
   emulator.
-- **Only firmware v1.87** is supported.
-- **Work in progress.** The USB stick is the only medium so far. Some panel
+- **Only firmware v1.87** is supported for the CDJ-2000NXS2.
+- **Work in progress.** The older players do not play yet (see
+  [Supported players](#supported-players)). On the NXS2 the USB stick is the only medium so far. Some panel
   keys are decoded by the firmware but have not been tried here; the
   controller tools say so when you bind one.
 
@@ -628,7 +654,7 @@ machine: the update file, and anything built from it, is Pioneer's.
 | `build.sh` | the build step underneath setup (`./build.sh main`, `display`, …) |
 | `hw/cdj/common/` | what every board shares: the boot (DRAM, NOR flash, image, reset vector), the SH-4 core blocks and the board descriptor (`cdj_common.h`) |
 | `hw/cdj/boards/nxs2/` | the CDJ-2000NXS2: its MAIN board, one file per device, and the display board (`sh7269gui.c`); `diag/` holds the diagnostic hooks, `standin/` historical models that are off by default |
-| `hw/cdj/boards/cdj2000/` | the CDJ-2000 and CDJ-2000NXS MAIN board (Renesas SH7763), in bring-up |
+| `hw/cdj/boards/cdj2000/` | the CDJ-2000 and CDJ-2000NXS: MAIN board (Renesas SH7763), Blackfin display and C6727 / C6747 DSP models, in bring-up |
 | `mods/` | the [mods](#mods) registry and the display- and MAIN-firmware patches behind them |
 | `models/` | one profile per player, read by the firmware and launch scripts (see `models/README.md`) |
 | `hw/cdj/c6x/` | the C66x DSP core, its SoC peripherals, the JIT generator (`tools/`) and unit tests |
