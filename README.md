@@ -220,31 +220,6 @@ version), and your own music.
 
 ## Screenshots
 
-<details>
-<summary><b>Older decks, one screen each</b> (CDJ-2000, CDJ-2000NXS, XDJ-1000, XDJ-700, CDJ-900NXS, XDJ-1000MK2)</summary>
-
-These are real captures of each model's firmware running in the emulator.
-Select a screen to view it at its recorded resolution. Captures include work
-from development branches; a visible screen does not imply real-time playback
-or audio support. The XDJ-1000MK2 capture shows USB browsing, not playback.
-
-<table>
-  <tr>
-    <td width="50%" valign="top"><b>CDJ-2000</b> · Experimental<br><sub>Firmware 4.33 · Track loaded, overview waveform</sub><br><br><a href="docs/img/decks/cdj2000.png"><img src="docs/img/decks/cdj2000.png" alt="Emulated CDJ-2000 4.33 showing a loaded track, remaining time and overview waveform" width="440"></a></td>
-    <td width="50%" valign="top"><b>CDJ-2000NXS</b> · Experimental<br><sub>Firmware 1.43 · Waveform and transport display</sub><br><br><a href="docs/img/decks/cdj2000nxs.png"><img src="docs/img/decks/cdj2000nxs.png" alt="Emulated CDJ-2000NXS 1.43 showing its blue waveform, remaining time and master tempo display" width="440"></a></td>
-  </tr>
-  <tr>
-    <td width="50%" valign="top"><b>XDJ-1000</b> · Experimental<br><sub>Firmware 1.13 · USB track loaded</sub><br><br><a href="docs/img/decks/xdj1000.png"><img src="docs/img/decks/xdj1000.png" alt="Emulated XDJ-1000 1.13 showing a loaded USB track and the PERFORM screen controls" width="440"></a></td>
-    <td width="50%" valign="top"><b>XDJ-700</b> · Experimental<br><sub>Firmware 1.15 · USB track loaded</sub><br><br><a href="docs/img/decks/xdj700.png"><img src="docs/img/decks/xdj700.png" alt="Emulated XDJ-700 1.15 showing a loaded USB track, waveform and touch controls" width="440"></a></td>
-  </tr>
-  <tr>
-    <td width="50%" valign="top"><b>CDJ-900NXS</b> · Experimental<br><sub>Firmware 1.31 · Playing, time counting down</sub><br><br><a href="docs/img/decks/cdj900nxs.png"><img src="docs/img/decks/cdj900nxs.png" alt="Emulated CDJ-900NXS 1.31 playing a track, with its main waveform, overview and the remaining time counting down" width="440"></a></td>
-    <td width="50%" valign="top"><b>XDJ-1000MK2</b> · In development<br><sub>Firmware 1.45 · USB library browsing</sub><br><br><a href="docs/img/decks/xdj1000mk2.png"><img src="docs/img/decks/xdj1000mk2.png" alt="Emulated XDJ-1000MK2 1.45 browsing artists on a USB library; no track is loaded" width="440"></a></td>
-  </tr>
-</table>
-
-</details>
-
 ### CDJ-2000NXS2 in motion
 
 <p align="center">
