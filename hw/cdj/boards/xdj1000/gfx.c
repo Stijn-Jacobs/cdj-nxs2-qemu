@@ -66,7 +66,6 @@ typedef struct XdjGfx2d {
     XdjRegs regs;
     qemu_irq irq;
     QEMUTimer *done_timer;
-    hwaddr last_blit_dst;
 } XdjGfx2d;
 
 static void gfx2d_update_irq(XdjGfx2d *s)
@@ -169,13 +168,17 @@ static void gfx2d_blit(XdjGfx2d *s, const uint32_t *w)
 
 /*
  * A 0xa0 command is six words: the command, the raster operation 0xcc, the
- * fill colour and three points, x << 16 | y. The firmware issues three of them
- * at the start of every frame with the clip registers spanning the whole
- * destination bitmap and points that stay the same from frame to frame; they
- * clear the clip rectangle, which is what removes the boot logo's earlier
- * positions from the compose buffer. A 0xa0 that follows a blit into the same
- * destination bitmap comes in the middle of a frame, after the sidebar tiles,
- * and fills the box spanned by its points instead.
+ * fill colour, then a rectangle around an origin: left << 16 | right extent,
+ * up << 16 | down extent and the origin x << 16 | y, clipped to the clip
+ * registers. The firmware issues three of them at the start of every frame,
+ * W/2-1 | W/2 and H/2-1 | H/2 around (W/2-1, H/2-1), which clears the whole
+ * destination bitmap and removes the boot logo's earlier positions from the
+ * compose buffer. Mid-frame ones clear one part of a panel before it is
+ * redrawn: on the CDJ-900NXS rows 234-351 of the 688x352 deck panel before
+ * the time and track digits, then rows 0-233 before the waveform half, and
+ * its 1-pixel position markers have no horizontal extent. Read as a box
+ * spanned by three points, that second clear covers x 116-338, y 116-335 and
+ * wipes the minutes of the time readout and the second track digit.
  */
 static void gfx2d_fill(XdjGfx2d *s, int x0, int y0, int x1, int y1,
                        uint16_t colour)
@@ -201,19 +204,12 @@ static void gfx2d_shape(XdjGfx2d *s, const uint32_t *w)
 {
     uint32_t clip_min = gfx2d_reg(s, GFX2D_REG_CLIP_MIN);
     uint32_t clip_max = gfx2d_reg(s, GFX2D_REG_CLIP_MAX);
-    hwaddr dst = gfx2d_reg(s, GFX2D_REG_DEST) & GFX2D_PHYS_MASK;
-    int x0 = clip_min >> 16, y0 = clip_min & 0xffff;
-    int x1 = clip_max >> 16, y1 = clip_max & 0xffff;
+    int ox = w[5] >> 16, oy = w[5] & 0xffff;
+    int x0 = MAX((int)(clip_min >> 16), ox - (int)(w[3] >> 16));
+    int x1 = MIN((int)(clip_max >> 16), ox + (int)(w[3] & 0xffff));
+    int y0 = MAX((int)(clip_min & 0xffff), oy - (int)(w[4] >> 16));
+    int y1 = MIN((int)(clip_max & 0xffff), oy + (int)(w[4] & 0xffff));
 
-    if (dst == s->last_blit_dst) {
-        int px[3] = { w[3] >> 16, w[4] >> 16, w[5] >> 16 };
-        int py[3] = { w[3] & 0xffff, w[4] & 0xffff, w[5] & 0xffff };
-
-        x0 = MAX(x0, MIN(px[0], MIN(px[1], px[2])));
-        x1 = MIN(x1, MAX(px[0], MAX(px[1], px[2])));
-        y0 = MAX(y0, MIN(py[0], MIN(py[1], py[2])));
-        y1 = MIN(y1, MAX(py[0], MAX(py[1], py[2])));
-    }
     gfx2d_fill(s, x0, y0, x1, y1, w[2]);
 }
 
@@ -241,7 +237,6 @@ static void gfx2d_run_list(XdjGfx2d *s)
                     cmd[k] = le32_to_cpu(w[i + k]);
                 }
                 gfx2d_blit(s, cmd);
-                s->last_blit_dst = gfx2d_reg(s, GFX2D_REG_DEST) & GFX2D_PHYS_MASK;
             }
             i += GFX2D_BLIT_WORDS;
             break;

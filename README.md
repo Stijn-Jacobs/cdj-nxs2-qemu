@@ -1,29 +1,35 @@
 <div align="center">
 
-# Pioneer CDJ Emulator
+# Pioneer CDJ & XDJ Emulator
 
-**Pioneer DJ CDJ players on your computer: their own firmware on emulated hardware. The CDJ-2000NXS2 is fully supported: played from a virtual deck or a MIDI controller, with mods and a patcher that builds them into your own firmware update; five older players run as experiments.**
+**Original firmware. Emulated hardware.**
+
+Pioneer DJ players on your computer, from the CDJ-2000 to the NXS2 and XDJ family.
 
 [![License: GPL-2.0-or-later](https://img.shields.io/badge/license-GPL--2.0--or--later-blue.svg)](LICENSE)
 [![Platform: Windows | Linux | macOS](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)](#quick-start)
 [![QEMU 9.1](https://img.shields.io/badge/QEMU-9.1-orange.svg)](https://www.qemu.org/)
 [![Firmware not included](https://img.shields.io/badge/firmware-not%20included-red.svg)](#not-included)
 
-<img src="docs/img/hero.png" alt="Two emulated CDJ-2000NXS2s: deck 1 in SYNC follows master deck 2 to 193.7 BPM" width="900">
+[Quick start](#quick-start) · [Supported players](#supported-players) · [Screenshots](#screenshots) · [Virtual deck](#virtual-deck) · [Mods](#mods)
+
+<a href="docs/img/deck-showcase.png"><img src="docs/img/deck-showcase.png" alt="Real emulator screens for six players: supported CDJ-2000NXS2, and experimental CDJ-2000, CDJ-2000NXS, XDJ-1000, XDJ-700 and CDJ-900NXS. Older decks run below real time and have no sound." width="960"></a>
+
+<sub>Actual emulator captures from development builds. Select the image for a closer look.</sub>
 
 </div>
 
-The CDJ-2000NXS2 boots, mounts a virtual USB stick, and loads and plays tracks from it. The waveform
+The **CDJ-2000NXS2** boots, mounts a virtual USB stick, and loads and plays tracks from it. The waveform
 scrolls, the time counts down, and the sound you hear is computed by the
 player's own DSP program on an emulated DSP. Start two and they find each other
 on an emulated Pro DJ Link network, where MASTER and SYNC work between them.
-Plug in a MIDI controller and it plays them.
+Plug in a MIDI controller and it plays them, or use the [virtual deck](#virtual-deck).
 
-<p align="center">
-<img src="docs/img/app-screen.gif" alt="The CDJ-2000NXS2's own screen, emulated: the colour waveform scrolling and the time counting down while a track plays" width="720">
-</p>
+**The family is growing.** Five older players now have experimental emulation,
+with further models in development. Support varies by model and branch; the
+[status table](#supported-players) separates usable features from ongoing work.
 
-## ✨ Features
+## Features
 
 The features below are the CDJ-2000NXS2's; the older players are covered under
 [Supported players](#supported-players).
@@ -40,23 +46,31 @@ The features below are the CDJ-2000NXS2's; the older players are covered under
 
 <a id="supported-players"></a>
 
-## 🎧 Supported players
+## Supported players
+
+The CDJ-2000NXS2 is the fully supported player. The five older models below
+are experimental: playback is far slower than real time and they do not yet
+produce sound. Screenshots show the firmware interface, not a claim of feature parity.
 
 | player | status | what works |
 |---|---|---|
 | **CDJ-2000NXS2** | ✅ Fully supported | Boots, loads and plays tracks from USB: the waveform and playhead move and the time counts down. The sound is computed by the firmware's own DSP program. Pro DJ Link, MIDI controllers and [mods](#mods). |
 | **CDJ-2000** | 🧪 Experimental | Boots with its display and keys, loads a track from USB and plays it forward, far slower than real time: the playhead moves and the time counts down. As on a real deck with AUTO CUE off (the factory setting), a loaded track starts playing straight away; PLAY pauses and resumes. No sound. |
-| **CDJ-2000NXS** | 🧪 Experimental | The same as the CDJ-2000. No sound. |
+| **CDJ-2000NXS** | 🧪 Experimental | The same as the CDJ-2000, but its DSP lags like the XDJ-1000's: the playhead and the time start moving a few minutes after the load. No sound. |
 | **XDJ-1000** | 🧪 Experimental | Boots with its screen and keys, loads a track from USB and plays it, but at about a tenth of real speed: the playhead and the time start moving a few minutes after the load. PLAY pauses and resumes. No sound. |
 | **XDJ-700** | 🧪 Experimental | The XDJ-1000's board: the same as above. |
-| **CDJ-900NXS** | 🧪 Experimental | The XDJ-1000's board. Boots and loads a track from USB; playback is as slow as on the XDJ-1000 and the time display is incomplete. |
+| **CDJ-900NXS** | 🧪 Experimental | The XDJ-1000's board. Boots, loads a track from USB and plays it, as slowly as the XDJ-1000: the waveform moves and the time counts down. |
+
+**On other development branches:** the **XDJ-1000MK2** boots and browses a USB
+library; track playback is still being investigated. **CDJ-900** bring-up is
+also in progress. These models are not included in this checkout's setup menu.
 
 Everything below, from the quick start on, describes the CDJ-2000NXS2 unless it
 says otherwise.
 
 <a id="not-included"></a>
 
-## 🧭 Nothing from Pioneer DJ is included
+## Nothing from Pioneer DJ is included
 
 > **This repository distributes no firmware, no ROM or flash images, no fonts,
 > no artwork files and no manuals or schematics.** Everything here was written
@@ -64,7 +78,7 @@ says otherwise.
 > firmware update file for the player, which the setup unpacks on your machine, into a folder
 > that is never committed.
 >
-> The screenshots below show the emulated firmware's own interface, running in
+> The screenshots in this README show the emulated firmware's own interface, running in
 > this emulator, for illustration.
 >
 > This project is not affiliated with, endorsed by or supported by Pioneer DJ or
@@ -73,7 +87,7 @@ says otherwise.
 
 <a id="quick-start"></a>
 
-## 🚀 Quick start
+## Quick start
 
 **1. Get a shell for your system** (only your own line applies):
 
@@ -202,7 +216,43 @@ version), and your own music.
 
 </details>
 
-## 📸 Screenshots
+<a id="screenshots"></a>
+
+## Screenshots
+
+### Older decks and work in progress
+
+These are real captures of each model's firmware running in the emulator.
+Select a screen to view it at its recorded resolution. Captures include work
+from development branches; a visible screen does not imply real-time playback
+or audio support. The XDJ-1000MK2 capture shows USB browsing, not playback.
+
+<table>
+  <tr>
+    <td width="50%" valign="top"><b>CDJ-2000</b> · Experimental<br><sub>Firmware 4.33 · Track loaded, overview waveform</sub><br><br><a href="docs/img/decks/cdj2000.png"><img src="docs/img/decks/cdj2000.png" alt="Emulated CDJ-2000 4.33 showing a loaded track, remaining time and overview waveform" width="440"></a></td>
+    <td width="50%" valign="top"><b>CDJ-2000NXS</b> · Experimental<br><sub>Firmware 1.43 · Waveform and transport display</sub><br><br><a href="docs/img/decks/cdj2000nxs.png"><img src="docs/img/decks/cdj2000nxs.png" alt="Emulated CDJ-2000NXS 1.43 showing its blue waveform, remaining time and master tempo display" width="440"></a></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><b>XDJ-1000</b> · Experimental<br><sub>Firmware 1.13 · USB track loaded</sub><br><br><a href="docs/img/decks/xdj1000.png"><img src="docs/img/decks/xdj1000.png" alt="Emulated XDJ-1000 1.13 showing a loaded USB track and the PERFORM screen controls" width="440"></a></td>
+    <td width="50%" valign="top"><b>XDJ-700</b> · Experimental<br><sub>Firmware 1.15 · USB track loaded</sub><br><br><a href="docs/img/decks/xdj700.png"><img src="docs/img/decks/xdj700.png" alt="Emulated XDJ-700 1.15 showing a loaded USB track, waveform and touch controls" width="440"></a></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><b>CDJ-900NXS</b> · Experimental<br><sub>Firmware 1.31 · Playing, time counting down</sub><br><br><a href="docs/img/decks/cdj900nxs.png"><img src="docs/img/decks/cdj900nxs.png" alt="Emulated CDJ-900NXS 1.31 playing a track, with its main waveform, overview and the remaining time counting down" width="440"></a></td>
+    <td width="50%" valign="top"><b>XDJ-1000MK2</b> · In development<br><sub>Firmware 1.45 · USB library browsing</sub><br><br><a href="docs/img/decks/xdj1000mk2.png"><img src="docs/img/decks/xdj1000mk2.png" alt="Emulated XDJ-1000MK2 1.45 browsing artists on a USB library; no track is loaded" width="440"></a></td>
+  </tr>
+</table>
+
+### CDJ-2000NXS2 in motion
+
+<p align="center">
+<img src="docs/img/app-screen.gif" alt="The CDJ-2000NXS2's own screen, emulated: the colour waveform scrolling and the time counting down while a track plays" width="720">
+</p>
+
+### Pro DJ Link and performance
+
+<p align="center">
+<a href="docs/img/hero.png"><img src="docs/img/hero.png" alt="Two emulated CDJ-2000NXS2s: deck 1 in SYNC follows master deck 2 to 193.7 BPM" width="900"></a>
+</p>
 
 <table>
   <tr>
@@ -215,7 +265,7 @@ version), and your own music.
   </tr>
 </table>
 
-## ⚙️ How it works
+## How it works
 
 A CDJ-2000NXS2 is three computers in one box, and all three run here (the
 older players are built the same way, from their own parts):
@@ -278,7 +328,7 @@ The instruction decode tables come from GNU binutils.
 
 <a id="keyboard"></a>
 
-## ⌨️ Keyboard
+## Keyboard
 
 No controller needed: click a deck's window and play it from the keyboard.
 Each window drives its own deck.
@@ -302,7 +352,7 @@ to a track, `Enter` to load, `Space` to play.
 
 <a id="virtual-deck"></a>
 
-## 🎛️ The virtual deck app
+## The virtual deck app
 
 <p align="center">
 <img src="docs/img/app-deck.png" alt="The virtual deck app: a drawn NXS2-style player, a track loaded and playing, PLAY and CUE lit, a loop active" height="480">
@@ -412,7 +462,7 @@ to the deck three ways:
 
 <a id="mods"></a>
 
-## 🧩 Mods
+## Mods
 
 Small on/off tweaks to how the deck behaves, each with its own default,
 listed in `mods/mods.conf`:
@@ -482,7 +532,7 @@ trip through service mode's recovery path, or worse.
 
 <a id="rekordbox-ableton"></a>
 
-## 🔌 Connecting rekordbox and Ableton Live on this PC
+## Connecting rekordbox and Ableton Live on this PC
 
 <details>
 <summary><b>Setup, start command and troubleshooting</b></summary>
@@ -554,7 +604,7 @@ Toggle*, then press `LINK` in the transport. With the mod on, the toggle shows
 
 </details>
 
-## 🔧 Service mode
+## Service mode
 
 ```sh
 ./start.sh --service      # or CDJ_SERVICE=1 in cdj.conf; --no-service overrides it
@@ -576,7 +626,7 @@ Ctrl-C. With `PERSIST=1` a deck keeps its own flash image between runs
 (`extract/flash-<tag>.bin`), the same as a real unit's memory — a setting
 changed in SERVICE MODE on a persistent deck stays changed.
 
-## 🥾 Booting from the flash
+## Booting from the flash
 
 ```sh
 MAIN_BOOT=flash ./start.sh
@@ -596,7 +646,7 @@ the real player. It adds about two seconds to MAIN's start.
 A `flash.bin` made by an older setup holds no bootloader; MAIN then refuses to
 start and says so. Run `./setup.sh --firmware <C2KNXS2.UPD>` again to rebuild it.
 
-## 🎚️ MIDI controllers
+## MIDI controllers
 
 **Using one:** plug the controller in before `./setup.sh`. Setup recognises a
 controller it has a profile for (or offers to learn a new one) and saves your
@@ -624,7 +674,7 @@ Every key of the player's front panel can be mapped, including ones nothing
 binds yet. `./setup.sh --reconfigure` offers the same walk-through. Details,
 the mapping format and the full action catalogue: [`midi/README.md`](midi/README.md).
 
-## 🧪 A platform for modding the firmware
+## A platform for modding the firmware
 
 Running the firmware is the first step; changing what a player does is the
 next, and this is built for it. The emulator makes the whole machine
@@ -645,7 +695,7 @@ machine: the update file, and anything built from it, is Pioneer's.
 
 <a id="limits"></a>
 
-## ⚠️ Limits
+## Limits
 
 - **Speed depends on your CPU.** One deck runs in real time on a fast desktop.
   Two decks need roughly twice that, and on a busy or modest machine they fall
@@ -701,7 +751,7 @@ never in `qemu-src/`.
 
 </details>
 
-## 📜 Licence
+## Licence
 
 This project's own files are licensed under the **GNU General Public License,
 version 2 or (at your option) any later version** (`GPL-2.0-or-later`); the
@@ -723,7 +773,7 @@ describes the files' licences; it is not legal advice.
 
 </details>
 
-## 🙏 Credits
+## Credits
 
 [QEMU](https://www.qemu.org/), which this machine plugs into; GNU binutils, for
 the TI C6x opcode tables; [minimp3](https://github.com/lieff/minimp3);

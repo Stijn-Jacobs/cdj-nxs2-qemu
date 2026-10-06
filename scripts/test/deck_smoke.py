@@ -11,6 +11,7 @@ matches and fails as soon as its QEMU exits; otherwise it fails at its
 timeout with the last frame kept beside the log.
 
     deck_smoke.py <decks.ini> [--tier2] [--record] [--only a,b] [--lock-wait S] [--out DIR]
+                  [--keep-frames DIR]
 
 decks.ini, one section per deck:
 
@@ -52,20 +53,32 @@ writes that frame as the golden; every distinct frame on the way is kept in
 --tier2 runs only the decks that have steps: first screen, then the steps,
 then the second golden. With --record the first screen is not checked and the
 frame the steps lead to is recorded as golden2.
+
+--keep-frames DIR (with --tier2) saves each loaded deck's whole screen as
+DIR/<deck>.png: the last playhead frame of a deck with `motion`, else the frame
+that matched golden2. DIR/<deck>.json beside it names the firmware version
+(from the model profile), the QEMU binary and the deck's verdict, so a frame
+from a failed run is never mistaken for a good one.
 """
 
 import argparse
 import configparser
+import datetime
+import json
 import os
 import shlex
 import socket
+import struct
 import subprocess
 import sys
 import threading
 import time
+import zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCORER = os.path.join(HERE, "..", "run", "score_playhead.py")
+sys.path.insert(0, os.path.join(HERE, "..", ".."))
+from launcher import model  # noqa: E402
 
 POLL = 2.0
 BLOCK = 8
@@ -112,6 +125,15 @@ def rgb565(raw, w, h):
 def write_ppm(path, w, h, pixels):
     with open(path, "wb") as f:
         f.write(b"P6\n%d %d\n255\n" % (w, h) + pixels)
+
+
+def write_png(path, w, h, pixels):
+    def chunk(kind, body):
+        return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body))
+    rows = b"".join(b"\0" + pixels[y * w * 3:(y + 1) * w * 3] for y in range(h))
+    with open(path, "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+                + chunk(b"IDAT", zlib.compress(rows, 9)) + chunk(b"IEND", b""))
 
 
 def grab(d):
@@ -222,7 +244,7 @@ class Lock:
 
 
 class Deck:
-    def __init__(self, name, sec, root, here, out):
+    def __init__(self, name, sec, root, here, out, keep_dir=""):
         def path(key):
             v = sec.get(key, "")
             return native(v if not v or os.path.isabs(v) or v.startswith("/") else os.path.join(root, v))
@@ -249,6 +271,7 @@ class Deck:
         self.fb = sec.get("fb", "").split()
         self.log = os.path.join(out, name + ".log")
         self.frame = os.path.join(out, name + ".ppm")
+        self.keep_dir, self.kept = keep_dir, None
         self.result, self.detail, self.seconds = "SKIP", "", 0.0
 
     def missing(self):
@@ -294,6 +317,8 @@ def run_deck(d, record, tier2, lock_wait):
         q = subprocess.Popen(d.argv(), env=env, stdout=log, stderr=subprocess.STDOUT)
     try:
         d.result, d.detail = run_phases(d, q, start, record, tier2)
+        if d.kept:
+            save_kept(d)
     finally:
         d.seconds = time.time() - start
         try:
@@ -321,9 +346,65 @@ def run_phases(d, q, start, record, tier2):
     if golden and d.region2:
         golden = crop(golden, d.region2)
     result, detail = watch(d, q, golden, time.time(), d.golden2, d.timeout2, d.region2)
-    if result != "PASS" or not d.motion:
+    if result != "PASS":
+        return result, detail
+    if not d.motion:
+        keep_frame(d, d.frame)
         return result, detail
     return film_motion(d, q, detail)
+
+
+def keep_frame(d, ppm):
+    """Note ppm as the frame --keep-frames saves. A deck read from a fixed
+    frame buffer address is shot once more through its console, which shows
+    what the LCD controller scans out (a fixed address can hold the back
+    buffer); a build without that console keeps the frame buffer read."""
+    if not d.keep_dir:
+        return
+    d.kept = ppm, "framebuffer" if d.fb else "screendump"
+    if not d.fb:
+        return
+    shot = d.frame[:-4] + "-console.ppm"
+    try:
+        os.remove(shot)
+    except OSError:
+        pass
+    try:
+        monitor(d.port, "screendump " + shot.replace("\\", "/"))
+        if read_ppm(shot)[:2] == (int(d.fb[1]), int(d.fb[2])):
+            d.kept = shot, "screendump"
+    except (OSError, ValueError):
+        pass
+
+
+def tree_commit():
+    try:
+        r = subprocess.run(["git", "-C", HERE, "rev-parse", "--short", "HEAD"], capture_output=True, text=True)
+    except OSError:
+        return ""
+    return r.stdout.strip()
+
+
+def local_time(t):
+    return datetime.datetime.fromtimestamp(t).isoformat(timespec="seconds")
+
+
+def save_kept(d):
+    """Write the kept frame as <keep_dir>/<deck>.png and what it shows as .json."""
+    ppm, source = d.kept
+    w, h, pixels = read_ppm(ppm)
+    write_png(os.path.join(d.keep_dir, d.name + ".png"), w, h, pixels)
+    try:
+        firmware = model.load(d.machine).fw_version
+    except model.ModelError:
+        firmware = ""
+    with open(os.path.join(d.keep_dir, d.name + ".json"), "w") as f:
+        json.dump({"model": d.name, "machine": d.machine, "firmware": firmware,
+                   "qemu": d.qemu, "qemu_built": local_time(os.path.getmtime(d.qemu)),
+                   "tree": tree_commit(), "source": source, "size": [w, h],
+                   "verdict": d.result, "detail": d.detail, "captured": local_time(time.time())},
+                  f, indent=1)
+        f.write("\n")
 
 
 def film_motion(d, q, detail):
@@ -344,6 +425,7 @@ def film_motion(d, q, detail):
         else:
             return "FAIL", "no screen to film the playhead"
         os.replace(d.frame, "%s%d.ppm" % (stem, i))
+    keep_frame(d, "%s%d.ppm" % (stem, MOTION_FRAMES - 1))
     r = subprocess.run([sys.executable, SCORER, "--model", d.motion, stem + "*.ppm"],
                        capture_output=True, text=True)
     verdict = next((" ".join(line.split("VERDICT:", 1)[1].replace("*", "").split())
@@ -416,15 +498,20 @@ def main():
     ap.add_argument("--lock-wait", type=float, default=20.0,
                     help="seconds to wait for a busy deck lock before skipping the deck")
     ap.add_argument("--out", default=os.path.join(os.environ.get("TMP", "/tmp"), "deck_smoke"))
+    ap.add_argument("--keep-frames", default="", metavar="DIR",
+                    help="--tier2: save each loaded deck's screen as DIR/<deck>.png, with a .json beside it")
     args = ap.parse_args()
 
     ini = configparser.ConfigParser()
     ini.read(args.decks)
     root = ini.defaults().get("root", os.path.dirname(os.path.abspath(args.decks)))
     os.makedirs(args.out, exist_ok=True)
+    if args.keep_frames:
+        os.makedirs(native(args.keep_frames), exist_ok=True)
     only = set(filter(None, args.only.split(",")))
     here = os.path.dirname(os.path.abspath(args.decks))
-    decks = [Deck(n, ini[n], root, here, args.out) for n in ini.sections() if not only or n in only]
+    decks = [Deck(n, ini[n], root, here, args.out, native(args.keep_frames))
+             for n in ini.sections() if not only or n in only]
     if args.tier2:
         decks = [d for d in decks if d.steps and d.golden2]
     if args.record:

@@ -31,6 +31,8 @@
 #   CDJ_TEST_DECKS    a deck_smoke.py table
 #   CDJ_TEST_NXS2     1 to include the NXS2 part (needs the rig's builds)
 #   CDJ_TEST_LOCK_WAIT  seconds a deck waits for its lane lock before it is skipped (default 20)
+#   CDJ_TEST_KEEP_FRAMES  decks2: a folder to save each loaded deck's screen in,
+#                     <deck>.png with a <deck>.json verdict (deck_smoke.py --keep-frames)
 #
 # On Windows run it from MSYS2's MINGW64 shell, which has the compiler and
 # the DLLs the QEMU builds need.
@@ -90,7 +92,8 @@ run_c6x() {
 
 run_decks() {
     [ -n "${CDJ_TEST_DECKS:-}" ] || { echo "SKIP no deck table in CDJ_TEST_DECKS"; return; }
-    python3 "$HERE/deck_smoke.py" "$CDJ_TEST_DECKS" ${1:+"$1"} --lock-wait "${CDJ_TEST_LOCK_WAIT:-20}" --out "$OUT/${2:-decks}" > "$OUT/${2:-decks}.log" 2>&1
+    python3 "$HERE/deck_smoke.py" "$CDJ_TEST_DECKS" ${1:+"$1"} --lock-wait "${CDJ_TEST_LOCK_WAIT:-20}" \
+        ${CDJ_TEST_KEEP_FRAMES:+--keep-frames "$CDJ_TEST_KEEP_FRAMES"} --out "$OUT/${2:-decks}" > "$OUT/${2:-decks}.log" 2>&1
     local rc=$?
     grep -q ' PASS \| FAIL ' "$OUT/${2:-decks}.log" || { echo "FAIL deck_smoke.py did not run (${2:-decks}.log)"; return; }
     if [ $rc = 0 ]; then echo "PASS $(grep -c ' PASS ' "$OUT/${2:-decks}.log") decks"; else echo "FAIL see below"; fi
