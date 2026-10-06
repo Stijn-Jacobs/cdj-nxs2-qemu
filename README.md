@@ -220,7 +220,8 @@ version), and your own music.
 
 ## Screenshots
 
-### Older decks and work in progress
+<details>
+<summary><b>Older decks, one screen each</b> (CDJ-2000, CDJ-2000NXS, XDJ-1000, XDJ-700, CDJ-900NXS, XDJ-1000MK2)</summary>
 
 These are real captures of each model's firmware running in the emulator.
 Select a screen to view it at its recorded resolution. Captures include work
@@ -242,6 +243,8 @@ or audio support. The XDJ-1000MK2 capture shows USB browsing, not playback.
   </tr>
 </table>
 
+</details>
+
 ### CDJ-2000NXS2 in motion
 
 <p align="center">
@@ -254,6 +257,9 @@ or audio support. The XDJ-1000MK2 capture shows USB browsing, not playback.
 <a href="docs/img/hero.png"><img src="docs/img/hero.png" alt="Two emulated CDJ-2000NXS2s: deck 1 in SYNC follows master deck 2 to 193.7 BPM" width="900"></a>
 </p>
 
+<details>
+<summary><b>More Pro DJ Link screens</b></summary>
+
 <table>
   <tr>
     <td align="center"><img src="docs/img/two-decks.png" alt="Deck 2 showing player 1's beat" width="400"><br><sub>Deck 2 tracks the master's beat over Pro DJ Link</sub></td>
@@ -264,6 +270,8 @@ or audio support. The XDJ-1000MK2 capture shows USB browsing, not playback.
     <td align="center"><img src="docs/img/link-load.png" alt="A track loaded from player 1" width="400"><br><sub>...and playing a track loaded from it</sub></td>
   </tr>
 </table>
+
+</details>
 
 ## How it works
 
