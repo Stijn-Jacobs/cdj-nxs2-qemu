@@ -7,7 +7,7 @@ of their own. The default is `cdj2000nxs2`.
 | profile | player | update | state |
 |---|---|---|---|
 | `cdj2000nxs2.conf` | CDJ-2000NXS2 | v1.87, `C2KNXS2.UPD` | plays |
-| `cdj2000nxs.conf` | CDJ-2000NXS | v1.43, `C2KNXS.UPD` | experimental |
+| `cdj2000nxs.conf` | CDJ-2000NXS | v1.44, `C2KNXS.UPD` | experimental |
 | `cdj2000.conf` | CDJ-2000 | v4.33, four `C2K*.UPD` files | experimental |
 | `xdj1000.conf` | XDJ-1000 | v1.13, `XDJ1000.UPD` | experimental |
 | `xdj700.conf` | XDJ-700 | v1.15, `XDJ700.UPD` | experimental |
