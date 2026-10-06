@@ -12,6 +12,10 @@ from .layout import Layout
 
 DEFAULT = "cdj2000nxs2"
 
+# Where the display board's own update is kept beside the main images, for a
+# model whose display runs inside the MAIN emulator.
+DISPLAY_UPD_IMAGE = "display.upd"
+
 # Checked in this order, so a missing one is reported the same way cdj_model.sh
 # reports it: the first field a profile leaves out, not every one of them.
 REQUIRED = ("MODEL_TITLE", "MODEL_MAIN_MACHINE", "MODEL_EXTRACT", "MODEL_FW_VERSION",
@@ -68,8 +72,22 @@ class Model:
         self.gui_section = values.get("MODEL_GUI_SECTION") or "1"
         self.main_lzss = values["MODEL_MAIN_LZSS"]
         self.fw_steps = values["MODEL_FW_STEPS"].split()
+        self.display_upd = values.get("MODEL_DISPLAY_UPD", "")
+        self.launch = values.get("MODEL_LAUNCH") or "rig"
         self.expected = tuple(tuple(line.split(None, 1))
                               for line in values.get("MODEL_EXPECTED", "").splitlines() if line.strip())
+
+    @property
+    def is_rig(self):
+        """The two-board real-DSP rig (rig.py); any other model starts as one
+        MAIN emulator (deck.py)."""
+        return self.launch == "rig"
+
+    @property
+    def images(self):
+        """What a firmware install leaves in the extract folder."""
+        names = tuple(os.path.basename(rel) for rel, _ in self.expected)
+        return names + (DISPLAY_UPD_IMAGE,) if self.display_upd else names
 
 
 def load(model_id=None):

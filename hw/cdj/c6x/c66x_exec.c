@@ -3,6 +3,9 @@
  * C66x core: instruction execution and the SPLOOP loop buffer.
  */
 #include "c66x_priv.h"
+#ifdef __SSE2__
+#include <xmmintrin.h>
+#endif
 
 /* ------------------------------------------------------------------------ */
 /* arithmetic helpers                                                        */
@@ -38,7 +41,24 @@ static unsigned rmode(c66x_core *c, const c66x_insn *in)
     return in->side == 2 ? (r >> 25) & 3 : (r >> 9) & 3;
 }
 
+#ifdef __SSE2__
+/* Host float maths is SSE, so the rounding mode is one MXCSR field; the
+ * C library's fesetround also rewrites the x87 control word, which cost a
+ * fifth of the DSP thread on a firmware that runs in a directed mode. */
+static inline void host_round(unsigned rm)
+{
+    static const uint32_t rc[4] = { 0, 3u << 13, 2u << 13, 1u << 13 };
+
+    _mm_setcsr((_mm_getcsr() & ~(3u << 13)) | rc[rm]);
+}
+#else
 static const int fe_mode[4] = { FE_TONEAREST, FE_TOWARDZERO, FE_UPWARD, FE_DOWNWARD };
+
+static inline void host_round(unsigned rm)
+{
+    fesetround(fe_mode[rm]);
+}
+#endif
 
 static inline float  u2f(uint32_t v) { float f; memcpy(&f, &v, 4); return f; }
 static inline uint32_t f2u(float f) { uint32_t v; memcpy(&v, &f, 4); return v; }
@@ -326,10 +346,10 @@ int fop_run(c66x_core *c, const c66x_insn *in, uint32_t next_pc)
         return 0;
     case F_ADDSP: case F_SUBSP: case F_MPYSP: {
         unsigned rm = rmode(c, in);
-        if (rm) fesetround(fe_mode[rm]);
+        if (rm) host_round(rm);
         float p = u2f(c->reg[op[0].reg]), q = u2f(c->reg[op[1].reg]);
         float res = in->fop == F_ADDSP ? p + q : in->fop == F_SUBSP ? p - q : p * q;
-        if (rm) fesetround(FE_TONEAREST);
+        if (rm) host_round(0);
         sched(c, op[2].low_first - 1, WK_REG, op[2].reg, f2u(res), 0);
         return 0;
     }
@@ -1001,22 +1021,22 @@ void exec_insn(c66x_core *c, c66x_insn *in, xctx *x)
     case H_ABSDP: W(1, v[0] & 0x7fffffffffffffffULL); return;
     case H_ADDSP: case H_SUBSP: case H_MPYSP: {
         unsigned rm = rmode(c, in);
-        if (rm) fesetround(fe_mode[rm]);
+        if (rm) host_round(rm);
         float p = u2f((uint32_t)v[0]), q = u2f((uint32_t)v[1]);
         float res = h == H_ADDSP ? p + q : h == H_SUBSP ? p - q : p * q;
-        if (rm) fesetround(FE_TONEAREST);
+        if (rm) host_round(0);
         W(2, f2u(res));
         return;
     }
     case H_ADDDP: case H_SUBDP: case H_MPYDP: case H_MPYSPDP: case H_MPYSP2DP: {
         unsigned rm = rmode(c, in);
-        if (rm) fesetround(fe_mode[rm]);
+        if (rm) host_round(rm);
         double p, q, res;
         if (h == H_MPYSPDP) { p = u2f((uint32_t)v[0]); q = u2d(v[1]); }
         else if (h == H_MPYSP2DP) { p = u2f((uint32_t)v[0]); q = u2f((uint32_t)v[1]); }
         else { p = u2d(v[0]); q = u2d(v[1]); }
         res = h == H_ADDDP ? p + q : h == H_SUBDP ? p - q : p * q;
-        if (rm) fesetround(FE_TONEAREST);
+        if (rm) host_round(0);
         W(2, d2u(res));
         return;
     }
@@ -1028,9 +1048,9 @@ void exec_insn(c66x_core *c, c66x_insn *in, xctx *x)
     case H_CMPLTDP: W(2, u2d(v[0]) < u2d(v[1])); return;
     case H_INTSP: case H_INTSPU: {
         unsigned rm = rmode(c, in);
-        if (rm) fesetround(fe_mode[rm]);
+        if (rm) host_round(rm);
         float f = h == H_INTSP ? (float)(int32_t)v[0] : (float)(uint32_t)v[0];
-        if (rm) fesetround(FE_TONEAREST);
+        if (rm) host_round(0);
         W(1, f2u(f));
         return;
     }
@@ -1043,9 +1063,9 @@ void exec_insn(c66x_core *c, c66x_insn *in, xctx *x)
     case H_SPDP: W(1, d2u((double)u2f((uint32_t)v[0]))); return;
     case H_DPSP: {
         unsigned rm = rmode(c, in);
-        if (rm) fesetround(fe_mode[rm]);
+        if (rm) host_round(rm);
         float f = (float)u2d(v[0]);
-        if (rm) fesetround(FE_TONEAREST);
+        if (rm) host_round(0);
         W(1, f2u(f));
         return;
     }
@@ -1073,24 +1093,24 @@ void exec_insn(c66x_core *c, c66x_insn *in, xctx *x)
     }
     case H_DADDSP: case H_DSUBSP: case H_DMPYSP: {
         unsigned rm = rmode(c, in);
-        if (rm) fesetround(fe_mode[rm]);
+        if (rm) host_round(rm);
         uint32_t o[2];
         for (int k = 0; k < 2; k++) {
             float p = u2f((uint32_t)(v[0] >> (32 * k))), q = u2f((uint32_t)(v[1] >> (32 * k)));
             o[k] = f2u(h == H_DADDSP ? p + q : h == H_DSUBSP ? p - q : p * q);
         }
-        if (rm) fesetround(FE_TONEAREST);
+        if (rm) host_round(0);
         W(2, ((uint64_t)o[1] << 32) | o[0]);
         return;
     }
     case H_QMPYSP: {
         unsigned rm = rmode(c, in);
-        if (rm) fesetround(fe_mode[rm]);
+        if (rm) host_round(rm);
         for (int k = 0; k < 4; k++) {
             float p = u2f(c->reg[op[0].reg + k]), q = u2f(c->reg[op[1].reg + k]);
             sched(c, op[2].low_first - 1, WK_REG, op[2].reg + k, f2u(p * q), 0);
         }
-        if (rm) fesetround(FE_TONEAREST);
+        if (rm) host_round(0);
         return;
     }
     case H_CMPYSP: {
@@ -1107,14 +1127,14 @@ void exec_insn(c66x_core *c, c66x_insn *in, xctx *x)
         float b_lo = u2f(c->reg[op[1].reg]), b_hi = u2f(c->reg[op[1].reg + 1]);
         float r4[4];
 
-        if (rm) fesetround(fe_mode[rm]);
+        if (rm) host_round(rm);
         r4[0] = a_lo * b_hi;
         r4[1] = -(a_lo * b_lo);
         r4[2] = a_hi * b_lo;
         r4[3] = a_hi * b_hi;
         for (int k = 0; k < 4; k++)
             sched(c, op[2].low_first - 1, WK_REG, op[2].reg + k, f2u(r4[k]), 0);
-        if (rm) fesetround(FE_TONEAREST);
+        if (rm) host_round(0);
         return;
     }
     case H_QSMPY32R1:
@@ -1173,10 +1193,10 @@ void exec_insn(c66x_core *c, c66x_insn *in, xctx *x)
     case H_LOR: W(2, (uint32_t)v[0] != 0 || (uint32_t)v[1] != 0); return;
     case H_DINTHSP: case H_DINTHSPU: {
         unsigned rm = rmode(c, in);
-        if (rm) fesetround(fe_mode[rm]);
+        if (rm) host_round(rm);
         float e = h == H_DINTHSP ? (float)lsb16s(v[0]) : (float)lsb16u(v[0]);
         float o = h == H_DINTHSP ? (float)msb16s(v[0]) : (float)msb16u(v[0]);
-        if (rm) fesetround(FE_TONEAREST);
+        if (rm) host_round(0);
         W(1, ((uint64_t)f2u(o) << 32) | f2u(e));
         return;
     }
@@ -1184,11 +1204,11 @@ void exec_insn(c66x_core *c, c66x_insn *in, xctx *x)
         /* SPRUGH7 4.93 (printed under the heading DINTHSP) and 4.95: each
          * 32-bit word of the src2 pair to single precision. */
         unsigned rm = rmode(c, in);
-        if (rm) fesetround(fe_mode[rm]);
+        if (rm) host_round(rm);
         uint32_t w_e = (uint32_t)v[0], w_o = (uint32_t)(v[0] >> 32);
         float e = h == H_DINTSP ? (float)(int32_t)w_e : (float)w_e;
         float o = h == H_DINTSP ? (float)(int32_t)w_o : (float)w_o;
-        if (rm) fesetround(FE_TONEAREST);
+        if (rm) host_round(0);
         W(1, ((uint64_t)f2u(o) << 32) | f2u(e));
         return;
     }

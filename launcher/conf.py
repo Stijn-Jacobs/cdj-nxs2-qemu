@@ -10,12 +10,13 @@ import shlex
 import time
 
 # The keys setup writes, in the order it writes them.
-KEYS = ("CDJ_DECKS", "CDJ_NAME", "CDJ_DJLINK", "CDJ_AUDIO", "CDJ_CONTROLLER",
+KEYS = ("CDJ_MODEL", "CDJ_DECKS", "CDJ_NAME", "CDJ_DJLINK", "CDJ_AUDIO", "CDJ_CONTROLLER",
         "CDJ_RELAY_PORT", "CDJ_GROUP", "CDJ_MIDI_PYTHON", "CDJ_TOOLS_PYTHON",
         "QEMU_BUILD", "QEMU_EB_BUILD")
 
 # What start assumes for a key the file does not set.
 START_DEFAULTS = {
+    "CDJ_MODEL": "",
     "CDJ_DECKS": "1", "CDJ_NAME": "show", "CDJ_DJLINK": "0", "CDJ_AUDIO": "1",
     "CDJ_CONTROLLER": "none", "CDJ_RELAY_PORT": "7202",
     "CDJ_GROUP": "239.77.77.1:45000", "CDJ_MIDI_PYTHON": "",

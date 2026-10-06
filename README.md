@@ -2,7 +2,7 @@
 
 # Pioneer CDJ Emulator
 
-**Pioneer DJ CDJ players on your computer: their own firmware on emulated hardware. The CDJ-2000NXS2 is fully supported: played from a virtual deck or a MIDI controller, with mods and a patcher that builds them into your own firmware update; the older players are in progress.**
+**Pioneer DJ CDJ players on your computer: their own firmware on emulated hardware. The CDJ-2000NXS2 is fully supported: played from a virtual deck or a MIDI controller, with mods and a patcher that builds them into your own firmware update; five older players run as experiments.**
 
 [![License: GPL-2.0-or-later](https://img.shields.io/badge/license-GPL--2.0--or--later-blue.svg)](LICENSE)
 [![Platform: Windows | Linux | macOS](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)](#quick-start)
@@ -45,9 +45,11 @@ The features below are the CDJ-2000NXS2's; the older players are covered under
 | player | status | what works |
 |---|---|---|
 | **CDJ-2000NXS2** | ✅ Fully supported | Boots, loads and plays tracks from USB: the waveform and playhead move and the time counts down. The sound is computed by the firmware's own DSP program. Pro DJ Link, MIDI controllers and [mods](#mods). |
-| **CDJ-2000** | 🚧 In progress | Boots to its idle screen, with its display and keys. Lists and browses the USB stick and shows a track's title, artist, BPM and key; the load does not finish yet. |
-| **CDJ-2000NXS** | 🚧 In progress | Boots with its display and keys, and finds the USB stick. Loading a track is not working yet. |
-| **XDJ-1000** | 🧪 In development | Boots to its home screen. Not in this repository yet. |
+| **CDJ-2000** | 🧪 Experimental | Boots with its display and keys, loads a track from USB and plays it forward, far slower than real time: the playhead moves and the time counts down. As on a real deck with AUTO CUE off (the factory setting), a loaded track starts playing straight away; PLAY pauses and resumes. No sound. |
+| **CDJ-2000NXS** | 🧪 Experimental | The same as the CDJ-2000. No sound. |
+| **XDJ-1000** | 🧪 Experimental | Boots with its screen and keys, loads a track from USB and plays it, but at about a tenth of real speed: the playhead and the time start moving a few minutes after the load. PLAY pauses and resumes. No sound. |
+| **XDJ-700** | 🧪 Experimental | The XDJ-1000's board: the same as above. |
+| **CDJ-900NXS** | 🧪 Experimental | The XDJ-1000's board. Boots and loads a track from USB; playback is as slow as on the XDJ-1000 and the time display is incomplete. |
 
 Everything below, from the quick start on, describes the CDJ-2000NXS2 unless it
 says otherwise.
@@ -123,6 +125,26 @@ skipped when it is already done:
 The deck window opens and the CDJ-2000NXS2 boots to its screen. Click the window,
 press `U` for the USB stick, `↓` to a track, `Enter` to load it and `Space` to
 play (every key: [Keyboard](#keyboard)). Click the screen to touch it.
+
+**Other players:** the CDJ-2000, CDJ-2000NXS, XDJ-1000, XDJ-700 and CDJ-900NXS
+start from the same two commands with `--model`; plain `./setup.sh` also asks
+which player you want (Enter keeps the CDJ-2000NXS2):
+
+```sh
+./setup.sh --model cdj2000 --firmware path/to/C2KGUI.UPD   # the others of the four files beside it
+./start.sh --model cdj2000                                  # or cdj2000nxs, with its C2KNXS.UPD
+./setup.sh --model xdj1000 --firmware path/to/XDJ1000.UPD  # v1.13; xdj700 takes XDJ700.UPD v1.15,
+./start.sh --model xdj1000                                  # cdj900nxs C900NXS.UPD v1.31
+```
+
+On the XDJ-1000, XDJ-700 and CDJ-900NXS only `U` (USB), `Enter` (the select knob's push) and `Space`
+(PLAY) are mapped so far: `U` and seven `Enter`s load the first track.
+
+Setup stores the player in `cdj.conf`, so `./start.sh` alone starts it from
+then on. An older player gets the build, firmware and USB steps and opens one
+window with your stick; the DSP code, a second deck, Pro DJ Link, sound, MIDI
+controllers, mods and the virtual deck app are CDJ-2000NXS2 features and are
+skipped. Which players exist is whatever has a profile in `models/`.
 
 **Updating:** `git pull`, then `./start.sh` as usual. The emulator is compiled,
 so when a pull changed its code `start.sh` notices and offers to rebuild
@@ -226,7 +248,10 @@ flowchart LR
 The CDJ-2000 and CDJ-2000NXS have a board model of their own
 (`hw/cdj/boards/cdj2000/`): an SH7763 MAIN, a Blackfin BF531 display
 processor, and a DSP behind a host port (a C6727 on the CDJ-2000, a C6747 on
-the CDJ-2000NXS). Neither plays audio yet, and the launcher does not start them yet.
+the CDJ-2000NXS). The XDJ-1000, XDJ-700 and CDJ-900NXS share the NXS2's
+SH7724 MAIN, which draws their screen itself, with a C6747 DSP
+(`hw/cdj/boards/xdj1000/`). None of the older players makes sound yet, and the
+launcher starts each in one window (see Quick start, other players).
 
 None of the three knows it is emulated. MAIN talks to the display processor
 over the same SPI link, to the DSP over the same host port and McBSP audio bus,
@@ -638,7 +663,8 @@ machine: the update file, and anything built from it, is Pioneer's.
   sample, and it is currently the most demanding thing you can ask of the
   emulator.
 - **Only firmware v1.87** is supported for the CDJ-2000NXS2.
-- **Work in progress.** The older players do not play yet (see
+- **Work in progress.** The older players are experimental: they load and
+  play, but without sound and far slower than real time (see
   [Supported players](#supported-players)). On the NXS2 the USB stick is the only medium so far. Some panel
   keys are decoded by the firmware but have not been tried here; the
   controller tools say so when you bind one.
@@ -654,7 +680,8 @@ machine: the update file, and anything built from it, is Pioneer's.
 | `build.sh` | the build step underneath setup (`./build.sh main`, `display`, …) |
 | `hw/cdj/common/` | what every board shares: the boot (DRAM, NOR flash, image, reset vector), the SH-4 core blocks and the board descriptor (`cdj_common.h`) |
 | `hw/cdj/boards/nxs2/` | the CDJ-2000NXS2: its MAIN board, one file per device, and the display board (`sh7269gui.c`); `diag/` holds the diagnostic hooks, `standin/` historical models that are off by default |
-| `hw/cdj/boards/cdj2000/` | the CDJ-2000 and CDJ-2000NXS: MAIN board (Renesas SH7763), Blackfin display and C6727 / C6747 DSP models, in bring-up |
+| `hw/cdj/boards/cdj2000/` | the CDJ-2000 and CDJ-2000NXS: MAIN board (Renesas SH7763), Blackfin display and C6727 / C6747 DSP models, experimental |
+| `hw/cdj/boards/xdj1000/` | the XDJ-1000, XDJ-700 and CDJ-900NXS: their SH7724 MAIN board with its LCD controller and graphics blocks, experimental |
 | `mods/` | the [mods](#mods) registry and the display- and MAIN-firmware patches behind them |
 | `models/` | one profile per player, read by the firmware and launch scripts (see `models/README.md`) |
 | `hw/cdj/c6x/` | the C66x DSP core, its SoC peripherals, the JIT generator (`tools/`) and unit tests |
@@ -666,6 +693,7 @@ machine: the update file, and anything built from it, is Pioneer's.
 | `scripts/net/` | the Pro DJ Link segment: DHCP server, capture, capture scorer, and `tap_setup.ps1` for the [TAP adapter](#rekordbox-ableton) |
 | `midi/` | the MIDI controller bridge, controller profiles, mappings and the learn tool |
 | `app/` | the [virtual deck app](#virtual-deck): the drawn player around the emulated screen |
+| `tests/`, `scripts/test/` | the offline unit tests (`python -m pytest tests`, no firmware needed) and the quick check: `scripts/test/quick.sh` runs them beside a replay of DSP recordings and a headless boot of each deck to its first stable screen (`deck_smoke.py`), in a couple of minutes |
 | `docs/img/` | the screenshots on this page |
 
 The board sources are copied into the QEMU tree on every build; edit them here,

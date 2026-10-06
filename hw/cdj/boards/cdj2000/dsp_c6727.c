@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "dsp_host.h"
+#include "dsp_dmax.h"
 #include "cdj_getenv.h"
 /*
  * The CDJ-2000's DSP: a C6727 (C67x+) that MAIN boots and feeds through its
@@ -39,6 +40,7 @@
  *
  *   CDJ_C6727_MHZ=<n>       DSP clock (default 300)
  *   CDJ_C6727=0             no core: the window is plain memory
+ *   CDJ_C6X_RECORD=<path>   record what the core receives, for c6xreplay
  *   CDJ_HPI_DUMP=<dir>      at exit, save internal RAM and the first MiB of
  *                           SDRAM as <dir>/iram.bin and <dir>/sdram.bin
  */
@@ -68,6 +70,7 @@
 #define WIN_OFF         0xC0000
 #define WIN_SIZE        0x10000
 
+#define MCASP_TX_UP     0x1F00u         /* XCLKRST..XFRST all released */
 #define CREG9_FUNC      0x8004CDA0u
 #define REG_A4          4
 #define REG_B3          (32 + 3)
@@ -79,11 +82,13 @@ typedef struct CdjC6727 {
 
     uint32_t cfg[CFG_SIZE / 4];
     uint32_t spi_in;
+    CdjDmax dmax;
     DspMcasps mcasps;
     uint64_t win_writes, win_reads, dropped;
     uint64_t outside;           /* MAIN accesses beyond HPIC and the window */
     hwaddr outside_last;
     uint64_t creg9_writes;
+    uint64_t dspint_writes;     /* MAIN raising HPIC.DSPINT */
     uint32_t creg9_last;
     DspAddrTable polls;
 
@@ -130,6 +135,8 @@ static uint32_t dsp_bus_read(void *opaque, uint32_t addr, unsigned size)
         val = SPIBUF_RXEMPTY;
     } else if (addr - CFG_BASE < CFG_SIZE) {
         val = s->cfg[(addr - CFG_BASE) / 4];
+    } else if (addr - DMAX_BASE < DMAX_SIZE) {
+        val = cdj_dmax_read(&s->dmax, addr);
     } else {
         val = cdj_dsp_mcasp_read(&s->mcasps, addr);
     }
@@ -146,8 +153,13 @@ static void dsp_bus_write(void *opaque, uint32_t addr, uint32_t val,
         cdj_dsp_host_dsp_hpic(&s->host, val);
     } else if (addr - CFG_BASE < CFG_SIZE) {
         s->cfg[(addr - CFG_BASE) / 4] = val;
+    } else if (addr - DMAX_BASE < DMAX_SIZE) {
+        cdj_dmax_write(&s->dmax, addr, val);
     } else {
         cdj_dsp_mcasp_write(&s->mcasps, addr, val);
+        cdj_dmax_audio_tx(&s->dmax,
+                          (s->mcasps.gblctl[1] & s->mcasps.gblctl[2] &
+                           MCASP_TX_UP) == MCASP_TX_UP);
     }
     cdj_dsp_count(&s->host.busw, addr, val);
 }
@@ -160,14 +172,48 @@ static int creg9_hook(c66x_core *core, void *opaque)
     if (!s->creg9_writes++) {
         info_report("c6727: control register 9 <- 0x%08x", s->creg9_last);
     }
+    cdj_dmax_detr(&s->dmax, s->creg9_last);
     c66x_set_pc(core, c66x_get_reg(core, REG_B3));
     return 0;
+}
+
+static uint8_t *dmax_ram(void *opaque, uint32_t addr)
+{
+    return dsp_ram(opaque, addr);
+}
+
+/* Through the core, so its decoded code, its idle tracking and a recording
+ * see the store. */
+static void dmax_stored(void *opaque, uint32_t addr, uint32_t len)
+{
+    CdjC6727 *s = opaque;
+
+    c66x_invalidate(s->host.core, addr, len);
+}
+
+static void dmax_set_irq(void *opaque, int line, int level)
+{
+    CdjC6727 *s = opaque;
+
+    c66x_set_irq(s->host.core, line, level);
+}
+
+static void dmax_after_chunk(void *opaque, int64_t dsp_ns)
+{
+    CdjC6727 *s = opaque;
+
+    cdj_dmax_audio_run(&s->dmax, dsp_ns);
 }
 
 static void dsp_start(CdjC6727 *s)
 {
     c66x_bus bus = { s, dsp_bus_read, dsp_bus_write };
     c66x_core *core = cdj_dsp_host_core(&s->host, &bus);
+
+    if (c66x_record_open(core, getenv("CDJ_C6X_RECORD"))) {
+        warn_report("c6727: cannot open CDJ_C6X_RECORD %s",
+                    getenv("CDJ_C6X_RECORD"));
+    }
 
     c66x_map_ram(core, IRAM_BASE, IRAM_SIZE, s->iram);
     c66x_map_ram(core, SDRAM_BASE, SDRAM_SIZE, s->sdram);
@@ -218,7 +264,7 @@ static void hpi_write(void *opaque, hwaddr off, uint64_t val, unsigned size)
     CDJ_DSP_HOST_GUARD(&s->host);
 
     if (off == 0) {
-        cdj_dsp_host_main_hpic(&s->host, val);
+        s->dspint_writes += cdj_dsp_host_main_hpic(&s->host, val);
         return;
     }
     if (off - WIN_OFF >= WIN_SIZE) {
@@ -260,6 +306,8 @@ static void c6727_exit_report(Notifier *n, void *data)
                 ", last at +0x%05" HWADDR_PRIx, s->outside, s->outside_last);
     info_report("c6727: control register 9 written %" PRIu64 " times, last "
                 "0x%08x", s->creg9_writes, s->creg9_last);
+    info_report("c6727: MAIN raised DSPINT %" PRIu64 " times",
+                s->dspint_writes);
     for (i = 0; i < s->polls.n; i++) {
         info_report("c6727.hpi: host read 0x%08x x%" PRIu64 ", last 0x%08x",
                     s->polls.e[i].addr, s->polls.e[i].count,
@@ -269,7 +317,11 @@ static void c6727_exit_report(Notifier *n, void *data)
         cdj_dsp_dump_mem(dir, "iram.bin", s->iram, IRAM_SIZE);
         cdj_dsp_dump_mem(dir, "sdram.bin", s->sdram, MiB);
     }
+    cdj_dmax_report(&s->dmax);
     cdj_dsp_host_report(&s->host);
+    if (s->host.core) {
+        c66x_record_close(s->host.core);
+    }
 }
 
 const CdjDspWires *cdj_c6727_init(MemoryRegion *sysmem, hwaddr hpi_base)
@@ -284,6 +336,11 @@ const CdjDspWires *cdj_c6727_init(MemoryRegion *sysmem, hwaddr hpi_base)
     cdj_dsp_host_init(&s->host, "c6727", "C6727", 300, set_command_pins, s);
     s->host.dspint_line = DSPINT_IRQ;
     s->mcasps = (DspMcasps){ MCASP_BASE, MCASP_STRIDE };
+    s->dmax.ram = dmax_ram;
+    s->dmax.set_irq = dmax_set_irq;
+    s->dmax.stored = dmax_stored;
+    s->dmax.chip = s;
+    s->host.after_chunk = dmax_after_chunk;
 
     memory_region_init_io(&s->iomem, NULL, &hpi_ops, s, "c6727.hpi", 0x100000);
     memory_region_add_subregion(sysmem, hpi_base, &s->iomem);

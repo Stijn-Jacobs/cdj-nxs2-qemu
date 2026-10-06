@@ -7,8 +7,11 @@ of their own. The default is `cdj2000nxs2`.
 | profile | player | update | state |
 |---|---|---|---|
 | `cdj2000nxs2.conf` | CDJ-2000NXS2 | v1.87, `C2KNXS2.UPD` | plays |
-| `cdj2000nxs.conf` | CDJ-2000NXS | v1.40, `C2KNXS.UPD` | bring-up, MAIN only |
-| `cdj2000.conf` | CDJ-2000 | v4.33, four `C2K*.UPD` files | bring-up, MAIN only |
+| `cdj2000nxs.conf` | CDJ-2000NXS | v1.43, `C2KNXS.UPD` | experimental |
+| `cdj2000.conf` | CDJ-2000 | v4.33, four `C2K*.UPD` files | experimental |
+| `xdj1000.conf` | XDJ-1000 | v1.13, `XDJ1000.UPD` | experimental |
+| `xdj700.conf` | XDJ-700 | v1.15, `XDJ700.UPD` | experimental |
+| `cdj900nxs.conf` | CDJ-900NXS | v1.31, `C900NXS.UPD` | experimental |
 
 The CDJ-2000 and the CDJ-2000NXS are one platform (an older SH-4A MAIN with
 its peripherals at `0xFFxxxxxx`, a C672x-class DSP), so both boot the
@@ -30,6 +33,8 @@ DSP, SH7269 GUI processor).
 | `MODEL_MAIN_LZSS` | offset of MAIN's LZSS stream in the S-record image (after its 4-byte length) |
 | `MODEL_FW_STEPS` | the `prepare_firmware.sh` steps to run, in order |
 | `MODEL_EXPECTED` | each output image and its SHA-256 |
+| `MODEL_LAUNCH` | `rig` (default): the NXS2's two-board real-DSP rig, started by `rig.py`. `deck`: one MAIN emulator that draws the screen itself or runs its display board inside it, started by `deck.py`; the DSP warm-up, Pro DJ Link, mods, controller and virtual deck app are skipped for it |
+| `MODEL_DISPLAY_UPD` | the update file the display board loads (a `deck` model only); the install keeps a copy as `display.upd` beside the main images |
 
 ## Adding a model
 

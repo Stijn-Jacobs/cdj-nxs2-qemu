@@ -4,6 +4,9 @@ CDJ-2000NXS2 windows, the controller relay and, if you chose a MIDI
 controller, the bridge. Ctrl-C stops everything.
 
   usage: ./start.sh             start
+         ./start.sh --model <id>   start that player (cdj2000nxs2, the default,
+                                 or an older one: see models/); setup.sh
+                                 stores the one you chose in cdj.conf
          ./start.sh --app       start with the virtual deck app as the window
          ./start.sh --service   boot into the service manual's SERVICE MODE
                                  screen instead of the player (see "Service
@@ -23,7 +26,7 @@ import subprocess
 import sys
 import time
 
-from . import chain, conf, host, mods
+from . import chain, conf, deck, host, model, mods
 from .chain import nonempty, say
 from .console import stdin_is_tty
 from .layout import Layout
@@ -73,8 +76,9 @@ def stop(lay):
 
 
 def main(argv):
-    dry, app, service = False, None, None
-    for a in argv:
+    dry, app, service, model_id = False, None, None, ""
+    args = iter(argv)
+    for a in args:
         if a == "stop":
             return stop(Layout())
         if a == "--dry-run":
@@ -87,6 +91,11 @@ def main(argv):
             service = True
         elif a == "--no-service":
             service = False
+        elif a == "--model":
+            model_id = next(args, "")
+            if not model_id:
+                chain.err("--model needs a player (one of: %s)" % " ".join(model.list_models()))
+                return 2
         elif a in ("-h", "--help"):
             sys.stdout.write(__doc__[__doc__.index("  usage:"):])
             return 0
@@ -100,6 +109,13 @@ def main(argv):
         return 1
     values = conf.load(lay.conf, warn=chain.err)
     c = conf.with_start_defaults(values)
+    try:
+        player = model.load(model_id or c["CDJ_MODEL"] or None)
+    except model.ModelError as e:
+        chain.err(str(e))
+        return 2
+    if not player.is_rig:
+        return _start_deck(lay, player, c, dry)
     if app is None:
         # The packaged program's window is the virtual deck app unless the
         # settings say otherwise.
@@ -249,6 +265,16 @@ def main(argv):
                 % (env["CDJ_APP_VNC_BASE"], " ".join(shlex.quote(a) for a in app_cmd)))
         return 0
     return run(lay, env, launch, bridge, app_cmd)
+
+
+def _start_deck(lay, player, c, dry):
+    """An older player: one window, none of the NXS2 rig around it."""
+    env = dict(os.environ)
+    if lay.packaged:
+        env["MAIN_QEMU"] = lay.qemu_binaries()[0]
+    elif c["QEMU_BUILD"] and not env.get("MAIN_QEMU"):
+        env["QEMU_BUILD"] = c["QEMU_BUILD"]
+    return deck.start(player, env, dry)
 
 
 def _shown(argv):

@@ -23,6 +23,10 @@
  * has read the pins again. Without the second, MAIN drops the command and
  * raises the next one before the loader, still waiting for the drop
  * (0x1180292C), has looked.
+ *
+ * CDJ_<chip>_SLACK_US=n keeps the core from falling more than n microseconds
+ * behind: a virtual-clock timer holds MAIN back until it has caught up. Off,
+ * the core only ever lags, by minutes once a track plays.
  */
 
 #define QUANTUM_NS      (1000 * 1000)
@@ -30,6 +34,7 @@
 #define SLICE_CYCLES    2000
 #define REACT_STEP      2000
 #define REACT_MAX       (4 * 1000 * 1000)
+#define SLACK_POLL_NS   (1000 * 1000)
 
 #define MCASP_GBLCTL    0x44
 #define MCASP_RGBLCTL   0x60
@@ -78,9 +83,45 @@ static void *host_thread(void *opaque)
         }
         qemu_mutex_unlock(&h->lock);
         /* An idle core has waited out the rest of its slices. */
+        qemu_mutex_lock(&h->progress_lock);
         h->dsp_ns += CHUNK_NS * run / h->cycles_per_chunk;
+        qemu_cond_broadcast(&h->progress);
+        qemu_mutex_unlock(&h->progress_lock);
+        if (h->after_chunk) {
+            qemu_mutex_lock(&h->lock);
+            h->after_chunk(h->chip, h->dsp_ns);
+            qemu_mutex_unlock(&h->lock);
+        }
     }
     return NULL;
+}
+
+/*
+ * With the BQL dropped, as in cdj_dsp_host_lock: the core thread needs
+ * nothing from MAIN's side to catch up.
+ */
+static void slack_tick(void *opaque)
+{
+    CdjDspHost *h = opaque;
+    int64_t virt = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    int64_t need = virt - h->slack_ns;
+    bool had_bql = bql_locked();
+
+    if (qatomic_read(&h->running) && h->dsp_ns < need) {
+        if (had_bql) {
+            bql_unlock();
+        }
+        qemu_mutex_lock(&h->progress_lock);
+        while (qatomic_read(&h->running) && h->dsp_ns < need) {
+            qemu_cond_timedwait(&h->progress, &h->progress_lock, 10);
+        }
+        qemu_mutex_unlock(&h->progress_lock);
+        if (had_bql) {
+            bql_lock();
+        }
+    }
+    timer_mod(h->slack_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL)
+                              + SLACK_POLL_NS);
 }
 
 /*
@@ -199,12 +240,18 @@ void cdj_dsp_host_init(CdjDspHost *h, const char *name, const char *env_prefix,
     g_autofree char *mhz_var = g_strdup_printf("CDJ_%s_MHZ", env_prefix);
     const char *on = getenv(on_var);
     const char *mhz = getenv(mhz_var);
+    g_autofree char *slack_var = g_strdup_printf("CDJ_%s_SLACK_US", env_prefix);
+    const char *slack;
 
     h->name = name;
     h->enabled = !(on && !strcmp(on, "0"));
     h->cycles_per_chunk = (mhz ? strtoull(mhz, NULL, 0) : default_mhz)
                           * CHUNK_NS / 1000;
     qemu_mutex_init(&h->lock);
+    qemu_mutex_init(&h->progress_lock);
+    qemu_cond_init(&h->progress);
+    slack = getenv(slack_var);
+    h->slack_ns = slack ? strtoull(slack, NULL, 0) * 1000 : 0;
     /* The chip's ROM boot loader raises HINT at reset to tell the host it
      * is ready; MAIN waits for that before it loads anything. */
     h->hpic = HPIC_HINT;
@@ -227,6 +274,12 @@ void cdj_dsp_host_run(CdjDspHost *h, uint32_t entry)
     info_report("%s: started at 0x%08x", h->name, entry);
     qemu_thread_create(&h->thread, h->name, host_thread, h,
                        QEMU_THREAD_DETACHED);
+    if (h->slack_ns) {
+        h->slack_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, slack_tick, h);
+        timer_mod(h->slack_timer, h->dsp_ns + SLACK_POLL_NS);
+        info_report("%s: core kept within %" PRId64 " us of the virtual clock",
+                    h->name, h->slack_ns / 1000);
+    }
 }
 
 /* The GBLCTL register @addr is in, or -1; its McASP in @n. */

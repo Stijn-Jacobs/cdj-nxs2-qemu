@@ -125,6 +125,10 @@ typedef struct CdjIicState {
  * count to decide when to report the DSP ready. */
 static CdjIicState *cdj_iic_dsp_channel;
 
+/* The channel a board wires the auth chip to, answering without
+ * CDJ_IIC_SLAVE; -1 leaves the choice to the knobs. */
+static int cdj_iic_auth_channel = -1;
+
 static const CdjAuthAnswer nxs2_auth_answers[] = {
     { 0x00, 0x05 },
     { 0x01, 0x01 },
@@ -664,14 +668,15 @@ void cdj_iic(MemoryRegion *sysmem, const char *name, hwaddr addr,
     s->exit.notify = cdj_iic_summary;
     qemu_add_exit_notifier(&s->exit);
 
-    if (cdj_iic_slave_on(ch)) {
+    if (cdj_iic_slave_on(ch) || ch == cdj_iic_auth_channel) {
         const char *e;
 
         s->slave_on = true;
         s->nack_unknown = getenv("CDJ_IIC_NACK") != NULL;
         s->debug = getenv("CDJ_IIC_DEBUG") != NULL;
         e = getenv("CDJ_IIC_ADDR");
-        s->addr_list = e ? e : "0x30";
+        s->addr_list = e ? e :
+                       ch == cdj_iic_auth_channel ? "0x10" : "0x30";
         {
             const char *p = s->addr_list;
 
@@ -723,3 +728,22 @@ void cdj_iic(MemoryRegion *sysmem, const char *name, hwaddr addr,
     memory_region_add_subregion_overlap(sysmem, A7ADDR(addr), &s->iomem, 1);
 }
 
+void cdj_sh7724_iic_init(MemoryRegion *sysmem, int auth_channel)
+{
+    qemu_irq iic0[CDJ_IIC_NR_IRQ] = {
+        cdj_count_irq(cdj_intc.irqs[CDJ_IIC0_AL], "IIC0 ALI"),
+        cdj_count_irq(cdj_intc.irqs[CDJ_IIC0_TACK], "IIC0 TACKI"),
+        cdj_count_irq(cdj_intc.irqs[CDJ_IIC0_WAIT], "IIC0 WAITI"),
+        cdj_count_irq(cdj_intc.irqs[CDJ_IIC0_DTE], "IIC0 DTEI"),
+    };
+    qemu_irq iic1[CDJ_IIC_NR_IRQ] = {
+        cdj_count_irq(cdj_intc.irqs[CDJ_IIC1_AL], "IIC1 ALI"),
+        cdj_count_irq(cdj_intc.irqs[CDJ_IIC1_TACK], "IIC1 TACKI"),
+        cdj_count_irq(cdj_intc.irqs[CDJ_IIC1_WAIT], "IIC1 WAITI"),
+        cdj_count_irq(cdj_intc.irqs[CDJ_IIC1_DTE], "IIC1 DTEI"),
+    };
+
+    cdj_iic_auth_channel = auth_channel;
+    cdj_iic(sysmem, "sh7724.iic0", 0xA4470000, 0, iic0);
+    cdj_iic(sysmem, "sh7724.iic1", 0xA4750000, 1, iic1);
+}

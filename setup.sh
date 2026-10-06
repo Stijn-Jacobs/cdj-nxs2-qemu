@@ -36,7 +36,10 @@
 #                          ~16 GB free disk while it runs)
 #   --keep-recording       keep that build's DSP recording (~10 GB) afterwards
 #   --reconfigure          ask the step 6 questions again
-#   --firmware <file>      the C2KNXS2.UPD to use (re-installs the images)
+#   --model <id>           the player: cdj2000nxs2 (default) or an older one in models/;
+#                          asked when not given. An older player gets steps 1-4
+#                          and a one-window start
+#   --firmware <file>      your update file for it (C2KNXS2.UPD for the CDJ-2000NXS2)
 #   --music <folder>       the rekordbox USB export to image (re-makes the stick)
 #   --tracks <folder>      a plain folder of music to image instead, analysed by baken
 #   --decks 1|2            --name <deck name>    --djlink on|off   --audio on|off

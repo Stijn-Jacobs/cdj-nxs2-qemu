@@ -53,7 +53,8 @@ const CdjDspWires *cdj_c6747_init(MemoryRegion *sysmem, hwaddr hpi_base);
 const CdjDspWires *cdj_c6727_init(MemoryRegion *sysmem, hwaddr hpi_base);
 
 /* The front-panel MCU link on SCIF2: a 24-byte DMA-fed exchange, the NXS2's
- * protocol at a shorter frame length and with no touch screen. */
+ * protocol at a shorter frame length and with no touch screen. The idle frame
+ * reports the DIRECTION lever in its FWD position. */
 void cdj2000_panel_init(MemoryRegion *sysmem, hwaddr addr);
 
 /* The ADSP-BF531 display processor on the other end of SPORT1. Does nothing

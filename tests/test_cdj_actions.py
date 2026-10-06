@@ -92,6 +92,22 @@ def test_raw_level_and_rot():
     assert isinstance(rot, ca.RotaryAction) and rot.off == 0x0E and rot.status == ca.GUESS
 
 
+@pytest.mark.parametrize("model", ["cdj2000", "cdj2000nxs"])
+def test_older_decks_hold_the_direction_lever_at_0x0f(model, monkeypatch):
+    monkeypatch.delenv("CDJ_MODEL", raising=False)
+    a = ca.resolve("direction_rev", model=model)
+    assert a.hold_datagram() == "0x0f:2:0:hold"
+    monkeypatch.setenv("CDJ_MODEL", model)
+    assert ca.resolve("direction_rev") is a
+
+
+@pytest.mark.parametrize("model", [None, "cdj2000nxs2", "xdj1000"])
+def test_other_decks_keep_the_nxs2_direction_lever(model, monkeypatch):
+    monkeypatch.delenv("CDJ_MODEL", raising=False)
+    assert ca.resolve("direction_rev", model=model) is ca.ACTIONS["direction_rev"]
+    assert ca.resolve("cue", model="cdj2000") is ca.ACTIONS["cue"]
+
+
 def test_touch_tap_takes_its_pixel_from_the_spec():
     a = ca.resolve("touch_tap", {"x": 10, "y": 20})
     assert (a.x, a.y) == (10, 20)

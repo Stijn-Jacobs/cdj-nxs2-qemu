@@ -520,6 +520,8 @@ enum {
     CDJ_DMAC1B,                  /* priority group: both share IPRK[11:8]      */
     CDJ_MSIOFI0,
     CDJ_ETHI,                    /* EtherMAC, vector H'D60, IPRJ [11:8]       */
+    CDJ_LCDCI,                   /* LCDC, vector H'F40, IPRB [11:8]           */
+    CDJ_2DG_TRI,                 /* 2DG transfer end, vector H'780, IPRI [3:0] */
     CDJ_INTC_NR_SOURCES
 };
 
@@ -598,6 +600,7 @@ void cdj_msiof(MemoryRegion *sysmem, const char *name, hwaddr addr,
 uint64_t cdj_dsp_i2c_tx_bytes(void);
 void cdj_iic(MemoryRegion *sysmem, const char *name, hwaddr addr,
                     unsigned ch, qemu_irq *irq);
+void cdj_sh7724_iic_init(MemoryRegion *sysmem, int auth_channel);
 void cdj_pnl_init(MemoryRegion *sysmem, hwaddr addr);
 /* The rear USB port's bus side: what a token gets back besides a length. */
 #define CDJ_USBF_NAK   (-1)

@@ -8,6 +8,7 @@ import os
 import shutil
 import sys
 import uuid
+from collections import namedtuple
 
 import pytest
 
@@ -116,3 +117,94 @@ def test_no_frames_is_an_instrument_failure(frames_dir):
     tag, _ = frames_dir
     r = run_script("scripts/run/score_playhead.py", tag)
     assert "instrument dead" in r.stdout
+
+
+# -- the older decks ---------------------------------------------------------------
+#
+# Their frames come from a directory or a glob, so these run on Windows too.
+
+OLD = lift("scripts/run/score_playhead.py", ["Layout", "NXS2", "LAYOUTS", "marker_x"],
+           {"namedtuple": namedtuple, "WAVE": None, "REMAIN": None})
+
+
+def player(lay, x=None, colour=(255, 255, 255), wave=True):
+    """A loaded screen in this layout: a lit top half, a blue strip, a marker."""
+    w, h = lay.size
+    img = Image.new("RGB", lay.size)
+    img.paste((255, 255, 255), (0, 0, w, h // 4))
+    x0, y0, x1, y1 = lay.wave
+    if wave:
+        img.paste((90, 120, 230), (x0, y0 + 4, x1, y1 - 4))
+    if x is not None:
+        img.paste(colour, (x, y0, x + 1, y1))
+    return img
+
+
+def score_dir(tmp_path, images, *opts, ext="ppm"):
+    for i, img in enumerate(images):
+        p = tmp_path / ("t%03d.%s" % (i * 15, ext))
+        if ext == "fb":
+            rgb = img.tobytes()
+            p.write_bytes(b"".join((r >> 3 << 11 | g >> 2 << 5 | b >> 3).to_bytes(2, "little")
+                                   for r, g, b in zip(rgb[0::3], rgb[1::3], rgb[2::3])))
+        else:
+            img.save(p)
+    r = run_script("scripts/run/score_playhead.py", *opts, tmp_path)
+    assert r.returncode == 0, r.stderr
+    return r.stdout
+
+
+def test_marker_is_the_whitest_or_reddest_strip_column():
+    lay = OLD["LAYOUTS"]["cdj2000"]
+    assert OLD["marker_x"](player(lay, 120), lay) == 120
+    assert OLD["marker_x"](player(lay, 77, (230, 20, 20)), lay) == 77
+    assert OLD["marker_x"](player(lay), lay) == -1
+
+
+def test_a_short_column_is_not_a_marker():
+    lay = OLD["LAYOUTS"]["xdj"]
+    img = player(lay)
+    img.paste((255, 255, 255), (300, lay.wave[1], 301, lay.wave[1] + lay.marker - 1))
+    assert OLD["marker_x"](img, lay) == -1
+
+
+def test_480x255_frames_pick_the_cdj2000_layout_and_a_moving_marker_is_motion(tmp_path):
+    lay = OLD["LAYOUTS"]["cdj2000"]
+    out = score_dir(tmp_path, [player(lay, x) for x in (40, 46, 52)])
+    assert "** MOTION **" in out and "(x 40 46 52)" in out
+
+
+def test_a_marker_that_only_turns_red_is_static(tmp_path):
+    lay = OLD["LAYOUTS"]["cdj2000"]
+    out = score_dir(tmp_path, [player(lay, 40), player(lay, 40, (230, 20, 20))])
+    assert "VERDICT: STATIC -- playhead at x=40" in out
+
+
+def test_frames_before_the_load_are_not_scored(tmp_path):
+    lay = OLD["LAYOUTS"]["cdj2000"]
+    browse = Image.new("RGB", lay.size, (255, 255, 255))
+    out = score_dir(tmp_path, [browse, player(lay, 40), player(lay, 44)])
+    assert "(before the load)" in out and "** MOTION **" in out
+
+
+def test_a_deck_that_never_loads_is_nowave(tmp_path):
+    lay = OLD["LAYOUTS"]["cdj2000"]
+    out = score_dir(tmp_path, [player(lay, wave=False) for _ in range(3)])
+    assert "VERDICT: NOWAVE" in out
+
+
+def test_xdj_frame_buffer_dumps_score_with_the_model(tmp_path):
+    lay = OLD["LAYOUTS"]["xdj"]
+    out = score_dir(tmp_path, [player(lay, x) for x in (120, 128)], "--model", "xdj1000", ext="fb")
+    assert "** MOTION **" in out and "(x 120 128)" in out
+
+
+def test_cdj900nxs_strip_lost_is_a_repaint(tmp_path):
+    lay = OLD["LAYOUTS"]["cdj900nxs"]
+    out = score_dir(tmp_path, [player(lay, 130), player(lay, wave=False)], "--model", "cdj900nxs")
+    assert "VERDICT: WAVELOST" in out
+
+
+def test_an_800x480_frame_without_a_model_is_still_the_nxs2(tmp_path):
+    out = score_dir(tmp_path, [with_wave(canvas(), x) for x in (200, 300)])
+    assert "wave-sig" in out and "(2 distinct)" in out

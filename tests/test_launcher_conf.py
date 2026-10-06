@@ -43,7 +43,7 @@ def test_reads_what_bash_setup_wrote():
 def test_rewrite_keeps_unknown_keys_and_reads_back():
     v = conf.parse(OLD)
     text = conf.render(v)
-    assert conf.parse(text) == v
+    assert conf.parse(text) == dict(v, CDJ_MODEL="")  # an older file has no player: the default
     assert text.index("CDJ_APP=") > text.index("QEMU_EB_BUILD=")
 
 

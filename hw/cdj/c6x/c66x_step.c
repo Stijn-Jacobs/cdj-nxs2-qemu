@@ -257,7 +257,7 @@ static int fast_cycles(c66x_core *c, uint64_t end, c66x_stop *stop)
         /* A flag for an interrupt that cannot be taken (masked, GIE off)
          * changes nothing the general loop would do: gate on a deliverable one. */
         if (c->spl.active | c->int_entry | c->idle | c->spl_irq_pending
-            | (c->trace != NULL) | c->nhooks | (c->cycle < c->pm_resume_at)
+            | (c->trace != NULL) | (c->cycle < c->pm_resume_at)
             || (c->ifr && pending_interrupt(c)))
             return FAST_HANDOFF;
         if (c->mcnop > 0) {
@@ -283,6 +283,9 @@ static int fast_cycles(c66x_core *c, uint64_t end, c66x_stop *stop)
         } else {
             if (c->idle_head && (c->pc == c->idle_head
                                  || (c->idle_ret_pending && c->pc == c->idle_resume_pc)))
+                return FAST_HANDOFF;
+            /* Hooks fire in the general loop: hand only the hooked packet to it. */
+            if (c->nhooks && find_hook(c, c->pc))
                 return FAST_HANDOFF;
             uint32_t pc = c->pc;
             const pkc_ent *pe = &c->pkc[PKC_SLOT(pc)];

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "dsp_host.h"
 #include "cdj_getenv.h"
+#include "dsp_edma3.h"
 /*
  * The CDJ-2000NXS's DSP: a C674x (C6747 class) that MAIN boots and feeds
  * through its host port (UHPI). The C674x instruction set is a subset of the
@@ -28,6 +29,7 @@
  *
  *   CDJ_C6747_MHZ=<n>       DSP clock (default 300)
  *   CDJ_C6747=0             no core: the host port is plain memory
+ *   CDJ_C6X_RECORD=<path>   record what the core receives, for c6xreplay
  *   CDJ_HPI_DUMP=<dir>      at exit, save each run of host-port writes as
  *                           <dir>/hpi_<addr>.bin, and L2 and the first MiB
  *                           of SDRAM as <dir>/l2.bin and <dir>/sdram.bin
@@ -43,6 +45,12 @@
 #define SHRAM_SIZE      (128 * KiB)
 #define SDRAM_BASE      0xC0000000u
 #define SDRAM_SIZE      (64 * MiB)
+
+/* MAIN's DSPINT is INT15: the application maps event 0x22 there (INTMUX3 =
+ * 0x220E0D0C) and enables INT4, INT8 and INT15. With the line left unwired
+ * MAIN's mailbox poll never gets an answer and the deck shows E-8302. */
+#define DSPINT_IRQ      15
+#define EDMA_IRQ        8
 
 #define BOOT_WORD       0x11800000u
 #define UHPI_BASE       0x01E10000u
@@ -86,6 +94,7 @@ typedef struct CdjC6747 {
 
     uint32_t gpio_dir[GPIO_PAIRS], gpio_out[GPIO_PAIRS], gpio_ext[GPIO_PAIRS];
     DspMcasps mcasps;
+    CdjEdma3 edma;
 
     Notifier exit;
 } CdjC6747;
@@ -152,6 +161,41 @@ static void gpio_write(CdjC6747 *s, unsigned pair, unsigned reg, uint32_t val)
     }
 }
 
+static uint8_t *edma_ram(void *opaque, uint32_t addr)
+{
+    return dsp_ram(opaque, addr);
+}
+
+/* The core keeps predecoded code and records every store it did not make
+ * itself, so it has to hear about each transfer into its RAM. */
+static void edma_stored(void *opaque, uint32_t addr, uint32_t len)
+{
+    CdjC6747 *s = opaque;
+
+    c66x_invalidate(s->host.core, addr, len);
+}
+
+static void edma_write_word(void *opaque, uint32_t addr, uint32_t val)
+{
+    CdjC6747 *s = opaque;
+
+    cdj_dsp_mcasp_write(&s->mcasps, addr, val);
+}
+
+static void edma_set_irq(void *opaque, int level)
+{
+    CdjC6747 *s = opaque;
+
+    c66x_set_irq(s->host.core, EDMA_IRQ, level);
+}
+
+static void edma_after_chunk(void *opaque, int64_t dsp_ns)
+{
+    CdjC6747 *s = opaque;
+
+    cdj_edma3_paced(&s->edma, dsp_ns);
+}
+
 static void set_command_pins(void *opaque, unsigned bits)
 {
     CdjC6747 *s = opaque;
@@ -171,6 +215,8 @@ static uint32_t dsp_bus_read(void *opaque, uint32_t addr, unsigned size)
         val = cdj_dsp_host_hpic(&s->host);
     } else if (addr == SPI1_SPIBUF) {
         val = SPIBUF_RXEMPTY;
+    } else if (addr - EDMA3_BASE < EDMA3_SIZE) {
+        val = cdj_edma3_read(&s->edma, addr);
     } else if (gpio_reg(addr, &pair, &reg)) {
         val = reg == GPIO_DIR ? s->gpio_dir[pair]
             : reg == GPIO_OUT ? s->gpio_out[pair]
@@ -193,6 +239,8 @@ static void dsp_bus_write(void *opaque, uint32_t addr, uint32_t val,
 
     if (addr == UHPI_HPIC) {
         cdj_dsp_host_dsp_hpic(&s->host, val);
+    } else if (addr - EDMA3_BASE < EDMA3_SIZE) {
+        cdj_edma3_write(&s->edma, addr, val);
     } else if (gpio_reg(addr, &pair, &reg)) {
         gpio_write(s, pair, reg, val);
     } else {
@@ -207,6 +255,11 @@ static void dsp_start(CdjC6747 *s)
 {
     c66x_bus bus = { s, dsp_bus_read, dsp_bus_write };
     c66x_core *core = cdj_dsp_host_core(&s->host, &bus);
+
+    if (c66x_record_open(core, getenv("CDJ_C6X_RECORD"))) {
+        warn_report("c6747: cannot open CDJ_C6X_RECORD %s",
+                    getenv("CDJ_C6X_RECORD"));
+    }
 
     c66x_map_ram(core, L2_BASE, L2_SIZE, s->l2);
     c66x_map_ram(core, L2_ALIAS, L2_SIZE, s->l2);
@@ -354,7 +407,30 @@ static void c6747_exit_report(Notifier *n, void *data)
                     s->polls.e[i].addr, s->polls.e[i].count,
                     s->polls.e[i].last);
     }
+    if (s->host.core) {
+        c66x_stats st;
+        unsigned line;
+
+        c66x_get_stats(s->host.core, &st);
+        info_report("c6747: IER 0x%08x ISTP 0x%08x CSR 0x%08x, %" PRIu64
+                    " interrupts taken", c66x_get_creg(s->host.core, 4),
+                    c66x_get_creg(s->host.core, 5),
+                    c66x_get_creg(s->host.core, 1), st.interrupts);
+        info_report("c6747: edma %" PRIu64 " events, %" PRIu64
+                    " transfers complete", s->edma.events,
+                    s->edma.completions);
+        for (line = C66X_INT_FIRST; line <= C66X_INT_LAST; line++) {
+            if (st.irq_edges[line]) {
+                info_report("c6747: INT%u %u edges", line, st.irq_edges[line]);
+            }
+        }
+    }
     cdj_dsp_host_report(&s->host);
+    if (s->host.core) {
+        cdj_dsp_host_lock(&s->host);
+        c66x_record_close(s->host.core);
+        cdj_dsp_host_unlock(&s->host);
+    }
 }
 
 const CdjDspWires *cdj_c6747_init(MemoryRegion *sysmem, hwaddr hpi_base)
@@ -369,6 +445,13 @@ const CdjDspWires *cdj_c6747_init(MemoryRegion *sysmem, hwaddr hpi_base)
     s->sdram = g_malloc0(SDRAM_SIZE);
     cdj_dsp_host_init(&s->host, "c6747", "C6747", 300, set_command_pins, s);
     s->mcasps = (DspMcasps){ MCASP_BASE, MCASP_STRIDE };
+    s->host.dspint_line = DSPINT_IRQ;
+    s->edma.ram = edma_ram;
+    s->edma.stored = edma_stored;
+    s->edma.write_word = edma_write_word;
+    s->edma.set_irq = edma_set_irq;
+    s->edma.chip = s;
+    s->host.after_chunk = edma_after_chunk;
 
     memory_region_init_io(&s->iomem, NULL, &hpi_ops, s, "c6747.hpi", 0x100000);
     memory_region_add_subregion(sysmem, hpi_base, &s->iomem);

@@ -79,8 +79,7 @@ def sha256(path):
 
 
 def installed(extract, model_id=None):
-    images = IMAGES if model_id is None else tuple(
-        os.path.basename(rel) for rel, _ in _model.load(model_id).expected)
+    images = _model.load(model_id).images
     return all(os.path.isfile(os.path.join(extract, f)) for f in images)
 
 
@@ -217,15 +216,18 @@ def prepare(upd, out=None, install_to=None, force=False, root=None, model=None, 
     # Check every destination before copying anything, so a refusal leaves
     # the repository exactly as it was.
     if not force:
-        clash = [rel for rel, _ in m.expected
-                 if os.path.exists(os.path.join(install_to, os.path.basename(rel)))]
+        clash = [name for name in m.images if os.path.exists(os.path.join(install_to, name))]
         if clash:
             raise FirmwareError("refusing to overwrite: %s (add --force to replace them)"
-                                % " ".join(m.extract + "/" + rel[len("extract/"):] for rel in clash))
+                                % " ".join(m.extract + "/" + name for name in clash))
     os.makedirs(install_to, exist_ok=True)
     for rel, _ in m.expected:
         shutil.copyfile(os.path.join(out, rel), os.path.join(install_to, os.path.basename(rel)))
         say("installed %s/%s" % (m.extract, rel[len("extract/"):]))
+    if m.display_upd:
+        shutil.copyfile(next(f for f in upd_files if os.path.basename(f) == m.display_upd),
+                        os.path.join(install_to, _model.DISPLAY_UPD_IMAGE))
+        say("installed %s/%s" % (m.extract, _model.DISPLAY_UPD_IMAGE))
     return out
 
 

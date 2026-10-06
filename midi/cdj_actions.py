@@ -34,6 +34,7 @@ single bit of the report, `level_0xOFF` any whole analogue byte and
 key for each unnamed bit of the bytes the decoder tests (KEY_BYTES).
 """
 
+import os
 import re
 
 CONFIRMED = "confirmed"
@@ -328,6 +329,15 @@ ACTIONS = {a.name: a for a in [
 # by catalogue() as a mappable key_0xOFF_0xMASK action, named or not.
 KEY_BYTES = (0x0C, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x1A)
 
+# The CDJ-2000 and CDJ-2000NXS report the DIRECTION lever at 0x0F bit 0x02
+# (key ID 1, DirectionRev, read by their decoders at 0x0428E1AE and
+# 0x042F529A). It reads 1 in FWD and their board inverts it, so holding the
+# bit is REV, as holding 0x11:0x04 is on the NXS2. Seen on both: the CDJ-2000
+# plays backwards while it is held, the CDJ-2000NXS stays at frame 0 with it
+# clear. The XDJ firmwares name DirectionRev too, at a report bit not yet known.
+MODEL_ACTIONS = {model: {"direction_rev": KeyAction("direction_rev", 0x0F, 0x02, CONFIRMED)}
+                 for model in ("cdj2000", "cdj2000nxs")}
+
 # The three names the older notes used, kept working so nothing silently
 # stops firing when a map file predates the firmware-table rewrite.
 for _old, _new in (("select_push", "rotary_push"), ("menu", "menu_utility"),
@@ -348,17 +358,22 @@ def named_bit(off, mask):
     return None
 
 
-def resolve(name, spec=None):
+def resolve(name, spec=None, model=None):
     """Look an action up by mapping-file name, or raise with a usable message.
 
     `spec` is the mapping entry, for the actions that take a parameter from it
     (touch_tap's pixel). The raw names build an action for any bit or byte.
+    `model` is the player (default $CDJ_MODEL), for the keys an older deck
+    reports elsewhere.
     """
     spec = spec or {}
     if name == "touch_tap":
         base = ACTIONS[name]
         return TouchTapAction(name, base.status,
                               spec.get("x", 400), spec.get("y", 240))
+    moved = MODEL_ACTIONS.get(model or os.environ.get("CDJ_MODEL", ""), {})
+    if name in moved:
+        return moved[name]
     if name in ACTIONS:
         return ACTIONS[name]
     m = _RAW.match(name)

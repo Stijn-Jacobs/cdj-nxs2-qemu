@@ -65,6 +65,10 @@ typedef struct CdjDspHost {
     QemuThread thread;
     int64_t dsp_ns;             /* the virtual time the core has run up to */
     int64_t lag_max_ns;
+    int64_t slack_ns;           /* 0: the core may lag without bound */
+    QEMUTimer *slack_timer;
+    QemuMutex progress_lock;    /* @dsp_ns, for the slack timer's wait */
+    QemuCond progress;
 
     uint32_t hpic;
     int dspint_line;            /* CPU interrupt MAIN's DSPINT raises, 0 = none */
@@ -73,6 +77,9 @@ typedef struct CdjDspHost {
     uint64_t pin_reads;         /* DSP reads of the command pins */
     /* The chip drives its command pins from MAIN's 2-bit command. */
     void (*set_pins)(void *chip, unsigned bits);
+    /* Called with the core's lock held after each chunk it has run, with
+     * the DSP's own clock; NULL for chips that need nothing paced. */
+    void (*after_chunk)(void *chip, int64_t dsp_ns);
     void *chip;
     CdjDspWires wires;
 

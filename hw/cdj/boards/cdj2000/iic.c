@@ -1,6 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "sh7763.h"
-#include "qemu/timer.h"
 #include "cdj_auth_chip.h"
 #include "cdj_getenv.h"
 /*
@@ -46,7 +45,6 @@
 #define FLAG_NACK       0x40
 
 #define AUTH_CHIP_ADDR  0x10
-#define BYTE_NS         (90 * 1000)
 
 typedef enum {
     IIC_IDLE,
@@ -58,7 +56,6 @@ typedef enum {
 
 typedef struct CdjIic {
     MemoryRegion iomem;
-    QEMUTimer *bus;
     uint8_t reg[IIC_SIZE];
     IicPhase phase;
     bool reading;
@@ -66,15 +63,22 @@ typedef struct CdjIic {
     CdjAuthChip chip;
 } CdjIic;
 
+static void iic_bus_event(CdjIic *s);
+
+/*
+ * Bus events complete inside the register write that causes them. The driver
+ * gives each wait a fixed poll budget, and a timer-driven event that landed
+ * late in guest time (a stop 4 ms behind the byte) made it give up before
+ * the read of the second auth command, which raised E-7206.
+ */
 static void iic_arm(CdjIic *s, IicPhase phase)
 {
     s->phase = phase;
-    timer_mod(s->bus, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + BYTE_NS);
+    iic_bus_event(s);
 }
 
-static void iic_bus_event(void *opaque)
+static void iic_bus_event(CdjIic *s)
 {
-    CdjIic *s = opaque;
     uint8_t *flags = &s->reg[IIC_FLAGS];
     uint8_t done = s->reading ? FLAG_RX : FLAG_TX;
 
@@ -164,7 +168,6 @@ void cdj2000_iic_init(MemoryRegion *sysmem,
 {
     CdjIic *s = g_new0(CdjIic, 1);
 
-    s->bus = timer_new_ns(QEMU_CLOCK_VIRTUAL, iic_bus_event, s);
     cdj_auth_chip_init(&s->chip, answers, n);
     memory_region_init_io(&s->iomem, NULL, &iic_ops, s, "sh7763.iic",
                           IIC_SIZE);

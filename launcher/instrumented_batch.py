@@ -99,6 +99,8 @@ def main(argv):
     with open(os.path.join(lay.tmp, prefix + ".txt"), "wb") as out:
         chain.run_script("boot_decks", [prefix, n], env, out)
 
+    if nonempty(env, "REPORTS", "1") == "0":
+        return 0
     chain.say("--- verdicts (ppoke = %s)" % env["CDJ_PPOKE"])
     chain.bash_report("report_load.sh", [prefix, n], env)
     chain.bash_report("report_errors.sh", [prefix, n], env)
