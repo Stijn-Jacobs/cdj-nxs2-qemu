@@ -55,6 +55,29 @@ def _stale_builds(lay, env):
     return [line for line in out.splitlines() if line.strip()]
 
 
+def _offer_rebuild(lay, env, dry):
+    """The boards and patches are compiled into the QEMU binaries, so after a
+    pull that changed them the decks would run the old code. Offers the
+    rebuild; False only when one ran and failed. STALE_CHECK=0 skips it."""
+    if env.get("STALE_CHECK", "1") != "1":
+        return True
+    stale = _stale_builds(lay, env)
+    if not stale:
+        return True
+    say("the emulator's source has changed since it was last built:")
+    for s in stale:
+        say("    " + s)
+    if not dry and stdin_is_tty():
+        ans = input("rebuild now (a few minutes)? [Y/n] ").strip() or "y"
+        if ans[:1] in "Yy":
+            return subprocess.run([host.find_bash(), host.posix(os.path.join(lay.emu, "build.sh")),
+                                   "main", "display"], env=env).returncode == 0
+        say("starting the old build (./build.sh main display rebuilds it)")
+    else:
+        say("run ./build.sh main display to pick the changes up")
+    return True
+
+
 def stop(lay):
     """Ask every running rig to stop its decks in order, then end any QEMU
     that is still there."""
@@ -171,25 +194,8 @@ def main(argv):
         env["PLAYERNO"] = nonempty(env, "PLAYERNO", "%N%")
     launch = chain.script_argv("live_linked" if decks == "2" else "live", [c["CDJ_NAME"], decks])
 
-    # The boards and patches are compiled into the QEMU binaries, so after a
-    # pull that changed them the decks would run the old code. STALE_CHECK=0
-    # skips the check.
-    if env.get("STALE_CHECK", "1") == "1":
-        stale = _stale_builds(lay, env)
-        if stale:
-            say("the emulator's source has changed since it was last built:")
-            for s in stale:
-                say("    " + s)
-            if not dry and stdin_is_tty():
-                ans = input("rebuild now (a few minutes)? [Y/n] ").strip() or "y"
-                if ans[:1] in "Yy":
-                    if subprocess.run([host.find_bash(), host.posix(os.path.join(lay.emu, "build.sh")),
-                                       "main", "display"]).returncode:
-                        return 1
-                else:
-                    say("starting the old build (./build.sh main display rebuilds it)")
-            else:
-                say("run ./build.sh main display to pick the changes up")
+    if not _offer_rebuild(lay, env, dry):
+        return 1
     missing = [f for f in ("main_unpacked.bin", "gui_unpacked.bin", "flash.bin")
                if not os.path.isfile(os.path.join(lay.extract, f))]
     if missing:
@@ -274,6 +280,8 @@ def _start_deck(lay, player, c, dry):
         env["MAIN_QEMU"] = lay.qemu_binaries()[0]
     elif c["QEMU_BUILD"] and not env.get("MAIN_QEMU"):
         env["QEMU_BUILD"] = c["QEMU_BUILD"]
+    if not _offer_rebuild(lay, env, dry):
+        return 1
     return deck.start(player, env, dry)
 
 
