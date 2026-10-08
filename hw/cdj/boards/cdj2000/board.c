@@ -33,7 +33,7 @@ static const CdjBoardDesc cdj2000nxs_board = {
      * the bootloader's memory test covers 0xA4000000..0xABFFEF00. */
     .dram_phys = 0x04000000,
     .dram_size = 128 * MiB,
-    /* Sector tables at 0x04075D94 (addresses) and 0x04075EB0 (sizes). The
+    /* Sector tables at 0x04075FF8 (addresses) and 0x04076114 (sizes). The
      * firmware never sends an ID or CFI query, so the NXS2's IDs do. */
     .flash_phys = 0x00000000,
     .flash_size = 4 * MiB,
@@ -42,13 +42,13 @@ static const CdjBoardDesc cdj2000nxs_board = {
     .fw_entry = 0xA4000800,
     .init_sp = 0xAC000000,
     /* The bootloader enters the image in register bank 0. From the reset
-     * value's bank 1, the interrupt-disable at 0x04367E5C saves the old SR in
+     * value's bank 1, the interrupt-disable at 0x043688B0 saves the old SR in
      * bank 1's r0 and returns bank 0's (zero), and the matching restore drops
      * to user mode: an illegal-instruction fault on the next stc sr. */
     .init_sr = 0x500000F0,              /* MD=1, BL=1, IMASK=0xF, RB=0 */
     /* The NXS2's RTOS quirk, byte for byte: SR is restored from this global
-     * (0x04367E34, 0x04367E40) before 0x04367E24 first writes it. */
-    .sr_seed_slot = 0x04D1368C,
+     * (0x04368888, 0x04368894) before 0x04368878 first writes it. */
+    .sr_seed_slot = 0x04D13694,
     .sr_seed = 0x400000F0,
     .periph_hz = SH7763_PERIPH_HZ,
     .ccn_trace_lo = 0x640,              /* DMAC DMTE0..DMTE3 */
@@ -106,14 +106,15 @@ static void *sh7763_kick_main_loop(void *opaque)
 }
 #endif
 
-/* What the check at 0x0410FE7C needs from the auth chip. */
+/* What the check at 0x0410FF00 needs from the auth chip. */
 static const CdjAuthAnswer nxs_auth_answers[] = {
     { 0x00, 0x05 },
     { 0x01, 0x01 },
 };
 
 static void sh7763_board_init(MachineState *machine, const CdjBoardDesc *desc,
-                              const CdjDspWires *dsp,
+                              const CdjDspWires *(*dsp_init)(MemoryRegion *,
+                                                             hwaddr),
                               const Cdj2000Display *display_desc,
                               bool auth_chip)
 {
@@ -163,7 +164,7 @@ static void sh7763_board_init(MachineState *machine, const CdjBoardDesc *desc,
                       A7ADDR(CDJ2000_USBH_BASE), CDJ_USB_SIZE, dei);
     }
 
-    /* The flash is 4 MB by its own sector table (71 sectors at 0x04075D94,
+    /* The flash is 4 MB by its own sector table (71 sectors at 0x04075FF8,
      * the last ending at 0x400000), yet the boot scans 16-bit words from
      * 0x400000 up. Nothing is fitted there: the bus reads all ones, which
      * is what ends that scan on the real board. */
@@ -203,7 +204,10 @@ static void sh7763_board_init(MachineState *machine, const CdjBoardDesc *desc,
     cdj_ata_init(sysmem, "sh7763.atapi", 0xFFF00000,
                  cdj_count_irq(irq[S63_ATAPI], "ATAPI"));
     cdj_unimp("sh7763.gpio",  0xFFF10000, 0x10000);
-    cdj2000_latch_init(sysmem, dsp, display);
+    /* Created after the board's RAM so that the largest RAM block sits at
+     * offset 0: a migration's dirty-bitmap sync clears each block's range
+     * from 0, and QEMU asserts when that range spans two blocks. */
+    cdj2000_latch_init(sysmem, dsp_init(sysmem, 0x0C000000), display);
     /* On-chip USB host (the front stick port): the NXS2's R8A66597 host
      * controller at its own base. usbh_load()'s boot pass is read-modify-write
      * at that chip's SYSCFG0, FIFOSEL, INTENB, BRDYENB/NRDYENB/BEMPENB and
@@ -242,7 +246,7 @@ static void cdj2000nxs_init(MachineState *machine)
 {
     /* The NXS's DSP is a C674x behind its host port, addressed through HPIA. */
     sh7763_board_init(machine, &cdj2000nxs_board,
-                      cdj_c6747_init(get_system_memory(), 0x0C000000),
+                      cdj_c6747_init,
                       &cdj2000nxs_display, true);
 }
 
@@ -252,7 +256,7 @@ static void cdj2000_init(MachineState *machine)
      * uncached area-3 window at 0x0C0C0000 (454 references in the image) is
      * DSP memory. */
     sh7763_board_init(machine, &cdj2000_board,
-                      cdj_c6727_init(get_system_memory(), 0x0C000000),
+                      cdj_c6727_init,
                       &cdj2000_display, false);
 }
 

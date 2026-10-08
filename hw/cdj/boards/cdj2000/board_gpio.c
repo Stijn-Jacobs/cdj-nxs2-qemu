@@ -3,7 +3,7 @@
 /*
  * The board's port latch at 0xFFF10000: 16-bit registers MAIN reads back and
  * modifies bit by bit. Two of them carry wires to the DSP, as the uploader
- * (0x041FC156 and 0x041FC198) uses them:
+ * (0x041FC3EA and 0x041FC42C) uses them:
  *   +0x5C bits 1:0  out: the command MAIN gives the DSP's loader
  *   +0x40 bit 4     in:  the DSP's HINT pin (active low), MAIN waits for it
  *                        to go low
@@ -13,7 +13,7 @@
  * the start-up panel check (0x0428D3CC) leaves the display mode word at 0 and
  * the send task (0x04215722) never counts its idle passes towards a packet.
  * Bit 4 is an active-low input that only the tick hook reads (0x042918D0,
- * 0x042FA512 on the CDJ-2000NXS): every 51st tick that finds it low posts
+ * 0x042FAA82 on the CDJ-2000NXS): every 51st tick that finds it low posts
  * event 0x92, which the display's message table maps to "USB Error. Remove
  * the device.", the same poll the CDJ-2000NXS2 runs on the overcurrent pin
  * of its USB power switch. Nothing writes it, so it reads high: no fault.

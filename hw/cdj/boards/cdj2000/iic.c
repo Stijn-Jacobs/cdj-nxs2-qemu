@@ -5,7 +5,7 @@
 /*
  * The I2C master at 0xFFE70000 and the authentication chip behind it. There
  * is no manual page for this block in hand; the layout is what the driver at
- * 0x0427F5D4..0x0427FAE8 does with it, all of it byte accesses:
+ * 0x0427FB4C..0x04280060 does with it, all of it byte accesses:
  *
  *   +0x04  control. Written 0x89 (start), 0x88 (start released), 0x8A (stop
  *          asked for). Read before a start: bit 5 must be clear and bit 6
@@ -22,7 +22,7 @@
  *          rest before each flag clear; a read takes it after bit 1 rises
  *
  * Clearing bit 1 or bit 3 releases the clock for the next byte. The chip is
- * the one the NXS2 has at the same address: the check at 0x0410FE7C writes
+ * the one the NXS2 has at the same address: the check at 0x0410FF00 writes
  * 0x00 and wants 0x05 back, then writes 0x01 and wants 0x01, as 0x08214D98
  * does there.
  */
