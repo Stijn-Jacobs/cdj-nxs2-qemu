@@ -4,15 +4,22 @@ CDJ-2000 and the CDJ-2000NXS run their display board inside the MAIN
 emulator; the XDJ-1000, XDJ-700 and CDJ-900NXS have none, MAIN draws the
 screen. Either way a single QEMU process makes the window; there is no second
 board, no DSP rig and no relay.
+
+SNAPSHOT=<point> (idle or loaded) starts the deck from that saved point; when
+it is not saved yet the deck boots as usual and scripts/run/snapshot_deck.py
+drives it there and saves it (the profile's MODEL_IDLE_S and MODEL_LOAD_STEPS).
+Points are cached per build, firmware, medium and MAIN_ARGS (snapshot.py).
 """
 
 import os
 import shlex
 import subprocess
 
-from . import chain, host, model
+from . import chain, host, model, snapshot
+from .boot_deck import _monsock
 from .chain import nonempty, say
 from .layout import Layout
+from .rig import default_audiodev
 
 # The panel key socket's UDP port, which the key scripts send to.
 PANEL_KEY_PORT = 40124
@@ -49,10 +56,42 @@ def command(lay, m, env):
             "-serial", "file:" + os.path.join(lay.logs, m.id + ".log"),
             "-drive", "if=none,id=usbstk,file=%s,format=raw,snapshot=on" % host.native(lay.usb_image),
             "-device", "usb-storage,drive=usbstk,port=1"]
-    if env.get("GUI_DISPLAY"):
-        argv += ["-display", env["GUI_DISPLAY"]]
+    display = env.get("GUI_DISPLAY")
+    if display:
+        # The window has an absolute pointer (so the host never grabs the
+        # mouse), and QEMU then hides the host cursor over it.
+        if display != "none" and not display.startswith("vnc") and "show-cursor=" not in display:
+            display += ",show-cursor=on"
+        argv += ["-display", display]
+    if nonempty(env, "NOSOUND", "0") != "1":
+        # The same ring, prefill and latency cap (ms) as the NXS2's rig.
+        env["CDJ_DSP_AUDIO"] = nonempty(env, "CDJ_DSP_AUDIO", "1:3000:150:450")
+        argv += ["-audio", nonempty(env, "AUDIODEV", default_audiodev())]
     argv += shlex.split(env.get("MAIN_ARGS", ""))
     return argv, env
+
+
+def plan_snapshot(lay, m, argv, env):
+    """Adds what SNAPSHOT asks for to argv. Returns the argv of the driver that
+    reaches and saves the point, or None when there is nothing to save."""
+    point = env.get("SNAPSHOT", "")
+    if not point:
+        return None
+    if point not in snapshot.POINTS:
+        raise SystemExit("SNAPSHOT point %r: known points are %s" % (point, ", ".join(snapshot.POINTS)))
+    kernel = argv[argv.index("-kernel") + 1]
+    files = [argv[0], kernel] + ([env["CDJ_BF531_UPD"]] if m.display_upd else []) + [lay.usb_image]
+    point_dir = os.path.join(snapshot.root(lay.tmp, files, env.get("MAIN_ARGS", "")), point)
+    if snapshot.saved(point_dir, ("main.vm",)):
+        argv += ["-incoming", "file:%s/main.vm" % host.native(point_dir)]
+        say("starting from the saved '%s' point %s" % (point, host.native(point_dir)))
+        return None
+    mon = "%s/cdj-deck-%s-mon.sock" % (lay.tmp, m.id)
+    # A state that records "paused" comes back paused: the save stops the deck.
+    argv += ["-monitor", _monsock(lay).spec(mon), "-global", "migration.store-global-state=off"]
+    env.update({"MODEL_IDLE_S": m.idle_s, "MODEL_LOAD_STEPS": m.load_steps})
+    say("no saved '%s' point yet: the deck boots and saves it on the way" % point)
+    return host.python_argv() + [os.path.join(lay.run, "snapshot_deck.py"), "--reach", point, mon, point_dir]
 
 
 def start(m, env, dry):
@@ -67,20 +106,24 @@ def start(m, env, dry):
         chain.err("no USB image yet -- run ./setup.sh --music <your rekordbox USB folder>")
         return 1
     argv, env = command(lay, m, env)
-    say("%s: one window with the USB stick. Sound, Pro DJ Link, a second deck, MIDI controllers, mods and "
+    reach = plan_snapshot(lay, m, argv, env)
+    say("%s: one window with the USB stick. Pro DJ Link, a second deck, MIDI controllers, mods and "
         "the virtual deck app are CDJ-2000NXS2 features and are skipped." % m.title)
     if dry:
-        knobs = ["CDJ_ATA", "CDJ_BF531_UPD", "CDJ_PANEL_KEYSOCK"]
+        knobs = ["CDJ_ATA", "CDJ_BF531_UPD", "CDJ_PANEL_KEYSOCK", "CDJ_DSP_AUDIO"]
         say("would run:  %s %s" % (" ".join("%s=%s" % (k, env[k]) for k in knobs if k in env),
                                    " ".join(shlex.quote(a) for a in argv)))
         return 0
     os.makedirs(lay.logs, exist_ok=True)
     say("the first boot takes a minute; close the window or press Ctrl-C to stop.")
     qemu = subprocess.Popen(argv, env=env)
+    driver = subprocess.Popen(reach, env=env) if reach else None
     try:
         qemu.wait()
     except KeyboardInterrupt:
         qemu.terminate()
         qemu.wait()
+    if driver:
+        driver.terminate()
     say("stopped.")
     return 0

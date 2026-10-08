@@ -104,12 +104,24 @@ static const MemoryRegionOps pfc_ops = {
     .valid = { .min_access_size = 1, .max_access_size = 4 },
 };
 
+static const VMStateDescription vmstate_pfc = {
+    .name = "xdj1000-pfc",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT8_ARRAY(reg, XdjPfc, PFC_SIZE),
+        VMSTATE_TIMER_PTR(settle, XdjPfc),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 void xdj1000_pfc_init(MemoryRegion *sysmem, const CdjDspWires *dsp)
 {
     XdjPfc *s = g_new0(XdjPfc, 1);
 
     s->dsp = dsp;
     s->settle = timer_new_ns(QEMU_CLOCK_VIRTUAL, pfc_settled, s);
+    vmstate_register_any(NULL, &vmstate_pfc, s);
     memory_region_init_io(&s->iomem, NULL, &pfc_ops, s, "sh7724.pfc", PFC_SIZE);
     memory_region_add_subregion(sysmem, PFC_BASE, &s->iomem);
 }

@@ -488,7 +488,7 @@ class RegionGen:
                         ret = (w["const"] if self.ret_cap and not w["flag"] and w["const"] is not None
                                and self.worth_carrying(w["const"]) else None)
                 else:
-                    e("    " + guarded(w["flag"], "c->api->ctrl_write(c, %d, %s);" % (w["idx"], w["val"])))
+                    e("    " + guarded(w["flag"], "JIT_API(c)->ctrl_write(c, %d, %s);" % (w["idx"], w["val"])))
                     ctrl.append(w["flag"] or "1")
             if ctrl:
                 e("    if (__builtin_expect((%s) && c->ifr && pending_interrupt(c), 0)) { c->jit_exit[%d]++; goto P%d; }"
@@ -526,7 +526,7 @@ class RegionGen:
             if stores and not pk.load:
                 e("    c->store_now = 0;")
             elif stores:
-                e("    if (c->npst) c->api->flush_stores(c);")
+                e("    if (c->npst) JIT_API(c)->flush_stores(c);")
             e("    c->branch_block = %s;" % ("5" if pk.branched else "c->branch_block ? c->branch_block - 1 : 0"))
             mcnop, next_pc = pk.xnops, pk.next
         e("    c->cycle++;")
@@ -898,7 +898,7 @@ class RegionGen:
             sets_cr = True
             dst = ops[2]
         elif hd == H("H_SPINT") and v(0):
-            x = "(uint64_t)(uint32_t)jit_f_to_i32(jit_u2f((uint32_t)%s), jit_rmode(c, %d, %d))" % (
+            x = "(uint64_t)(uint32_t)jit_f_to_i32(c, jit_u2f((uint32_t)%s), jit_rmode(c, %d, %d))" % (
                 v(0), ins.unit, ins.side)
             dst = ops[1]
         elif hd == H("H_DSPINT") and v(0):
@@ -958,7 +958,7 @@ class RegionGen:
         elif hd == H("H_MVC"):
             src = ops[0]
             if src.kind == OPK_CTRL:
-                x = "(uint64_t)c->api->ctrl_read(c, %d, %s)" % (src.crlo, u32(ins.addr & ~31))
+                x = "(uint64_t)JIT_API(c)->ctrl_read(c, %d, %s)" % (src.crlo, u32(ins.addr & ~31))
             elif src.kind == OPK_REG:
                 x = "(uint64_t)c->reg[%d]" % src.reg
             else:
@@ -1012,23 +1012,23 @@ class RegionGen:
             x = "jit_d2u((double)(%s)%s)" % ("int32_t" if hd == H("H_INTDP") else "uint32_t", v(0))
             dst = ops[1]
         elif hd == H("H_DPINT") and v(0):
-            x = "(uint64_t)(uint32_t)jit_f_to_i32(jit_u2d(%s), jit_rmode(c, %d, %d))" % (v(0), ins.unit, ins.side)
+            x = "(uint64_t)(uint32_t)jit_f_to_i32(c, jit_u2d(%s), jit_rmode(c, %d, %d))" % (v(0), ins.unit, ins.side)
             dst = ops[1]
         elif hd in (H("H_SPTRUNC"), H("H_DPTRUNC")) and v(0):
             src = "jit_u2f((uint32_t)%s)" % v(0) if hd == H("H_SPTRUNC") else "jit_u2d(%s)" % v(0)
-            x = "(uint64_t)(uint32_t)jit_f_to_i32(%s, 1)" % src
+            x = "(uint64_t)(uint32_t)jit_f_to_i32(c, %s, 1)" % src
             dst = ops[1]
         elif hd == H("H_RCPSP") and v(0):
-            x = "(uint64_t)jit_f2u(1.0f / jit_u2f((uint32_t)%s))" % v(0)
+            x = "(uint64_t)jit_recip(c, %s, 0)" % v(0)
             dst = ops[1]
         elif hd == H("H_RCPDP") and v(0):
-            x = "jit_d2u(1.0 / jit_u2d(%s))" % v(0)
+            x = "jit_recip(c, %s, 1)" % v(0)
             dst = ops[1]
         elif hd == H("H_RSQRSP") and v(0):
-            x = "(uint64_t)jit_f2u(1.0f / sqrtf(jit_u2f((uint32_t)%s)))" % v(0)
+            x = "(uint64_t)jit_recip(c, %s, 2)" % v(0)
             dst = ops[1]
         elif hd == H("H_RSQRDP") and v(0):
-            x = "jit_d2u(1.0 / sqrt(jit_u2d(%s)))" % v(0)
+            x = "jit_recip(c, %s, 3)" % v(0)
             dst = ops[1]
         elif hd == H("H_QMPYSP") and ops[0].kind == OPK_PAIR and ops[1].kind == OPK_PAIR:
             # four writes to a register quad, as for H_CMPYSP
@@ -1122,7 +1122,7 @@ class RegionGen:
         cap = self.t()
         e = self.emit
         e("    c66x_jit_cap %s;" % cap)
-        call = ("if (__builtin_expect(c->api->exec_capture(c, %s[%d], %s, &%s) != 0 || %s.n != %d, 0)) "
+        call = ("if (__builtin_expect(JIT_API(c)->exec_capture(c, %s[%d], %s, &%s) != 0 || %s.n != %d, 0)) "
                 "jit_fatal(c, 0x%08x, %s.n, %d);" % (self.ins_name, k, u32(pk.next), cap, cap, n, ins.addr, cap, n))
         e("    " + guarded(flag, "{ " + call + " }"))
         for i, (delay, kind, idx) in enumerate(ws):
@@ -1142,10 +1142,15 @@ class RegionGen:
                 continue
             done.add(label)
             self.cycle(label, st)
-        decl = ["void %s(c66x_core *c, uint64_t end)" % self.name, "{"]
+        decl = ["static void %s_run(c66x_core *c, uint64_t end)" % self.name, "{"]
         decl.append("    uint64_t gen = c->code_gen;")
         self.declare(decl)
-        return "\n".join(decl + self.body + self.cold + ["}"]), len(self.labels)
+        return "\n".join(decl + self.body + self.cold + ["}", self.entry_point()]), len(self.labels)
+
+    def entry_point(self):
+        """The function the core calls: the body, then round-to-nearest for the core."""
+        return ("void %s(c66x_core *c, uint64_t end)\n{\n    JIT_RM(c) = 0;\n    %s_run(c, end);\n    jit_round(c, 0);\n}"
+                % (self.name, self.name))
 
     def declare(self, decl):
         if self.captured:
@@ -1154,7 +1159,7 @@ class RegionGen:
             decl.append("    static c66x_core *ins_core;")
             decl.append("    static uint64_t ins_gen;")
             decl.append("    if (ins_core != c || ins_gen != gen) {")
-            decl.append("        for (unsigned i = 0; i < %d; i++) ins[i] = c->api->insn_at(c, ins_addr[i]);" % len(self.captured))
+            decl.append("        for (unsigned i = 0; i < %d; i++) ins[i] = JIT_API(c)->insn_at(c, ins_addr[i]);" % len(self.captured))
             decl.append("        ins_core = c; ins_gen = gen;")
             decl.append("    }")
         for i in range(self.maxv["r"]):
@@ -1385,7 +1390,7 @@ class ModuleGen(RegionGen):
                    "c66x_jit_verified jit_vf%d;" % f,
                    "static int jit_verify_fn%d(c66x_core *c)" % f,
                    "{",
-                   "    if (!c->api->verify(c, jit_da%d, jit_db%d, %d)) return 0;" % (f, f, len(deps)),
+                   "    if (!JIT_API(c)->verify(c, jit_da%d, jit_db%d, %d)) return 0;" % (f, f, len(deps)),
                    "    jit_vf%d.core = c; jit_vf%d.gen = c->code_gen + 1;" % (f, f),
                    "    return 1;",
                    "}"]
@@ -1500,7 +1505,7 @@ class KernelGen(RegionGen):
                     if w["const"] is not None and not w["flag"]:
                         known[w["idx"]] = (w["const"], 0)
                 else:
-                    e("    " + guarded(w["flag"], "c->api->ctrl_write(c, %d, %s);" % (w["idx"], w["val"])))
+                    e("    " + guarded(w["flag"], "JIT_API(c)->ctrl_write(c, %d, %s);" % (w["idx"], w["val"])))
         ring = [dict(w) for w in st.ring if (root or w["land"] > 0)]
         if k.creg >= 0:
             e("    c->cond_hist[c->cycle & 7] = c->reg[%d];" % k.creg)
@@ -1524,7 +1529,7 @@ class KernelGen(RegionGen):
             self.insn(ins, dummy, new_ring, new_imm, [], known)
         if immediate:
             e("    c->store_now = 0;")
-        e("    if (c->npst) c->api->flush_stores(c);")
+        e("    if (c->npst) JIT_API(c)->flush_stores(c);")
         for w in ring:
             w["land"] -= 1
         ring = ring + new_ring
@@ -1535,7 +1540,7 @@ class KernelGen(RegionGen):
             nxt = State(nxt_id, 0, [], ring, new_imm, max(st.pre - 1, 0), self.trim(known))
             # every cycle of a terminated loop ends in the interpreter's
             # spl_end_cycle, which is where the loop goes inactive
-            e("    c->api->spl_end_cycle(c);")
+            e("    JIT_API(c)->spl_end_cycle(c);")
             e("    c->cycle++;")
             e("    if (__builtin_expect(!c->spl.active, 0)) {")
             self.count("        ", EXIT_STUB, (k.addr, "drain ends"))
@@ -1566,7 +1571,7 @@ class KernelGen(RegionGen):
             e("    if (__builtin_expect(%s && !(c->ifr && pending_interrupt(c)), 1)) {" % fast)
             e("        %sc->spl.last_iter = (int)((c->cycle - c->spl.t0 + 1) / %d);" % (step, k.ii))
             e("    } else {")
-            e("        c->api->spl_end_cycle(c);")
+            e("        JIT_API(c)->spl_end_cycle(c);")
             e("        if (!c->spl.active || c->spl.terminated || c->spl.abrupt) {")
             e("            c->cycle++;")
             self.count("            ", EXIT_STUB, (k.addr, "kernel ends"))
@@ -1604,7 +1609,7 @@ class KernelGen(RegionGen):
                 self.cycle(label, st, root=True)
             else:
                 self.cycle(label, st)
-        decl = ["void %s(c66x_core *c, uint64_t end)" % self.name, "{"]
+        decl = ["static void %s_run(c66x_core *c, uint64_t end)" % self.name, "{"]
         decl.append("    uint64_t gen = c->code_gen;")
         self.declare(decl)
         if self.drain:
@@ -1616,7 +1621,7 @@ class KernelGen(RegionGen):
         for off, label in enumerate(entries):
             decl.append("    case %d: goto E%d;" % (off, label))
         decl.append("    }")
-        return "\n".join(decl + self.body + self.cold + ["}"]), len(self.labels)
+        return "\n".join(decl + self.body + self.cold + ["}", self.entry_point()]), len(self.labels)
 
 
 # --------------------------------------------------------------------------
@@ -1769,7 +1774,11 @@ class LoopGen(KernelGen):
         self.cycles, self.body_addrs, self.fd, self.post_pc = cycles, body, fd, pc
         self.epilog = k.dynlen - ii
         delay = min(fd, self.epilog)
-        self.je = max(delay + PM_REFILL, fd)      # drain cycle at which program fetch is back
+        # Drain cycle at which program fetch is back. The SPKERNEL fetch delay only
+        # holds while the loop is active, and the loop goes idle at the end of the
+        # epilog, so a delay longer than the epilog (the C674x image's SPKERNEL 16,0
+        # on a two-stage loop) ends there, plus the refill (spl_pm_enabled).
+        self.je = delay + PM_REFILL
         self.delay = delay
         self.drain = []
         for j in range(self.je):
@@ -1821,7 +1830,7 @@ class LoopGen(KernelGen):
                     if w["const"] is not None and not w["flag"]:
                         known[w["idx"]] = (w["const"], 0)
                 else:
-                    e("    " + guarded(w["flag"], "c->api->ctrl_write(c, %d, %s);" % (w["idx"], w["val"])))
+                    e("    " + guarded(w["flag"], "JIT_API(c)->ctrl_write(c, %d, %s);" % (w["idx"], w["val"])))
             tests = []
             if pm is not None:
                 hits = [w for w in st.imm if w["kind"] == WK_REG and (pm.xmask >> w["idx"]) & 1]
@@ -1861,7 +1870,7 @@ class LoopGen(KernelGen):
                 self.deps.add(ins.addr & ~31)
         if immediate:
             e("    c->store_now = 0;")
-        e("    if (c->npst) c->api->flush_stores(c);")
+        e("    if (c->npst) JIT_API(c)->flush_stores(c);")
         if pm is not None:
             e("    c->branch_block = %s;" % ("5" if pm.branched else "c->branch_block ? c->branch_block - 1 : 0"))
             if pm.xnops:
@@ -1960,7 +1969,7 @@ class LoopGen(KernelGen):
             self.deps.add(ins.addr & ~31)
         if immediate:
             e("    c->store_now = 0;")
-        e("    if (c->npst) c->api->flush_stores(c);")
+        e("    if (c->npst) JIT_API(c)->flush_stores(c);")
         e("    c->branch_block = %s;" % ("5" if pk0.branched else "c->branch_block ? c->branch_block - 1 : 0"))
         if pk0.xnops:
             e("    c->mcnop = %d;" % pk0.xnops)
@@ -1976,10 +1985,10 @@ class LoopGen(KernelGen):
                 continue
             done.add(label)
             self.cycle(label, st)
-        decl = ["void %s(c66x_core *c, uint64_t end)" % self.name, "{"]
+        decl = ["static void %s_run(c66x_core *c, uint64_t end)" % self.name, "{"]
         decl.append("    uint64_t gen = c->code_gen;")
         self.declare(decl)
-        return "\n".join(decl + self.body + self.cold + ["}"]), len(self.labels)
+        return "\n".join(decl + self.body + self.cold + ["}", self.entry_point()]), len(self.labels)
 
 
 # One generated function per FN_NODES states, and the compiled control flow
@@ -2001,22 +2010,21 @@ _Thread_local unsigned jit_hop_entry;
 
 static void jit_run(c66x_core *c, uint64_t end, int fn, unsigned entry, uint64_t gen)
 {
+    JIT_RM(c) = 0;
     for (;;) {
         jit_hop_fn = -1;
         jit_fns[fn](c, end, entry, gen);
         if (jit_hop_fn < 0)
-            return;
+            break;
         fn = jit_hop_fn;
         entry = jit_hop_entry;
     }
+    jit_round(c, 0);
 }'''
 
 PRELUDE = r'''/* Generated by qemu/c6x/tools/c14_jitgen.py -- do not edit. */
 #include <fenv.h>
 #include <math.h>
-#ifdef __SSE2__
-#include <xmmintrin.h>
-#endif
 #include <stdlib.h>
 #include <string.h>
 #include "c66x_core_int.h"
@@ -2027,37 +2035,60 @@ PRELUDE = r'''/* Generated by qemu/c6x/tools/c14_jitgen.py -- do not edit. */
 extern _Thread_local int jit_hop_fn;
 extern _Thread_local unsigned jit_hop_entry;
 
+/* exec_insn's host_round, but lazy. A C674x firmware runs its filters in a
+ * directed mode, and switching MXCSR there and back around every float op was
+ * most of the time its compiled loops took. Each op now switches only when the
+ * host is in another mode; the module goes back to round-to-nearest, which the
+ * core assumes, before any call into the core (JIT_API) and when an entry point
+ * returns. The mode last set is kept in jit_xs's last flag slot, which no hop
+ * uses (they take the first 56), because reading MXCSR before every op cost as
+ * much as the switches did. Entry points reset it: the core calls in nearest. */
+#define JIT_RM(c) ((c)->jit_xs.f[63])
+
 #ifdef __SSE2__
-/* as host_round in c66x_exec.c: one MXCSR field instead of fesetround, which
- * also rewrites the x87 control word */
-static inline void jit_round(unsigned rm)
+#include <xmmintrin.h>
+/* The host's float maths is SSE, so the mode is one MXCSR field; fesetround
+ * also rewrites the x87 control word. */
+static inline void jit_round(c66x_core *c, unsigned rm)
 {
     static const uint32_t rc[4] = { 0, 3u << 13, 2u << 13, 1u << 13 };
-
-    _mm_setcsr((_mm_getcsr() & ~(3u << 13)) | rc[rm]);
+    if (__builtin_expect(JIT_RM(c) != rm, 0)) {
+        _mm_setcsr((_mm_getcsr() & ~(3u << 13)) | rc[rm]);
+        JIT_RM(c) = rm;
+    }
 }
 #else
 static const int jit_fe_mode[4] = { FE_TONEAREST, FE_TOWARDZERO, FE_UPWARD, FE_DOWNWARD };
-
-static inline void jit_round(unsigned rm)
+static inline void jit_round(c66x_core *c, unsigned rm)
 {
-    fesetround(jit_fe_mode[rm]);
+    if (JIT_RM(c) != rm) {
+        fesetround(jit_fe_mode[rm]);
+        JIT_RM(c) = rm;
+    }
 }
 #endif
+
+#define JIT_API(c) (jit_round((c), 0), (c)->api)
+
+/* -frounding-math does not stop gcc moving float arithmetic across a mode
+ * switch: at -O2 a C674x firmware running in a directed mode got products
+ * rounded in the default one. The operands' bits pass through an empty asm
+ * after the op's switch and the result's bits before any later one. */
+#define JIT_FENCE(x) __asm__ volatile("" : "+r"(x) :: "memory")
 
 /* fop_run's F_ADDSP/F_SUBSP/F_MPYSP */
 static inline uint32_t jit_fop(c66x_core *c, int unit, int side, uint32_t a, uint32_t b, char op)
 {
     uint32_t r = (unit >= 6) ? c->cr[CR_FMCR] : c->cr[CR_FADCR];
     unsigned rm = side == 2 ? (r >> 25) & 3 : (r >> 9) & 3;
-    if (rm) jit_round(rm);
+    jit_round(c, rm); JIT_FENCE(a); JIT_FENCE(b);
     float p, q, res;
     memcpy(&p, &a, 4);
     memcpy(&q, &b, 4);
     res = op == '+' ? p + q : op == '-' ? p - q : p * q;
-    if (rm) jit_round(0);
     uint32_t v;
     memcpy(&v, &res, 4);
+    JIT_FENCE(v);
     return v;
 }
 
@@ -2068,15 +2099,16 @@ static inline uint64_t jit_dsp(c66x_core *c, int unit, int side, uint64_t a, uin
 {
     uint32_t r = (unit >= 6) ? c->cr[CR_FMCR] : c->cr[CR_FADCR];
     unsigned rm = side == 2 ? (r >> 25) & 3 : (r >> 9) & 3;
-    if (rm) jit_round(rm);
+    jit_round(c, rm); JIT_FENCE(a); JIT_FENCE(b);
     uint32_t o[2];
     for (int k = 0; k < 2; k++) {
         float p = jit_u2f((uint32_t)(a >> (32 * k))), q = jit_u2f((uint32_t)(b >> (32 * k)));
         float res = op == '+' ? p + q : op == '-' ? p - q : p * q;
         memcpy(&o[k], &res, 4);
     }
-    if (rm) jit_round(0);
-    return ((uint64_t)o[1] << 32) | o[0];
+    uint64_t v = ((uint64_t)o[1] << 32) | o[0];
+    JIT_FENCE(v);
+    return v;
 }
 
 static inline unsigned jit_rmode(c66x_core *c, int unit, int side)
@@ -2107,20 +2139,33 @@ static inline uint32_t jit_bitr(uint32_t v)
 static inline uint32_t jit_intsp(c66x_core *c, int unit, int side, uint32_t v, int is_signed)
 {
     unsigned rm = jit_rmode(c, unit, side);
-    if (rm) jit_round(rm);
-    float f = is_signed ? (float)(int32_t)v : (float)v;
-    if (rm) jit_round(0);
-    return jit_f2u(f);
+    jit_round(c, rm); JIT_FENCE(v);
+    uint32_t u = jit_f2u(is_signed ? (float)(int32_t)v : (float)v);
+    JIT_FENCE(u);
+    return u;
 }
 
 /* exec_insn's H_DPSP */
 static inline uint32_t jit_dpsp(c66x_core *c, int unit, int side, uint64_t v)
 {
     unsigned rm = jit_rmode(c, unit, side);
-    if (rm) jit_round(rm);
-    float f = (float)jit_u2d(v);
-    if (rm) jit_round(0);
-    return jit_f2u(f);
+    jit_round(c, rm); JIT_FENCE(v);
+    uint32_t u = jit_f2u((float)jit_u2d(v));
+    JIT_FENCE(u);
+    return u;
+}
+
+/* exec_insn's H_RCPSP, H_RCPDP, H_RSQRSP, H_RSQRDP (kind 0-3), which round to nearest */
+static inline uint64_t jit_recip(c66x_core *c, uint64_t v, int kind)
+{
+    jit_round(c, 0);
+    JIT_FENCE(v);
+    uint64_t r = kind == 0 ? jit_f2u(1.0f / jit_u2f((uint32_t)v))
+               : kind == 1 ? jit_d2u(1.0 / jit_u2d(v))
+               : kind == 2 ? jit_f2u(1.0f / sqrtf(jit_u2f((uint32_t)v)))
+               : jit_d2u(1.0 / sqrt(jit_u2d(v)));
+    JIT_FENCE(r);
+    return r;
 }
 
 /* exec_insn's H_CMPYSP: the four products, in the order it writes them */
@@ -2128,13 +2173,14 @@ static inline void jit_cmpysp(c66x_core *c, int unit, int side, uint32_t a_lo, u
                               uint32_t b_lo, uint32_t b_hi, uint32_t *o)
 {
     unsigned rm = jit_rmode(c, unit, side);
+    jit_round(c, rm); JIT_FENCE(a_lo); JIT_FENCE(a_hi); JIT_FENCE(b_lo); JIT_FENCE(b_hi);
     float p = jit_u2f(a_lo), q = jit_u2f(a_hi), s = jit_u2f(b_lo), t = jit_u2f(b_hi);
-    if (rm) jit_round(rm);
-    o[0] = jit_f2u(p * t);
-    o[1] = jit_f2u(-(p * s));
-    o[2] = jit_f2u(q * s);
-    o[3] = jit_f2u(q * t);
-    if (rm) jit_round(0);
+    uint32_t r0 = jit_f2u(p * t), r1 = jit_f2u(-(p * s)), r2 = jit_f2u(q * s), r3 = jit_f2u(q * t);
+    JIT_FENCE(r0); JIT_FENCE(r1); JIT_FENCE(r2); JIT_FENCE(r3);
+    o[0] = r0;
+    o[1] = r1;
+    o[2] = r2;
+    o[3] = r3;
 }
 
 /* exec_insn's set_sat */
@@ -2174,7 +2220,7 @@ static inline uint64_t jit_dadd(c66x_core *c, int unit, uint64_t a, uint64_t b, 
 }
 
 /* exec_insn's f_to_i32, rounding by the unit's mode */
-static inline int32_t jit_f_to_i32(double x, unsigned rm)
+static inline int32_t jit_f_to_i32(c66x_core *c, double x, unsigned rm)
 {
     if (x != x || x >= 2147483648.0 || x < -2147483648.0)
         return (int32_t)0x80000000;
@@ -2183,7 +2229,7 @@ static inline int32_t jit_f_to_i32(double x, unsigned rm)
     case 1: r = trunc(x); break;
     case 2: r = ceil(x); break;
     case 3: r = floor(x); break;
-    default: r = nearbyint(x); break;
+    default: jit_round(c, 0); JIT_FENCE(x); r = nearbyint(x); JIT_FENCE(r); break;
     }
     if (r >= 2147483648.0 || r < -2147483648.0)
         return (int32_t)0x80000000;
@@ -2194,8 +2240,8 @@ static inline int32_t jit_f_to_i32(double x, unsigned rm)
 static inline uint64_t jit_dspint(c66x_core *c, int unit, int side, uint64_t v)
 {
     unsigned rm = jit_rmode(c, unit, side);
-    uint32_t e = (uint32_t)jit_f_to_i32(jit_u2f((uint32_t)v), rm);
-    uint32_t o = (uint32_t)jit_f_to_i32(jit_u2f((uint32_t)(v >> 32)), rm);
+    uint32_t e = (uint32_t)jit_f_to_i32(c, jit_u2f((uint32_t)v), rm);
+    uint32_t o = (uint32_t)jit_f_to_i32(c, jit_u2f((uint32_t)(v >> 32)), rm);
     return ((uint64_t)o << 32) | e;
 }
 
@@ -2204,11 +2250,12 @@ static inline uint64_t jit_dintsp(c66x_core *c, int unit, int side, uint64_t v, 
 {
     unsigned rm = jit_rmode(c, unit, side);
     uint32_t w_e = (uint32_t)v, w_o = (uint32_t)(v >> 32);
-    if (rm) jit_round(rm);
+    jit_round(c, rm); JIT_FENCE(w_e); JIT_FENCE(w_o);
     float e = is_signed ? (float)(int32_t)w_e : (float)w_e;
     float o = is_signed ? (float)(int32_t)w_o : (float)w_o;
-    if (rm) jit_round(0);
-    return ((uint64_t)jit_f2u(o) << 32) | jit_f2u(e);
+    uint64_t r = ((uint64_t)jit_f2u(o) << 32) | jit_f2u(e);
+    JIT_FENCE(r);
+    return r;
 }
 
 static inline int64_t jit_sext40(uint64_t v) { return (int64_t)(v << 24) >> 24; }
@@ -2263,24 +2310,30 @@ static inline uint64_t jit_mpy32(uint32_t a, uint32_t b, int sub)
 static inline uint64_t jit_dpop(c66x_core *c, int unit, int side, uint64_t a, uint64_t b, char op, int kind)
 {
     unsigned rm = jit_rmode(c, unit, side);
-    if (rm) jit_round(rm);
+    jit_round(c, rm); JIT_FENCE(a); JIT_FENCE(b);
     double p, q, res;
     if (kind == 1) { p = jit_u2f((uint32_t)a); q = jit_u2d(b); }
     else if (kind == 2) { p = jit_u2f((uint32_t)a); q = jit_u2f((uint32_t)b); }
     else { p = jit_u2d(a); q = jit_u2d(b); }
     res = op == '+' ? p + q : op == '-' ? p - q : p * q;
-    if (rm) jit_round(0);
-    return jit_d2u(res);
+    uint64_t v = jit_d2u(res);
+    JIT_FENCE(v);
+    return v;
 }
 
 /* exec_insn's H_QMPYSP: four products, register by register */
 static inline void jit_qmpysp(c66x_core *c, int unit, int side, const uint32_t *a, const uint32_t *b, uint32_t *o)
 {
     unsigned rm = jit_rmode(c, unit, side);
-    if (rm) jit_round(rm);
+    uint32_t x[4], y[4], r[4];
+    memcpy(x, a, sizeof x);
+    memcpy(y, b, sizeof y);
+    jit_round(c, rm);
+    for (int k = 0; k < 4; k++) { JIT_FENCE(x[k]); JIT_FENCE(y[k]); }
     for (int k = 0; k < 4; k++)
-        o[k] = jit_f2u(jit_u2f(a[k]) * jit_u2f(b[k]));
-    if (rm) jit_round(0);
+        r[k] = jit_f2u(jit_u2f(x[k]) * jit_u2f(y[k]));
+    for (int k = 0; k < 4; k++) JIT_FENCE(r[k]);
+    memcpy(o, r, sizeof r);
 }
 
 /* fop_run's F_LOAD inline RAM read */
@@ -2293,7 +2346,7 @@ static inline uint32_t jit_load(c66x_core *c, uint32_t ea, unsigned n)
         return n == 4 ? m[0] | (m[1] << 8) | (m[2] << 16) | ((uint32_t)m[3] << 24)
              : n == 2 ? (uint32_t)(m[0] | (m[1] << 8)) : m[0];
     }
-    return c->api->mem_read(c, ea, n);
+    return JIT_API(c)->mem_read(c, ea, n);
 }
 
 /* fop_run's F_STORE inline RAM store */
@@ -2307,10 +2360,10 @@ static inline void jit_store(c66x_core *c, uint32_t ea, uint32_t v, unsigned n)
         if (n > 1) m[1] = v >> 8;
         if (n > 2) { m[2] = v >> 16; m[3] = v >> 24; }
         if (rr->codepage[(ea - rr->base) >> FP_PAGE_SHIFT])
-            c->api->invalidate_code(c, ea, n);
+            JIT_API(c)->invalidate_code(c, ea, n);
         return;
     }
-    c->api->store_defer(c, ea, v, n);
+    JIT_API(c)->store_defer(c, ea, v, n);
 }
 
 /* A captured handler wrote a different shape than the generator saw: the
@@ -2384,7 +2437,7 @@ static void jit_refresh(c66x_core *c)
     if (core == c && gen == c->code_gen)
         return;
     for (unsigned i = 0; i < %d; i++)
-        jit_ins[i] = c->api->insn_at(c, jit_ins_addr[i]);
+        jit_ins[i] = JIT_API(c)->insn_at(c, jit_ins_addr[i]);
     core = c;
     gen = c->code_gen;
 }

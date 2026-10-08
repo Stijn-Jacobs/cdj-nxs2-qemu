@@ -25,6 +25,7 @@
 #define HPIC_HRDY       (1u << 3)
 
 #define DSP_HOST_MAX_ADDR 128
+#define DSP_HOST_MAX_POSTED 256
 
 /* Both images send control words to a converter on SPI1 and nothing comes
  * back: after each write to SPIDAT1 they wait for SPIBUF to show the
@@ -36,6 +37,10 @@ typedef struct DspAddrCount {
     uint64_t count;
     uint32_t last;
 } DspAddrCount;
+
+typedef struct DspPostedWrite {
+    uint32_t addr, val;
+} DspPostedWrite;
 
 typedef struct DspAddrTable {
     DspAddrCount e[DSP_HOST_MAX_ADDR];
@@ -57,12 +62,15 @@ typedef struct CdjDspHost {
     c66x_stop last_stop;
     uint32_t trap_pc;
     uint64_t cycles_per_chunk;
+    uint64_t slice_cycles;      /* the longest a chunk runs under @lock */
     QemuMutex lock;
     unsigned host_waiting;      /* MAIN waits for @lock */
     bool host_had_bql;          /* MAIN's holder of @lock let the BQL go */
     uint64_t host_locks;
     int64_t host_wait_ns;
     QemuThread thread;
+    bool paused;                /* the machine is stopped: run nothing */
+    GByteArray *snap;           /* the core's image in a snapshot */
     int64_t dsp_ns;             /* the virtual time the core has run up to */
     int64_t lag_max_ns;
     int64_t slack_ns;           /* 0: the core may lag without bound */
@@ -70,10 +78,18 @@ typedef struct CdjDspHost {
     QemuMutex progress_lock;    /* @dsp_ns, for the slack timer's wait */
     QemuCond progress;
 
+    /* MAIN's data writes to the core's RAM, held until the core thread's
+     * next slice; see cdj_dsp_host_write_word. NULL @ram: not used. */
+    uint8_t *(*ram)(void *chip, uint32_t addr);
+    QemuMutex posted_lock;
+    DspPostedWrite posted[DSP_HOST_MAX_POSTED];
+    unsigned nposted;
+
     uint32_t hpic;
     int dspint_line;            /* CPU interrupt MAIN's DSPINT raises, 0 = none */
     unsigned command;
     uint64_t commands, hint_edges, react_cycles;
+    uint64_t idle_skipped;      /* cycles an idle core did not run */
     uint64_t pin_reads;         /* DSP reads of the command pins */
     /* The chip drives its command pins from MAIN's 2-bit command. */
     void (*set_pins)(void *chip, unsigned bits);
@@ -95,6 +111,13 @@ void cdj_dsp_host_init(CdjDspHost *h, const char *name, const char *env_prefix,
 c66x_core *cdj_dsp_host_core(CdjDspHost *h, const c66x_bus *bus);
 void cdj_dsp_host_run(CdjDspHost *h, uint32_t entry);
 
+/* Snapshots. The chip embeds vmstate_cdj_dsp_host in its own state; once its
+ * state is loaded and h->snap is not empty, it makes the core again (with
+ * cdj_dsp_host_core, mapping its RAM and hooks as at boot) and calls
+ * cdj_dsp_host_resume() instead of cdj_dsp_host_run(). */
+extern const VMStateDescription vmstate_cdj_dsp_host;
+void cdj_dsp_host_resume(CdjDspHost *h);
+
 /* MAIN's side of @lock, for the chip's host-port handlers. The core's
  * thread steps aside while MAIN waits: a mutex alone lets it take the lock
  * straight back, chunk after chunk, and MAIN starves. */
@@ -104,12 +127,24 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC(CdjDspHost, cdj_dsp_host_unlock)
 #define CDJ_DSP_HOST_GUARD(h) \
     g_autoptr(CdjDspHost) host_guard_ = (cdj_dsp_host_lock(h), (h))
 
+/* MAIN's data access to the core's RAM without stopping the core: the chip
+ * sets @ram to the host pointer behind a DSP address (NULL when there is no
+ * RAM there). A write is posted and the core thread stores it, and tells the
+ * core, between two slices, so the core and its recording see it at one
+ * point of the instruction stream; a read sees posted writes already. A
+ * write outside RAM returns false. */
+uint32_t cdj_dsp_host_read_word(CdjDspHost *h, uint32_t addr);
+bool cdj_dsp_host_write_word(CdjDspHost *h, uint32_t addr, uint32_t val);
+
 uint32_t cdj_dsp_host_hpic(const CdjDspHost *h);
 /* The HPIC as MAIN writes it (clears HINT, raises DSPINT) and as the DSP
  * writes its own (clears DSPINT, raises HINT). Returns true when MAIN raised
  * DSPINT. */
 bool cdj_dsp_host_main_hpic(CdjDspHost *h, uint32_t val);
 void cdj_dsp_host_dsp_hpic(CdjDspHost *h, uint32_t val);
+
+/* DSP memory as a QEMU RAM block, which a snapshot carries. */
+uint8_t *cdj_dsp_ram(MemoryRegion *mr, const char *name, uint64_t size);
 
 /* GBLCTL, RGBLCTL and XGBLCTL of McASP n; 0 for any other address. */
 uint32_t cdj_dsp_mcasp_read(const DspMcasps *m, uint32_t addr);

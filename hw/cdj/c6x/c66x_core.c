@@ -479,6 +479,44 @@ int idle_check(c66x_core *c)
     return idle;
 }
 
+#define SNAP_SPAN(first, last)     { offsetof(c66x_core, first),       offsetof(c66x_core, last) + sizeof(((c66x_core *)0)->last) - offsetof(c66x_core, first) }
+
+static const struct { size_t off, len; } snap_spans[] = {
+    SNAP_SPAN(cycle, pm_resume_at),
+    SNAP_SPAN(br, st),
+    SNAP_SPAN(wq, wq),
+    SNAP_SPAN(efr, spl_irq_ret),
+};
+
+int c66x_quiet(const c66x_core *c)
+{
+    return !c->spl.active && !c->spl_irq_pending && !c->isr_depth && !c->int_entry;
+}
+
+size_t c66x_save(const c66x_core *c, uint8_t *buf)
+{
+    size_t at = 0;
+
+    for (size_t i = 0; i < sizeof snap_spans / sizeof snap_spans[0]; i++) {
+        if (buf)
+            memcpy(buf + at, (const uint8_t *)c + snap_spans[i].off, snap_spans[i].len);
+        at += snap_spans[i].len;
+    }
+    return at;
+}
+
+void c66x_load(c66x_core *c, const uint8_t *buf)
+{
+    for (size_t i = 0; i < sizeof snap_spans / sizeof snap_spans[0]; i++) {
+        memcpy((uint8_t *)c + snap_spans[i].off, buf, snap_spans[i].len);
+        buf += snap_spans[i].len;
+    }
+    memset(&c->spl, 0, sizeof c->spl);
+    for (unsigned i = 0; i < c->nram; i++)
+        c66x_invalidate(c, c->ram[i].base, c->ram[i].size);
+    c66x_set_idle_loop(c, c->idle_head, c->idle_slo, c->idle_shi, c->idle_allow_reads);
+}
+
 void c66x_watch_writes(c66x_core *c, uint32_t lo, uint32_t hi, c66x_watch_fn fn, void *opaque)
 {
     c->watch_lo = lo;

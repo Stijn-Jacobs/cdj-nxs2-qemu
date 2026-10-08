@@ -16,7 +16,7 @@ from launcher import model  # noqa: E402
 
 
 def test_lists_the_committed_profiles():
-    assert model.list_models() == ["cdj2000", "cdj2000nxs", "cdj2000nxs2", "cdj900nxs", "xdj1000", "xdj700"]
+    assert model.list_models() == ["cdj2000", "cdj2000nxs", "cdj2000nxs2", "cdj900nxs", "xdj1000", "xdj1000mk2", "xdj700"]
 
 
 def test_default_is_the_nxs2():

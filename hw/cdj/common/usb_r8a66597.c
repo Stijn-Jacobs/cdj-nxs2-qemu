@@ -817,11 +817,24 @@ static void cdj_usb_realize(DeviceState *dev, Error **errp)
                       USB_SPEED_MASK_FULL);
 }
 
+static const VMStateDescription vmstate_cdj_usb = {
+    .name = "cdj-usb",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_TIMER_PTR(attach_timer, CdjUsbState),
+        CDJ_VMSTATE_SPAN(CdjUsbState, attached, port_pipe),
+        CDJ_VMSTATE_SPAN(CdjUsbState, pipecfg, reg),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static void cdj_usb_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->realize = cdj_usb_realize;
+    dc->vmsd = &vmstate_cdj_usb;
     dc->desc = "USB host module (R8A66597)";
 }
 
@@ -883,7 +896,7 @@ void cdj_usb_init(MemoryRegion *sysmem, hwaddr base, qemu_irq irq,
 
     sysbus_realize_and_unref(sbd, &error_fatal);
     s->exit.notify = cdj_usb_dump;
-    qemu_add_exit_notifier(&s->exit);
+    cdj_add_exit_report(&s->exit);
     s->dcp_per_packet = dcp_per_packet;
     sysbus_connect_irq(sbd, 0, irq);
     memory_region_add_subregion_overlap(sysmem, base,

@@ -21,6 +21,7 @@ typedef struct CdjDmacState {
     qemu_irq dei[4];
     QEMUBH *dei_bh[4];
     QEMUTimer *dei_timer[4];
+    int64_t dei_deadline[4];        /* migrated: a pending timer's expiry, -1 none */
     /* Raises vs acknowledgements per channel; a big gap means a storm. */
     unsigned dei_raised[4];
     unsigned dei_acked[4];
@@ -337,6 +338,42 @@ static void cdj_dmac_dump(Notifier *n, void *unused)
     }
 }
 
+static int cdj_dmac_pre_save(void *opaque)
+{
+    CdjDmacState *s = opaque;
+
+    for (unsigned i = 0; i < ARRAY_SIZE(s->dei_timer); i++) {
+        s->dei_deadline[i] = s->dei_timer[i] ? timer_expire_time_ns(s->dei_timer[i]) : -1;
+    }
+    return 0;
+}
+
+static int cdj_dmac_post_load(void *opaque, int version_id)
+{
+    CdjDmacState *s = opaque;
+
+    for (unsigned i = 0; i < ARRAY_SIZE(s->dei_timer); i++) {
+        if (s->dei_timer[i] && s->dei_deadline[i] >= 0) {
+            timer_mod_ns(s->dei_timer[i], s->dei_deadline[i]);
+        }
+    }
+    return 0;
+}
+
+static const VMStateDescription vmstate_cdj_dmac = {
+    .name = "cdj-dmac",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .pre_save = cdj_dmac_pre_save,
+    .post_load = cdj_dmac_post_load,
+    .fields = (const VMStateField[]) {
+        VMSTATE_INT64_ARRAY(dei_deadline, CdjDmacState, 4),
+        CDJ_VMSTATE_SPAN(CdjDmacState, dei_raised, dreq_pending),
+        CDJ_VMSTATE_SPAN(CdjDmacState, nread, reg),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 /* dei[] gives the first four channels' DEI lines, a NULL line leaving that
  * channel without an interrupt, and a raise cap per line (0 = unlimited).
  * Which lines a board connects is its own policy. */
@@ -357,11 +394,12 @@ void cdj_dmac_init(MemoryRegion *sysmem, const char *name, hwaddr base,
                                            cdj_dmac_dei_raise, &s->dei[i]);
         }
     }
+    vmstate_register_any(NULL, &vmstate_cdj_dmac, s);
     memory_region_init_io(&s->iomem, NULL, &cdj_dmac_ops, s,
                           name, CDJ_DMAC_SIZE);
     memory_region_add_subregion(sysmem, base, &s->iomem);
     s->dreq_bh = qemu_bh_new(cdj_dmac_dreq_run, s);
     s->exit.notify = cdj_dmac_dump;
-    qemu_add_exit_notifier(&s->exit);
+    cdj_add_exit_report(&s->exit);
     cdj_dmac = s;
 }

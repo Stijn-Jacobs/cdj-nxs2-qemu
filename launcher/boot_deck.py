@@ -17,7 +17,7 @@ import subprocess
 import sys
 import time
 
-from . import chain, host
+from . import chain, host, snapshot
 from . import model as cdj_model
 from .chain import export_default, ifset, nonempty
 from .layout import Layout
@@ -156,6 +156,7 @@ class Deck:
         #   img           a real FAT16 image (extract/usbmedia3.img) with a
         #                 throwaway overlay; vvfat commits the tree on every write
         self.media_img = None
+        media_src = None
         mode = nonempty(env, "MEDIA_MODE", "rw")
         if mode == "ro":
             drive = "format=raw,file=fat:%s,readonly=on" % mediadir
@@ -179,6 +180,7 @@ class Deck:
                 mfile = host.native(src) + ",snapshot=on"
             # MEDIA_CACHE: unsafe ignores the guest's flushes, writeback honours them.
             drive = "format=raw,file=%s,cache=%s" % (mfile, nonempty(env, "MEDIA_CACHE", "writeback"))
+            media_src = src
         else:
             drive = "format=raw,file=fat:rw:%s" % mediadir
         self.mediadir = mediadir
@@ -287,6 +289,49 @@ class Deck:
         self.gui_argv = [self.gui_qemu, "-M", profile.gui_machine, "-kernel", gui_image,
                          "-chardev", "socket,id=spilink,path=%s" % self.sock,
                          "-display", display, "-serial", "null", "-monitor", mon.spec(self.gui_mon)]
+        self._plan_snapshot(main_kernel, gui_image, media_src)
+
+    def _plan_snapshot(self, main_kernel, gui_image, media_src):
+        """SNAPSHOT=<point> (idle or loaded): start both boards from that saved
+        point; when it is not saved yet, boot as usual and let the driver save
+        it on the way. SNAPSHOT_SAVE=<point,...> saves without restoring."""
+        env, tag = self.env, self.tag
+        point = env.get("SNAPSHOT", "")
+        points = [p for p in env.get("SNAPSHOT_SAVE", "").split(",") if p]
+        if not point and not points:
+            return
+        for p in [point] + points:
+            if p and p not in snapshot.POINTS:
+                raise SystemExit("[%s] SNAPSHOT point %r: known points are %s" % (tag, p, ", ".join(snapshot.POINTS)))
+        if not media_src:
+            raise SystemExit("[%s] snapshots need MEDIA_MODE=img: a fat: medium cannot be saved" % tag)
+        root = snapshot.root(self.lay.tmp, [self.main_qemu, self.gui_qemu, main_kernel, gui_image, media_src])
+        env["SNAPSHOT_ROOT"] = host.native(root)
+        point_dir = os.path.join(root, point) if point else ""
+        if point and snapshot.saved(point_dir):
+            d = host.native(point_dir)
+            self.main_argv += ["-incoming", "file:%s/main.vm" % d]
+            self.gui_argv += ["-incoming", "file:%s/gui.vm" % d]
+            env["SNAPSHOT_FROM"] = point
+            if point == "loaded":
+                # The deck comes back playing: no walk, no settings modal, no load.
+                env.update({"WALK": " ", "WALK_PRE": " ", "NOMODAL": "1", "LOADWAIT": "1", "READY_WAIT": "0"})
+            self.notes.append((1, "[%s] starting from the saved '%s' point %s" % (tag, point, d)))
+            points = []
+        elif point:
+            points.append(point)
+            self.notes.append((1, "[%s] no saved '%s' point yet: booting, and saving it on the way" % (tag, point)))
+        env["SNAPSHOT_SAVE"] = ",".join(points)
+        if points:
+            # The save stops both boards first, and a state that records
+            # "paused" comes back paused. Without the run state in the file
+            # the restored pair starts on its own.
+            for argv in (self.main_argv, self.gui_argv):
+                argv += ["-global", "migration.store-global-state=off"]
+        if points and not self.main_mon:
+            # Saving goes through MAIN's monitor.
+            self.main_mon = "%s/cdj-%s-main-mon.sock" % (self.lay.tmp, tag)
+            self.main_argv[self.main_argv.index("-monitor") + 1] = _monsock(self.lay).spec(self.main_mon)
 
     def _patch_gui(self):
         return os.path.join(self.lay.emu, "mods", "patch_gui.py")

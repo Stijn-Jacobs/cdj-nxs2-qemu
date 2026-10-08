@@ -616,6 +616,28 @@ static void cdj_iic_summary(Notifier *n, void *opaque)
 }
 
 /* On machine reset, drop any transfer in progress and lower the lines. */
+static bool cdj_iic_has_slave(void *opaque, int version_id)
+{
+    return ((CdjIicState *)opaque)->bus != NULL;
+}
+
+static const VMStateDescription vmstate_cdj_iic = {
+    .name = "cdj-iic",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT8_ARRAY(reg, CdjIicState, CDJ_IIC_SIZE),
+        VMSTATE_BOOL_ARRAY(irq_level, CdjIicState, CDJ_IIC_NR_IRQ),
+        VMSTATE_BOOL(arm_wait, CdjIicState),
+        CDJ_VMSTATE_SPAN(CdjIicState, status, stop_pending),
+        VMSTATE_INT64(mute_ns, CdjIicState),
+        CDJ_VMSTATE_SPAN(CdjIicState, ack_seq, stuck_seen),
+        VMSTATE_TIMER_PTR_TEST(bus, CdjIicState, cdj_iic_has_slave),
+        VMSTATE_TIMER_PTR_TEST(guard, CdjIicState, cdj_iic_has_slave),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static void cdj_iic_reset(void *opaque)
 {
     CdjIicState *s = opaque;
@@ -723,6 +745,7 @@ void cdj_iic(MemoryRegion *sysmem, const char *name, hwaddr addr,
                     s->nack_unknown ? ", other addresses NACKed" : "");
     }
 
+    vmstate_register_any(NULL, &vmstate_cdj_iic, s);
     memory_region_init_io(&s->iomem, NULL, &cdj_iic_ops, s, name,
                           CDJ_IIC_SIZE);
     memory_region_add_subregion_overlap(sysmem, A7ADDR(addr), &s->iomem, 1);

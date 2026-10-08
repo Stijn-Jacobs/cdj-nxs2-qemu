@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "dsp_host.h"
+#include "sysemu/runstate.h"
 /*
  * The core runs on its own thread in chunks, at most one quantum ahead of
  * QEMU's virtual clock. Run on the main loop instead, a chunk of the
@@ -16,6 +17,11 @@
  * (priority 4, in the window on every pass) looked busy for all of it, and the
  * lower-priority media manager took five minutes to read the USB stick's
  * database instead of seconds.
+ *
+ * MAIN's data accesses to the core's RAM do not take the lock at all: a read
+ * is served from the RAM, a write is posted and the core thread stores it
+ * between two slices. On the C6747 boards MAIN makes millions of such
+ * accesses a run, and each one used to wait out a slice.
  *
  * On the board the DSP follows the command pins within microseconds, so every
  * change of command runs the core in small pieces until the DSP has seen it:
@@ -35,6 +41,9 @@
 #define REACT_STEP      2000
 #define REACT_MAX       (4 * 1000 * 1000)
 #define SLACK_POLL_NS   (1000 * 1000)
+/* Stepping to a quiet point gives up after this much DSP time: 10 ms. */
+#define QUIET_STEP      16
+#define QUIET_MAX_NS    (10 * 1000 * 1000)
 
 #define MCASP_GBLCTL    0x44
 #define MCASP_RGBLCTL   0x60
@@ -56,6 +65,26 @@ static bool host_stopped(CdjDspHost *h, c66x_stop stop)
     return true;
 }
 
+/* With @lock held. Posted writes land in order, their stores before any of
+ * the core's notifications, as a lone host write's store and notification. */
+static void host_apply_posted(CdjDspHost *h)
+{
+    DspPostedWrite w[DSP_HOST_MAX_POSTED];
+    unsigned i, n;
+
+    qemu_mutex_lock(&h->posted_lock);
+    n = h->nposted;
+    for (i = 0; i < n; i++) {
+        w[i] = h->posted[i];
+        stl_le_p(h->ram(h->chip, w[i].addr & ~3u), w[i].val);
+    }
+    h->nposted = 0;
+    qemu_mutex_unlock(&h->posted_lock);
+    for (i = 0; i < n; i++) {
+        c66x_invalidate(h->core, w[i].addr & ~3u, 4);
+    }
+}
+
 static void *host_thread(void *opaque)
 {
     CdjDspHost *h = opaque;
@@ -72,12 +101,33 @@ static void *host_thread(void *opaque)
             g_usleep(1000);
             continue;
         }
-        h->lag_max_ns = MAX(h->lag_max_ns, virt - h->dsp_ns);
         qemu_mutex_lock(&h->lock);
+        if (qatomic_read(&h->paused)) {
+            qemu_mutex_unlock(&h->lock);
+            g_usleep(1000);
+            continue;
+        }
+        h->lag_max_ns = MAX(h->lag_max_ns, virt - h->dsp_ns);
         for (run = 0; run < h->cycles_per_chunk
-                      && !qatomic_read(&h->host_waiting); run += SLICE_CYCLES) {
+                      && !qatomic_read(&h->host_waiting);
+             run += h->slice_cycles) {
             done = 0;
-            if (host_stopped(h, c66x_step(h->core, SLICE_CYCLES, &done))) {
+            if (qatomic_read(&h->nposted)) {
+                host_apply_posted(h);
+            }
+            if (host_stopped(h, c66x_step(h->core, h->slice_cycles, &done))) {
+                break;
+            }
+            /* Nothing changes for an idle core before its next interrupt, and
+             * the EDMA events come at the end of a chunk; MAIN's DSPINT lands
+             * there too instead of between two slices, well inside the
+             * quantum the core may run ahead anyway. */
+            if (h->last_stop == C66X_STOP_IDLE) {
+                if (run + done < h->cycles_per_chunk) {
+                    c66x_skip_cycles(h->core, h->cycles_per_chunk - run - done);
+                    h->idle_skipped += h->cycles_per_chunk - run - done;
+                }
+                run = h->cycles_per_chunk;
                 break;
             }
         }
@@ -89,7 +139,9 @@ static void *host_thread(void *opaque)
         qemu_mutex_unlock(&h->progress_lock);
         if (h->after_chunk) {
             qemu_mutex_lock(&h->lock);
-            h->after_chunk(h->chip, h->dsp_ns);
+            if (!qatomic_read(&h->paused)) {
+                h->after_chunk(h->chip, h->dsp_ns);
+            }
             qemu_mutex_unlock(&h->lock);
         }
     }
@@ -97,29 +149,22 @@ static void *host_thread(void *opaque)
 }
 
 /*
- * With the BQL dropped, as in cdj_dsp_host_lock: the core thread needs
- * nothing from MAIN's side to catch up.
+ * With the BQL held, as the NXS2's lockstep tick waits: with -icount this
+ * runs as a virtual-clock timer, and stopping the machine waits, holding the
+ * BQL, for the running timers to finish, so a timer that let the BQL go
+ * could never take it back. The waits are short: the core is at most the
+ * slack behind.
  */
 static void slack_tick(void *opaque)
 {
     CdjDspHost *h = opaque;
-    int64_t virt = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
-    int64_t need = virt - h->slack_ns;
-    bool had_bql = bql_locked();
+    int64_t need = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) - h->slack_ns;
 
-    if (qatomic_read(&h->running) && h->dsp_ns < need) {
-        if (had_bql) {
-            bql_unlock();
-        }
-        qemu_mutex_lock(&h->progress_lock);
-        while (qatomic_read(&h->running) && h->dsp_ns < need) {
-            qemu_cond_timedwait(&h->progress, &h->progress_lock, 10);
-        }
-        qemu_mutex_unlock(&h->progress_lock);
-        if (had_bql) {
-            bql_lock();
-        }
+    qemu_mutex_lock(&h->progress_lock);
+    while (qatomic_read(&h->running) && h->dsp_ns < need) {
+        qemu_cond_timedwait(&h->progress, &h->progress_lock, 10);
     }
+    qemu_mutex_unlock(&h->progress_lock);
     timer_mod(h->slack_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL)
                               + SLACK_POLL_NS);
 }
@@ -142,6 +187,9 @@ void cdj_dsp_host_lock(CdjDspHost *h)
     qatomic_inc(&h->host_waiting);
     qemu_mutex_lock(&h->lock);
     qatomic_dec(&h->host_waiting);
+    if (h->nposted) {
+        host_apply_posted(h);
+    }
     h->host_had_bql = had_bql;
     h->host_locks++;
     h->host_wait_ns += get_clock() - t0;
@@ -157,6 +205,55 @@ void cdj_dsp_host_unlock(CdjDspHost *h)
     }
 }
 
+uint32_t cdj_dsp_host_read_word(CdjDspHost *h, uint32_t addr)
+{
+    uint8_t *p = h->ram(h->chip, addr & ~3u);
+    uint32_t val = 0;
+    bool posted = false;
+    unsigned i;
+
+    /* The newest posted write to the word wins; the core thread stores a
+     * batch while it holds @posted_lock, so the RAM is never read between a
+     * write leaving the list and landing. */
+    qemu_mutex_lock(&h->posted_lock);
+    for (i = h->nposted; i > 0 && !posted; i--) {
+        if (h->posted[i - 1].addr == (addr & ~3u)) {
+            val = h->posted[i - 1].val;
+            posted = true;
+        }
+    }
+    if (!posted && p) {
+        val = ldl_le_p(p);
+    }
+    qemu_mutex_unlock(&h->posted_lock);
+    return val;
+}
+
+bool cdj_dsp_host_write_word(CdjDspHost *h, uint32_t addr, uint32_t val)
+{
+    addr &= ~3u;
+    if (!h->ram(h->chip, addr)) {
+        return false;
+    }
+    if (qatomic_read(&h->running)) {
+        qemu_mutex_lock(&h->posted_lock);
+        if (h->nposted < DSP_HOST_MAX_POSTED) {
+            h->posted[h->nposted] = (DspPostedWrite){ addr, val };
+            qatomic_set(&h->nposted, h->nposted + 1);
+            qemu_mutex_unlock(&h->posted_lock);
+            return true;
+        }
+        qemu_mutex_unlock(&h->posted_lock);
+    }
+    cdj_dsp_host_lock(h);
+    stl_le_p(h->ram(h->chip, addr), val);
+    if (h->core) {
+        c66x_invalidate(h->core, addr, 4);
+    }
+    cdj_dsp_host_unlock(h);
+    return true;
+}
+
 static bool host_answered(CdjDspHost *h, uint64_t edges, uint64_t reads)
 {
     return h->command ? h->hint_edges != edges : h->pin_reads != reads;
@@ -166,9 +263,11 @@ static void host_react(CdjDspHost *h)
 {
     uint64_t edges = h->hint_edges, reads = h->pin_reads, total = 0, done;
 
+    /* An idle core reads no pins, so only an interrupt gets it to answer. */
     while (h->running && !host_answered(h, edges, reads) && total < REACT_MAX) {
         done = 0;
-        if (host_stopped(h, c66x_step(h->core, REACT_STEP, &done))) {
+        if (host_stopped(h, c66x_step(h->core, REACT_STEP, &done))
+            || h->last_stop == C66X_STOP_IDLE) {
             break;
         }
         total += done ? done : REACT_STEP;
@@ -232,6 +331,87 @@ static void host_command(void *opaque, unsigned bits)
     cdj_dsp_host_unlock(h);
 }
 
+/*
+ * Snapshots. The chip's RAM travels with the machine's RAM, but the core
+ * stores into it through host pointers that dirty tracking never sees, so the
+ * core must not run a cycle once a save has started. When the machine stops,
+ * the core steps on to a quiet point (see c66x_quiet) and its thread runs
+ * nothing until the machine runs again.
+ */
+static void host_vm_state(void *opaque, bool running, RunState state)
+{
+    CdjDspHost *h = opaque;
+    uint64_t done, run = 0, max = h->cycles_per_chunk * QUIET_MAX_NS / CHUNK_NS;
+
+    if (running) {
+        qatomic_set(&h->paused, false);
+        return;
+    }
+    qatomic_inc(&h->host_waiting);
+    qemu_mutex_lock(&h->lock);
+    qatomic_dec(&h->host_waiting);
+    qatomic_set(&h->paused, true);
+    /* MAIN stops with the machine, so nothing is posted after these land and
+     * a snapshot never has to carry the list. */
+    if (h->nposted) {
+        host_apply_posted(h);
+    }
+    /* A machine on its way out is never saved. */
+    if (state != RUN_STATE_SHUTDOWN) {
+        while (h->core && h->running && !c66x_quiet(h->core) && run < max) {
+            done = 0;
+            if (host_stopped(h, c66x_step(h->core, QUIET_STEP, &done))) {
+                break;
+            }
+            run += QUIET_STEP;
+        }
+        if (h->core && h->running && !c66x_quiet(h->core)) {
+            warn_report("%s: no quiet point within %" PRIu64 " cycles, pc "
+                        "0x%08x: the machine cannot be saved now", h->name,
+                        run, c66x_get_pc(h->core));
+        }
+    }
+    qemu_mutex_unlock(&h->lock);
+}
+
+static int host_pre_save(void *opaque)
+{
+    CdjDspHost *h = opaque;
+
+    g_byte_array_set_size(h->snap, 0);
+    if (!h->core) {
+        return 0;
+    }
+    if (!h->paused || !c66x_quiet(h->core)) {
+        error_report("%s: the core is not at a quiet point, pc 0x%08x: stop "
+                     "the machine before saving it", h->name,
+                     c66x_get_pc(h->core));
+        return -EBUSY;
+    }
+    g_byte_array_set_size(h->snap, c66x_save(h->core, NULL));
+    c66x_save(h->core, h->snap->data);
+    return 0;
+}
+
+const VMStateDescription vmstate_cdj_dsp_host = {
+    .name = "cdj-dsp-host",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .pre_save = host_pre_save,
+    .fields = (const VMStateField[]) {
+        CDJ_VMSTATE_BYTES(snap, CdjDspHost),
+        VMSTATE_BOOL(running, CdjDspHost),
+        VMSTATE_UINT32(trap_pc, CdjDspHost),
+        VMSTATE_INT64(dsp_ns, CdjDspHost),
+        VMSTATE_UINT32(hpic, CdjDspHost),
+        VMSTATE_UINT32(command, CdjDspHost),
+        VMSTATE_UINT64(commands, CdjDspHost),
+        VMSTATE_UINT64(hint_edges, CdjDspHost),
+        VMSTATE_UINT64(pin_reads, CdjDspHost),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 void cdj_dsp_host_init(CdjDspHost *h, const char *name, const char *env_prefix,
                        unsigned default_mhz,
                        void (*set_pins)(void *chip, unsigned bits), void *chip)
@@ -247,8 +427,10 @@ void cdj_dsp_host_init(CdjDspHost *h, const char *name, const char *env_prefix,
     h->enabled = !(on && !strcmp(on, "0"));
     h->cycles_per_chunk = (mhz ? strtoull(mhz, NULL, 0) : default_mhz)
                           * CHUNK_NS / 1000;
+    h->slice_cycles = SLICE_CYCLES;
     qemu_mutex_init(&h->lock);
     qemu_mutex_init(&h->progress_lock);
+    qemu_mutex_init(&h->posted_lock);
     qemu_cond_init(&h->progress);
     slack = getenv(slack_var);
     h->slack_ns = slack ? strtoull(slack, NULL, 0) * 1000 : 0;
@@ -258,6 +440,8 @@ void cdj_dsp_host_init(CdjDspHost *h, const char *name, const char *env_prefix,
     h->set_pins = set_pins;
     h->chip = chip;
     h->wires = (CdjDspWires){ h, host_command, host_busy };
+    h->snap = g_byte_array_new();
+    qemu_add_vm_change_state_handler(host_vm_state, h);
 }
 
 c66x_core *cdj_dsp_host_core(CdjDspHost *h, const c66x_bus *bus)
@@ -266,20 +450,45 @@ c66x_core *cdj_dsp_host_core(CdjDspHost *h, const c66x_bus *bus)
     return h->core;
 }
 
+static void host_start_thread(CdjDspHost *h)
+{
+    qemu_thread_create(&h->thread, h->name, host_thread, h,
+                       QEMU_THREAD_DETACHED);
+    if (h->slack_ns) {
+        h->slack_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, slack_tick, h);
+        timer_mod(h->slack_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL)
+                                  + SLACK_POLL_NS);
+        if (cdj_report_enabled()) {
+            info_report("%s: core kept within %" PRId64 " us of the virtual "
+                        "clock", h->name, h->slack_ns / 1000);
+        }
+    }
+}
+
 void cdj_dsp_host_run(CdjDspHost *h, uint32_t entry)
 {
     c66x_reset(h->core, entry);
     h->running = true;
     h->dsp_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
-    info_report("%s: started at 0x%08x", h->name, entry);
-    qemu_thread_create(&h->thread, h->name, host_thread, h,
-                       QEMU_THREAD_DETACHED);
-    if (h->slack_ns) {
-        h->slack_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, slack_tick, h);
-        timer_mod(h->slack_timer, h->dsp_ns + SLACK_POLL_NS);
-        info_report("%s: core kept within %" PRId64 " us of the virtual clock",
-                    h->name, h->slack_ns / 1000);
+    if (cdj_report_enabled()) {
+        info_report("%s: started at 0x%08x", h->name, entry);
     }
+    host_start_thread(h);
+}
+
+void cdj_dsp_host_resume(CdjDspHost *h)
+{
+    c66x_load(h->core, h->snap->data);
+    qatomic_set(&h->paused, !runstate_is_running());
+    if (h->running) {
+        host_start_thread(h);
+    }
+}
+
+uint8_t *cdj_dsp_ram(MemoryRegion *mr, const char *name, uint64_t size)
+{
+    memory_region_init_ram(mr, NULL, name, size, &error_fatal);
+    return memory_region_get_ram_ptr(mr);
 }
 
 /* The GBLCTL register @addr is in, or -1; its McASP in @n. */
@@ -372,9 +581,10 @@ void cdj_dsp_host_report(CdjDspHost *h)
     cdj_dsp_host_lock(h);
     c66x_get_stats(h->core, &st);
     info_report("%s: %s, pc 0x%08x, %" PRIu64 " cycles, %" PRIu64
-                " packets, last stop %d", h->name,
-                h->running ? "running" : "stopped", c66x_get_pc(h->core),
-                st.cycles, st.packets, h->last_stop);
+                " packets, last stop %d, %" PRIu64 " cycles skipped idle",
+                h->name, h->running ? "running" : "stopped",
+                c66x_get_pc(h->core), st.cycles, st.packets, h->last_stop,
+                h->idle_skipped);
     if (h->trap_pc) {
         info_report("%s: trap at 0x%08x", h->name, h->trap_pc);
     }

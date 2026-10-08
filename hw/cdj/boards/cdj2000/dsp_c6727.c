@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "dsp_host.h"
 #include "dsp_dmax.h"
+#include "dsp_audio_out.h"
 #include "cdj_getenv.h"
 /*
  * The CDJ-2000's DSP: a C6727 (C67x+) that MAIN boots and feeds through its
@@ -77,6 +78,7 @@
 
 typedef struct CdjC6727 {
     MemoryRegion iomem;
+    MemoryRegion iram_ram, sdram_ram;   /* QEMU RAM, so a snapshot carries them */
     uint8_t *iram, *sdram;
     CdjDspHost host;
 
@@ -198,6 +200,13 @@ static void dmax_set_irq(void *opaque, int line, int level)
     c66x_set_irq(s->host.core, line, level);
 }
 
+static void dmax_audio_frame(void *opaque, unsigned mcasp, uint32_t left,
+                             uint32_t right)
+{
+    /* The dMAX counts its audio events from 0: McASP1, then McASP2. */
+    cdj_dsp_audio_frame(mcasp + 1, left, right);
+}
+
 static void dmax_after_chunk(void *opaque, int64_t dsp_ns)
 {
     CdjC6727 *s = opaque;
@@ -205,7 +214,8 @@ static void dmax_after_chunk(void *opaque, int64_t dsp_ns)
     cdj_dmax_audio_run(&s->dmax, dsp_ns);
 }
 
-static void dsp_start(CdjC6727 *s)
+/* A core on the chip's RAM, as the boot leaves it before the first cycle. */
+static void dsp_attach(CdjC6727 *s)
 {
     c66x_bus bus = { s, dsp_bus_read, dsp_bus_write };
     c66x_core *core = cdj_dsp_host_core(&s->host, &bus);
@@ -218,6 +228,11 @@ static void dsp_start(CdjC6727 *s)
     c66x_map_ram(core, IRAM_BASE, IRAM_SIZE, s->iram);
     c66x_map_ram(core, SDRAM_BASE, SDRAM_SIZE, s->sdram);
     c66x_hook_pc(core, CREG9_FUNC, creg9_hook, s);
+}
+
+static void dsp_start(CdjC6727 *s)
+{
+    dsp_attach(s);
     cdj_dsp_host_run(&s->host, ldl_le_p(s->iram + (ROM_ENTRY - IRAM_BASE)));
 }
 
@@ -324,27 +339,56 @@ static void c6727_exit_report(Notifier *n, void *data)
     }
 }
 
+static int c6727_post_load(void *opaque, int version_id)
+{
+    CdjC6727 *s = opaque;
+
+    if (s->host.snap->len) {
+        dsp_attach(s);
+        cdj_dsp_host_resume(&s->host);
+    }
+    return 0;
+}
+
+static const VMStateDescription vmstate_c6727 = {
+    .name = "cdj-c6727",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .post_load = c6727_post_load,
+    .fields = (const VMStateField[]) {
+        VMSTATE_STRUCT(host, CdjC6727, 1, vmstate_cdj_dsp_host, CdjDspHost),
+        VMSTATE_UINT32_ARRAY(cfg, CdjC6727, CFG_SIZE / 4),
+        VMSTATE_UINT32(spi_in, CdjC6727),
+        CDJ_VMSTATE_SPAN(CdjC6727, dmax.ctl, dmax.audio_overruns),
+        VMSTATE_UINT32_ARRAY(mcasps.gblctl, CdjC6727, 3),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 const CdjDspWires *cdj_c6727_init(MemoryRegion *sysmem, hwaddr hpi_base)
 {
     CdjC6727 *s = &c6727;
 
-    s->iram = g_malloc0(IRAM_SIZE);
-    s->sdram = g_malloc0(SDRAM_SIZE);
+    s->iram = cdj_dsp_ram(&s->iram_ram, "c6727.iram", IRAM_SIZE);
+    s->sdram = cdj_dsp_ram(&s->sdram_ram, "c6727.sdram", SDRAM_SIZE);
     /* The ROM loader leaves the page on internal RAM, where MAIN writes the
      * first image before the DSP has run anything of it. */
     s->cfg[CFG_HPIAMSB / 4] = IRAM_BASE >> 24;
     cdj_dsp_host_init(&s->host, "c6727", "C6727", 300, set_command_pins, s);
     s->host.dspint_line = DSPINT_IRQ;
+    cdj_dsp_audio_arm();
     s->mcasps = (DspMcasps){ MCASP_BASE, MCASP_STRIDE };
     s->dmax.ram = dmax_ram;
     s->dmax.set_irq = dmax_set_irq;
     s->dmax.stored = dmax_stored;
+    s->dmax.audio_frame = dmax_audio_frame;
     s->dmax.chip = s;
     s->host.after_chunk = dmax_after_chunk;
 
     memory_region_init_io(&s->iomem, NULL, &hpi_ops, s, "c6727.hpi", 0x100000);
     memory_region_add_subregion(sysmem, hpi_base, &s->iomem);
     s->exit.notify = c6727_exit_report;
-    qemu_add_exit_notifier(&s->exit);
+    cdj_add_exit_report(&s->exit);
+    vmstate_register_any(NULL, &vmstate_c6727, s);
     return &s->host.wires;
 }

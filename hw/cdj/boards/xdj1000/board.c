@@ -26,9 +26,25 @@
 #define SH7724_PNL_SYNC  0x8F
 
 /*
+ * The XDJ-1000MK2 decodes report byte 0x0F bit 0x02 as its DIRECTION lever
+ * (0x0949CB0A in 1.45: DirectionRev = the bit read as clear). MAIN latches the
+ * reverse posture while the bit reads 0 in the first frames, posts it with
+ * every PLAY and the DSP gets it as bit 31 of its play word, so a loaded track
+ * would run backwards from its first frame and look frozen. The lever sits at
+ * FWD, where the bit reads 1.
+ */
+static void sh7724_panel_lever_fwd(CdjPnlLinkState *s, void *extra,
+                                   uint8_t *rx)
+{
+    rx[0x0F] |= 0x02;
+}
+
+/*
  * The XDJ-1000's stick port is the second of the SH7724's two USB controllers:
  * MAIN sets DCFM (host mode) in the SYSCFG of the block at 0xA4D90000 and never
- * touches the first one. The CDJ-900NXS drives the first, at 0xA4D80000.
+ * touches the first one. The CDJ-900NXS drives the first, at 0xA4D80000. The
+ * XDJ-1000MK2 hosts the stick on the second, with its DMA reading that block's
+ * D0FIFO, and runs the first in function mode.
  */
 #define XDJ1000_USB_BASE 0x04D90000
 
@@ -85,6 +101,21 @@ static void xdj1000_imr_init(MemoryRegion *sysmem)
  */
 static const hwaddr xdj1000_uart_base[] = { 0xA4470000, 0xA4750000 };
 
+/*
+ * Registers at 0x04C90000 that the XDJ-1000MK2 sets to one of six values
+ * (0x0F86, 0x0DF7, 0x0BF3, 0x0839, 0x02F2, 0) and polls every ~12 ms, rewriting
+ * them whenever the read differs from the value it set. Left unmodelled they
+ * read 0, so the task rewrites them forever; they only need to keep what is
+ * written.
+ */
+static MemoryRegion pwm_regs;
+
+static void xdj1000_pwm_init(MemoryRegion *sysmem)
+{
+    memory_region_init_ram(&pwm_regs, NULL, "mk2.pwm", 0x10000, &error_fatal);
+    memory_region_add_subregion_overlap(sysmem, 0x04C90000, &pwm_regs, 1);
+}
+
 static CdjBoardDesc xdj1000_board = {
     .name = "xdj1000",
     .dram_phys = CDJ_DRAM_PHYS,
@@ -114,7 +145,11 @@ typedef struct Sh7724Deck {
     const char *desc;
     hwaddr usb_base;
     int usb_irq;
+    hwaddr usb2_base;
+    int usb2_irq;
     unsigned pnl_frame;
+    bool pwm_ram;
+    bool lever_fwd;             /* idle frame reports the direction lever at FWD */
     int auth_iic;               /* IIC channel of the auth chip, or -1 */
 } Sh7724Deck;
 
@@ -152,6 +187,12 @@ static void sh7724_deck_init(MachineState *machine, const Sh7724Deck *deck)
     cdj_unimp("sh7724.intc",   0xFFD00000, 0x1000);
     cdj_unimp("sh7724.msiof0", 0xA4C40000, 0x1000);
     cdj_unimp("sh7724.msiof1", 0xA4C50000, 0x1000);
+    /* An unqualified -device lands on the bus of the controller created
+     * last, so the one that carries the stick comes after the other. */
+    if (deck->usb2_base) {
+        cdj_usb_init(sysmem, deck->usb2_base, cdj_intc.irqs[deck->usb2_irq],
+                     false);
+    }
     cdj_usb_init(sysmem, deck->usb_base, cdj_intc.irqs[deck->usb_irq], false);
     cdj_unimp("sh7724.misc-e4", 0xFFE40000, 0x1000);
     cdj_unimp("sh7724.ceu",    0xFE910000, 0x10000);
@@ -162,9 +203,17 @@ static void sh7724_deck_init(MachineState *machine, const Sh7724Deck *deck)
     cdj_unimp("sh7724.vou",    0xFE960000, 0x10000);
     cdj_unimp("sh7724.ceu-fea0", 0xFEA00000, 0x10000);
     cdj_unimp("sh7724.hpb",    0x04C00000, 0x100000);
+    if (deck->pwm_ram) {
+        xdj1000_pwm_init(sysmem);
+    }
 
     /* The DSP's host port is on area 6, four registers 256 KiB apart. */
     dsp = cdj_c6747_init(sysmem, CDJ_AREA6_PHYS);
+    /* fw 1.13's DSP application idles in a 36-cycle loop at 0xC004CD0C that
+     * polls a flag its interrupt handlers set; a pass touches no bus address
+     * and stores only to its stack (B15 0x11805AE0 at the head). It is about
+     * two thirds of the DSP's cycles during playback. */
+    cdj_c6747_set_idle_loop(0xC004CD0C, 0x11804AE0, 0x11805C00);
     xdj1000_pfc_init(sysmem, dsp);
 
     cdj_ata_init(sysmem, "sh7724.atapi", A7ADDR(0xA4DA2100), NULL);
@@ -180,7 +229,7 @@ static void sh7724_deck_init(MachineState *machine, const Sh7724Deck *deck)
                  cdj_count_irq(cdj_intc.irqs[CDJ_TMU1_TUNI1], "TMU1 TUNI1"),
                  cdj_count_irq(cdj_intc.irqs[CDJ_TMU1_TUNI2], "TMU1 TUNI2"));
     cdj_irqcount_exit.notify = cdj_irqcount_dump;
-    qemu_add_exit_notifier(&cdj_irqcount_exit);
+    cdj_add_exit_report(&cdj_irqcount_exit);
 
     dei[0] = cdj_count_irq(cdj_intc.irqs[CDJ_DMAC0A_DEI0], "DMAC0A DEI0");
     dei[1] = cdj_count_irq(cdj_intc.irqs[CDJ_DMAC0A_DEI1], "DMAC0A DEI1");
@@ -207,14 +256,20 @@ static void sh7724_deck_init(MachineState *machine, const Sh7724Deck *deck)
                            DEVICE_LITTLE_ENDIAN);
         }
     }
+    static const CdjPnlLinkHooks lever_fwd_hooks = {
+        .build_defaults = sh7724_panel_lever_fwd,
+    };
+
     cdj_pnl_link_init(sysmem, CDJ_SCIF2_ADDR, "sh7724.scif2-panel",
-                      deck->pnl_frame, SH7724_PNL_SYNC, NULL, 0);
+                      deck->pnl_frame, SH7724_PNL_SYNC,
+                      deck->lever_fwd ? &lever_fwd_hooks : NULL, 0);
     cdj_gui_keys_init(sh7724_deck_keys, ARRAY_SIZE(sh7724_deck_keys),
                       deck->name);
+    cdj_gui_pointer_init();
 
     cdj_board_load(machine);
     cdj_pcring_exit.notify = cdj_pcring_dump;
-    qemu_add_exit_notifier(&cdj_pcring_exit);
+    cdj_add_exit_report(&cdj_pcring_exit);
     cdj_board_start(cpu);
 }
 
@@ -242,6 +297,19 @@ static const Sh7724Deck xdj700_deck = {
     .usb_base = CDJ_USB_BASE,
     .usb_irq = CDJ_USB0,
     .pnl_frame = 32,
+    .auth_iic = 0,
+};
+
+static const Sh7724Deck xdj1000mk2_deck = {
+    .name = "xdj1000mk2",
+    .desc = "Pioneer XDJ-1000MK2 (Renesas SH7724), bring-up",
+    .usb_base = XDJ1000_USB_BASE,
+    .usb_irq = CDJ_USB1,
+    .usb2_base = CDJ_USB_BASE,
+    .usb2_irq = CDJ_USB0,
+    .pnl_frame = 32,
+    .pwm_ram = true,
+    .lever_fwd = true,
     .auth_iic = 0,
 };
 
@@ -274,6 +342,16 @@ static void xdj1000_machine_init(MachineClass *mc)
     sh7724_deck_machine_init(mc, &xdj1000_deck, xdj1000_init);
 }
 
+static void xdj1000mk2_init(MachineState *machine)
+{
+    sh7724_deck_init(machine, &xdj1000mk2_deck);
+}
+
+static void xdj1000mk2_machine_init(MachineClass *mc)
+{
+    sh7724_deck_machine_init(mc, &xdj1000mk2_deck, xdj1000mk2_init);
+}
+
 static void cdj900nxs_machine_init(MachineClass *mc)
 {
     sh7724_deck_machine_init(mc, &cdj900nxs_deck, cdj900nxs_init);
@@ -286,4 +364,5 @@ static void xdj700_machine_init(MachineClass *mc)
 
 DEFINE_MACHINE("xdj1000", xdj1000_machine_init)
 DEFINE_MACHINE("cdj900nxs", cdj900nxs_machine_init)
+DEFINE_MACHINE("xdj1000mk2", xdj1000mk2_machine_init)
 DEFINE_MACHINE("xdj700", xdj700_machine_init)

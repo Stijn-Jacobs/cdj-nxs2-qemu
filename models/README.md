@@ -35,6 +35,7 @@ DSP, SH7269 GUI processor).
 | `MODEL_EXPECTED` | each output image and its SHA-256 |
 | `MODEL_LAUNCH` | `rig` (default): the NXS2's two-board real-DSP rig, started by `rig.py`. `deck`: one MAIN emulator that draws the screen itself or runs its display board inside it, started by `deck.py`; the DSP warm-up, Pro DJ Link, mods, controller and virtual deck app are skipped for it |
 | `MODEL_DISPLAY_UPD` | the update file the display board loads (a `deck` model only); the install keeps a copy as `display.upd` beside the main images |
+| `MODEL_IDLE_S`, `MODEL_LOAD_STEPS` | how a `deck` model reaches its snapshot points (`SNAPSHOT=idle\|loaded`): seconds from power-on to the settled screen, then the `;`-separated steps that load a track (`sendkey <key> <ms>`, `key <panel payload>`, `wait <s>`; see `scripts/run/snapshot_deck.py`) |
 
 ## Adding a model
 

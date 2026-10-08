@@ -1,16 +1,18 @@
 diff --git a/hw/timer/sh_timer.c b/hw/timer/sh_timer.c
-index 7788939..0ae4a73 100644
+index 7788939..34fb405 100644
 --- a/hw/timer/sh_timer.c
 +++ b/hw/timer/sh_timer.c
-@@ -16,6 +16,7 @@
+@@ -15,7 +15,9 @@
+ #include "hw/sh4/sh.h"
  #include "hw/timer/tmu012.h"
  #include "hw/ptimer.h"
++#include "migration/vmstate.h"
  #include "trace.h"
 +#include "sysemu/reset.h"
  
  #define TIMER_TCR_TPSC          (7 << 0)
  #define TIMER_TCR_CKEG          (3 << 3)
-@@ -216,11 +217,35 @@ static void sh_timer_start_stop(void *opaque, int enable)
+@@ -216,15 +218,56 @@ static void sh_timer_start_stop(void *opaque, int enable)
      }
      ptimer_transaction_commit(s->timer);
      s->enabled = !!enable;
@@ -46,7 +48,37 @@ index 7788939..0ae4a73 100644
      s->int_level = s->enabled;
      sh_timer_update(s);
  }
-@@ -344,6 +369,43 @@ static const MemoryRegionOps tmu012_ops = {
+ 
++static const VMStateDescription vmstate_sh_timer = {
++    .name = "sh_timer",
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_PTIMER(timer, SHTimerState),
++        VMSTATE_UINT32(tcnt, SHTimerState),
++        VMSTATE_UINT32(tcor, SHTimerState),
++        VMSTATE_UINT32(tcr, SHTimerState),
++        VMSTATE_UINT32(tcpr, SHTimerState),
++        VMSTATE_INT32(int_level, SHTimerState),
++        VMSTATE_INT32(old_level, SHTimerState),
++        VMSTATE_INT32(enabled, SHTimerState),
++        VMSTATE_END_OF_LIST()
++    }
++};
++
+ static void *sh_timer_init(uint32_t freq, int feat, qemu_irq irq)
+ {
+     SHTimerState *s;
+@@ -245,7 +288,7 @@ static void *sh_timer_init(uint32_t freq, int feat, qemu_irq irq)
+     sh_timer_write(s, OFFSET_TCNT >> 2, s->tcnt);
+     sh_timer_write(s, OFFSET_TCPR >> 2, s->tcpr);
+     sh_timer_write(s, OFFSET_TCR  >> 2, s->tcpr);
+-    /* ??? Save/restore.  */
++    vmstate_register_any(NULL, &vmstate_sh_timer, s);
+     return s;
+ }
+ 
+@@ -344,6 +387,55 @@ static const MemoryRegionOps tmu012_ops = {
      .endianness = DEVICE_NATIVE_ENDIAN,
  };
  
@@ -87,13 +119,26 @@ index 7788939..0ae4a73 100644
 +    s->tocr = 0;
 +}
 +
++static const VMStateDescription vmstate_tmu012 = {
++    .name = "tmu012",
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_INT32_ARRAY(level, tmu012_state, 3),
++        VMSTATE_UINT32(tocr, tmu012_state),
++        VMSTATE_UINT32(tstr, tmu012_state),
++        VMSTATE_END_OF_LIST()
++    }
++};
++
  void tmu012_init(MemoryRegion *sysmem, hwaddr base, int feat, uint32_t freq,
                   qemu_irq ch0_irq, qemu_irq ch1_irq,
                   qemu_irq ch2_irq0, qemu_irq ch2_irq1)
-@@ -369,5 +431,6 @@ void tmu012_init(MemoryRegion *sysmem, hwaddr base, int feat, uint32_t freq,
+@@ -369,5 +461,6 @@ void tmu012_init(MemoryRegion *sysmem, hwaddr base, int feat, uint32_t freq,
      memory_region_init_alias(&s->iomem_a7, NULL, "timer-a7",
                               &s->iomem, 0, memory_region_size(&s->iomem));
      memory_region_add_subregion(sysmem, A7ADDR(base), &s->iomem_a7);
+-    /* ??? Save/restore.  */
 +    qemu_register_reset(tmu012_reset, s);
-     /* ??? Save/restore.  */
++    vmstate_register_any(NULL, &vmstate_tmu012, s);
  }

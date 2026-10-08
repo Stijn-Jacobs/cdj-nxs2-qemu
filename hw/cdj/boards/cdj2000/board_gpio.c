@@ -82,6 +82,16 @@ static const MemoryRegionOps latch_ops = {
     .valid = { .min_access_size = 2, .max_access_size = 2 },
 };
 
+static const VMStateDescription vmstate_latch = {
+    .name = "cdj2000-latch",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT16_ARRAY(reg, CdjLatch, LATCH_SIZE / 2),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 /* Over the unimplemented GPIO block, which keeps logging everything else. */
 void cdj2000_latch_init(MemoryRegion *sysmem, const CdjDspWires *dsp,
                         bool display)
@@ -93,6 +103,7 @@ void cdj2000_latch_init(MemoryRegion *sysmem, const CdjDspWires *dsp,
     if (display) {
         s->reg[REG_PANEL / 2] |= PANEL_DISPLAY_UP;
     }
+    vmstate_register_any(NULL, &vmstate_latch, s);
     memory_region_init_io(&s->iomem, NULL, &latch_ops, s, "cdj2000.latch",
                           LATCH_SIZE);
     memory_region_add_subregion_overlap(sysmem, LATCH_BASE, &s->iomem, 1);

@@ -1,8 +1,16 @@
 diff --git a/target/sh4/cpu.c b/target/sh4/cpu.c
-index 8f07261..7fd6476 100644
+index 8f07261..e953157 100644
 --- a/target/sh4/cpu.c
 +++ b/target/sh4/cpu.c
-@@ -72,14 +72,18 @@ static bool superh_io_recompile_replay_branch(CPUState *cs,
+@@ -24,6 +24,7 @@
+ #include "qemu/qemu-print.h"
+ #include "cpu.h"
+ #include "migration/vmstate.h"
++#include "migration/qemu-file-types.h"
+ #include "exec/exec-all.h"
+ #include "fpu/softfloat-helpers.h"
+ #include "tcg/tcg.h"
+@@ -72,14 +73,18 @@ static bool superh_io_recompile_replay_branch(CPUState *cs,
                                                const TranslationBlock *tb)
  {
      CPUSH4State *env = cpu_env(cs);
@@ -23,3 +31,116 @@ index 8f07261..7fd6476 100644
  }
  #endif
  
+@@ -232,9 +237,111 @@ static void superh_cpu_initfn(Object *obj)
+ }
+ 
+ #ifndef CONFIG_USER_ONLY
++static int get_tlb(QEMUFile *f, void *pv, size_t size,
++                   const VMStateField *field)
++{
++    tlb_t *t = pv;
++    uint32_t bits;
++
++    t->vpn = qemu_get_be32(f);
++    t->ppn = qemu_get_be32(f);
++    t->size = qemu_get_be32(f);
++    t->asid = qemu_get_byte(f);
++    bits = qemu_get_be32(f);
++    t->v = bits;
++    t->sz = bits >> 1;
++    t->sh = bits >> 3;
++    t->c = bits >> 4;
++    t->pr = bits >> 5;
++    t->d = bits >> 7;
++    t->wt = bits >> 8;
++    t->sa = bits >> 9;
++    t->tc = bits >> 12;
++    return 0;
++}
++
++static int put_tlb(QEMUFile *f, void *pv, size_t size,
++                   const VMStateField *field, JSONWriter *vmdesc)
++{
++    tlb_t *t = pv;
++
++    qemu_put_be32(f, t->vpn);
++    qemu_put_be32(f, t->ppn);
++    qemu_put_be32(f, t->size);
++    qemu_put_byte(f, t->asid);
++    qemu_put_be32(f, t->v | t->sz << 1 | t->sh << 3 | t->c << 4 |
++                  t->pr << 5 | t->d << 7 | t->wt << 8 | t->sa << 9 |
++                  t->tc << 12);
++    return 0;
++}
++
++static const VMStateInfo vmstate_info_tlb = {
++    .name = "sh4_tlb",
++    .get = get_tlb,
++    .put = put_tlb,
++};
++
++static int sh_cpu_post_load(void *opaque, int version_id)
++{
++    CPUSH4State *env = &SUPERH_CPU(opaque)->env;
++
++    /* fp_status is derived from FPSCR, the same way LDS FPSCR sets it. */
++    set_float_rounding_mode((env->fpscr & FPSCR_RM_MASK) == FPSCR_RM_ZERO ?
++                            float_round_to_zero : float_round_nearest_even,
++                            &env->fp_status);
++    set_flush_to_zero((env->fpscr & FPSCR_DN) != 0, &env->fp_status);
++    return 0;
++}
++
+ static const VMStateDescription vmstate_sh_cpu = {
+     .name = "cpu",
+-    .unmigratable = 1,
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .post_load = sh_cpu_post_load,
++    .fields = (const VMStateField[]) {
++        VMSTATE_CPU(),
++        VMSTATE_UINT32(env.flags, SuperHCPU),
++        VMSTATE_UINT32_ARRAY(env.gregs, SuperHCPU, 24),
++        VMSTATE_UINT32_ARRAY(env.fregs, SuperHCPU, 32),
++        VMSTATE_UINT32(env.sr, SuperHCPU),
++        VMSTATE_UINT32(env.sr_m, SuperHCPU),
++        VMSTATE_UINT32(env.sr_q, SuperHCPU),
++        VMSTATE_UINT32(env.sr_t, SuperHCPU),
++        VMSTATE_UINT32(env.ssr, SuperHCPU),
++        VMSTATE_UINT32(env.spc, SuperHCPU),
++        VMSTATE_UINT32(env.gbr, SuperHCPU),
++        VMSTATE_UINT32(env.vbr, SuperHCPU),
++        VMSTATE_UINT32(env.sgr, SuperHCPU),
++        VMSTATE_UINT32(env.dbr, SuperHCPU),
++        VMSTATE_UINT32(env.pc, SuperHCPU),
++        VMSTATE_UINT32(env.delayed_pc, SuperHCPU),
++        VMSTATE_UINT32(env.delayed_cond, SuperHCPU),
++        VMSTATE_UINT32(env.pr, SuperHCPU),
++        VMSTATE_UINT32(env.fpscr, SuperHCPU),
++        VMSTATE_UINT32(env.fpul, SuperHCPU),
++        VMSTATE_UINT64(env.mac, SuperHCPU),
++        VMSTATE_UINT32(env.mmucr, SuperHCPU),
++        VMSTATE_UINT32(env.pteh, SuperHCPU),
++        VMSTATE_UINT32(env.ptel, SuperHCPU),
++        VMSTATE_UINT32(env.ptea, SuperHCPU),
++        VMSTATE_UINT32(env.ttb, SuperHCPU),
++        VMSTATE_UINT32(env.tea, SuperHCPU),
++        VMSTATE_UINT32(env.tra, SuperHCPU),
++        VMSTATE_UINT32(env.expevt, SuperHCPU),
++        VMSTATE_UINT32(env.intevt, SuperHCPU),
++        VMSTATE_ARRAY(env.itlb, SuperHCPU, ITLB_SIZE, 0,
++                      vmstate_info_tlb, tlb_t),
++        VMSTATE_ARRAY(env.utlb, SuperHCPU, UTLB_SIZE, 0,
++                      vmstate_info_tlb, tlb_t),
++        VMSTATE_UINT32(env.lock_addr, SuperHCPU),
++        VMSTATE_UINT32(env.lock_value, SuperHCPU),
++        VMSTATE_UINT32(env.sh2a_irq_vector, SuperHCPU),
++        VMSTATE_UINT32(env.sh2a_irq_level, SuperHCPU),
++        VMSTATE_UINT32_2DARRAY(env.sh2a_bank, SuperHCPU,
++                               SH2A_BANKS, SH2A_BANK_ENTS),
++        VMSTATE_INT32(env.in_sleep, SuperHCPU),
++        VMSTATE_END_OF_LIST()
++    }
+ };
+ 
+ #include "hw/core/sysemu-cpu-ops.h"

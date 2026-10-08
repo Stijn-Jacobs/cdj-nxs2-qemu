@@ -161,10 +161,54 @@ void cdj_open_bus(MemoryRegion *sysmem, const char *name, hwaddr base, hwaddr si
  * registers start at a power-on value. For SoC blocks whose only job during
  * bring-up is to read back sensibly (a clock divider, a mode register).
  */
+static int cdj_bytes_get(QEMUFile *f, void *pv, size_t size,
+                         const VMStateField *field)
+{
+    GByteArray **a = pv;
+    uint32_t len = qemu_get_be32(f);
+
+    if (!*a) {
+        *a = g_byte_array_new();
+    }
+    g_byte_array_set_size(*a, len);
+    qemu_get_buffer(f, (*a)->data, len);
+    return 0;
+}
+
+static int cdj_bytes_put(QEMUFile *f, void *pv, size_t size,
+                         const VMStateField *field, JSONWriter *vmdesc)
+{
+    GByteArray *a = *(GByteArray **)pv;
+    uint32_t len = a ? a->len : 0;
+
+    qemu_put_be32(f, len);
+    if (len) {
+        qemu_put_buffer(f, a->data, len);
+    }
+    return 0;
+}
+
+const VMStateInfo cdj_vmstate_info_bytes = {
+    .name = "cdj-bytes",
+    .get = cdj_bytes_get,
+    .put = cdj_bytes_put,
+};
+
 typedef struct CdjRegsState {
     MemoryRegion iomem;
     uint32_t *reg;
+    uint32_t nreg;
 } CdjRegsState;
+
+static const VMStateDescription vmstate_cdj_regs = {
+    .name = "cdj-regs",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_VARRAY_UINT32(reg, CdjRegsState, nreg, 0, vmstate_info_uint32, uint32_t),
+        VMSTATE_END_OF_LIST()
+    }
+};
 
 static uint64_t cdj_regs_read(void *opaque, hwaddr off, unsigned size)
 {
@@ -195,10 +239,12 @@ void cdj_regs(MemoryRegion *sysmem, const char *name, hwaddr base,
 {
     CdjRegsState *s = g_new0(CdjRegsState, 1);
 
-    s->reg = g_new0(uint32_t, size / 4);
+    s->nreg = size / 4;
+    s->reg = g_new0(uint32_t, s->nreg);
     for (; init && init->value; init++) {
         s->reg[init->off / 4] = init->value;
     }
+    vmstate_register_any(NULL, &vmstate_cdj_regs, s);
     memory_region_init_io(&s->iomem, NULL, &cdj_regs_ops, s, name, size);
     memory_region_add_subregion(sysmem, base, &s->iomem);
 }
@@ -274,11 +320,22 @@ static const MemoryRegionOps cdj_ccn_ops = {
     .valid = { .min_access_size = 1, .max_access_size = 4 },
 };
 
+static const VMStateDescription vmstate_cdj_ccn = {
+    .name = "cdj-ccn",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT32_ARRAY(reg, CdjCcnState, CDJ_CCN_SIZE / 4),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 void cdj_ccn_init(MemoryRegion *sysmem, SuperHCPU *cpu)
 {
     CdjCcnState *s = g_new0(CdjCcnState, 1);
 
     s->cpu = cpu;
+    vmstate_register_any(NULL, &vmstate_cdj_ccn, s);
     memory_region_init_io(&s->iomem, NULL, &cdj_ccn_ops, s,
                           "sh4.ccn", CDJ_CCN_SIZE);
     memory_region_add_subregion(sysmem, CDJ_CCN_BASE, &s->iomem);

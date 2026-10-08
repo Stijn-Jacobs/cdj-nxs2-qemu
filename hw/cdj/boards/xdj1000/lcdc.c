@@ -120,6 +120,17 @@ static const MemoryRegionOps lcdc_ops = {
     .valid = { .min_access_size = 1, .max_access_size = 4 },
 };
 
+static const VMStateDescription vmstate_lcdc = {
+    .name = "xdj1000-lcdc",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT8_ARRAY(reg, XdjLcdc, LCDC_SIZE),
+        VMSTATE_TIMER_PTR(frame_timer, XdjLcdc),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 void xdj1000_lcdc_init(MemoryRegion *sysmem, qemu_irq irq)
 {
     XdjLcdc *s = g_new0(XdjLcdc, 1);
@@ -133,4 +144,5 @@ void xdj1000_lcdc_init(MemoryRegion *sysmem, qemu_irq irq)
               qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + FRAME_PERIOD_NS);
     s->con = graphic_console_init(NULL, 0, &lcdc_gfx_ops, s);
     qemu_console_resize(s->con, LCD_W, LCD_H);
+    vmstate_register_any(NULL, &vmstate_lcdc, s);
 }

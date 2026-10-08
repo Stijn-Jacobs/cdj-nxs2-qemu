@@ -163,12 +163,25 @@ static const MemoryRegionOps iic_ops = {
     .impl = { .min_access_size = 1, .max_access_size = 1 },
 };
 
+static const VMStateDescription vmstate_iic = {
+    .name = "cdj2000-iic",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT8_ARRAY(reg, CdjIic, IIC_SIZE),
+        CDJ_VMSTATE_SPAN(CdjIic, phase, stop_asked),
+        VMSTATE_UINT8(chip.cmd, CdjIic),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 void cdj2000_iic_init(MemoryRegion *sysmem,
                       const CdjAuthAnswer *answers, unsigned n)
 {
     CdjIic *s = g_new0(CdjIic, 1);
 
     cdj_auth_chip_init(&s->chip, answers, n);
+    vmstate_register_any(NULL, &vmstate_iic, s);
     memory_region_init_io(&s->iomem, NULL, &iic_ops, s, "sh7763.iic",
                           IIC_SIZE);
     memory_region_add_subregion(sysmem, IIC_BASE, &s->iomem);

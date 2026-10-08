@@ -10,8 +10,8 @@ frozen-at-logo or error screen does not. A deck passes as soon as a frame
 matches and fails as soon as its QEMU exits; otherwise it fails at its
 timeout with the last frame kept beside the log.
 
-    deck_smoke.py <decks.ini> [--tier2] [--record] [--only a,b] [--lock-wait S] [--out DIR]
-                  [--keep-frames DIR]
+    deck_smoke.py <decks.ini> [--tier2 | --snapshot] [--record] [--only a,b] [--lock-wait S]
+                  [--out DIR] [--keep-frames DIR]
 
 decks.ini, one section per deck:
 
@@ -43,6 +43,14 @@ decks.ini, one section per deck:
                                        ; playhead; the deck passes only if
                                        ; scripts/run/score_playhead.py --model <this>
                                        ; calls it MOTION (the older decks play on load)
+
+--snapshot is --tier2 made quick. The first run of a deck boots it, plays its
+steps and, once the loaded screen matches, saves the machine in a cache keyed
+by the QEMU binary, kernel, stick and `args`. Every later run restores that
+save, waits for the deck to run again and checks the playhead moves (`motion`,
+else just that the screen is alive): a minute instead of several. A rebuilt
+QEMU or a changed stick starts a fresh save by itself; --record is not
+combined with it.
 
 Relative paths are taken from the ini's [DEFAULT] root (or the ini's folder);
 the golden frame's from the ini's folder.
@@ -78,7 +86,7 @@ import zlib
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCORER = os.path.join(HERE, "..", "run", "score_playhead.py")
 sys.path.insert(0, os.path.join(HERE, "..", ".."))
-from launcher import model  # noqa: E402
+from launcher import model, snapshot  # noqa: E402
 
 POLL = 2.0
 BLOCK = 8
@@ -86,6 +94,9 @@ BLOCK_TOLERANCE = 24        # mean grey-level difference a block may have
 MATCH = 0.90                # share of lit blocks that must agree
 MOTION_FRAMES = 3
 MOTION_EVERY = 20.0         # wall seconds apart: the older decks play at 0.1-0.25x
+SAVE_TIMEOUT = 120
+RESTORED_FRAMES = 5         # a restored deck starts slowly: it needs a longer film to show motion
+RESTORE_TIMEOUT = 60
 
 
 def read_ppm(path):
@@ -272,6 +283,7 @@ class Deck:
         self.log = os.path.join(out, name + ".log")
         self.frame = os.path.join(out, name + ".ppm")
         self.keep_dir, self.kept = keep_dir, None
+        self.point = ""
         self.result, self.detail, self.seconds = "SKIP", "", 0.0
 
     def missing(self):
@@ -298,12 +310,14 @@ def path_value(v, root):
     return native(v)
 
 
-def run_deck(d, record, tier2, lock_wait):
+def run_deck(d, record, tier2, lock_wait, use_snapshot=False):
     gone = d.missing()
     if gone:
         d.detail = "no " + gone
         return
     target = d.golden2 if tier2 else d.golden
+    if use_snapshot:
+        d.point = point_dir(d)
     if not record and not os.path.isfile(target):
         d.detail = "no golden frame (run with --record)"
         return
@@ -313,10 +327,19 @@ def run_deck(d, record, tier2, lock_wait):
     env = dict(os.environ)
     env.update(d.env)
     start = time.time()
+    argv = d.argv()
+    restoring = bool(d.point) and snapshot.saved(d.point, ("main.vm",))
+    if restoring:
+        argv += ["-incoming", "file:%s/main.vm" % d.point.replace("\\", "/")]
+    elif d.point:
+        argv += ["-global", "migration.store-global-state=off"]
     with open(d.log, "wb") as log:
-        q = subprocess.Popen(d.argv(), env=env, stdout=log, stderr=subprocess.STDOUT)
+        q = subprocess.Popen(argv, env=env, stdout=log, stderr=subprocess.STDOUT)
     try:
-        d.result, d.detail = run_phases(d, q, start, record, tier2)
+        if restoring:
+            d.result, d.detail = run_restored(d, q, start)
+        else:
+            d.result, d.detail = run_phases(d, q, start, record, tier2)
         if d.kept:
             save_kept(d)
     finally:
@@ -348,10 +371,78 @@ def run_phases(d, q, start, record, tier2):
     result, detail = watch(d, q, golden, time.time(), d.golden2, d.timeout2, d.region2)
     if result != "PASS":
         return result, detail
+    if d.point:
+        detail += "; " + ("saved the loaded point" if save_point(d) else "SAVE FAILED")
     if not d.motion:
         keep_frame(d, d.frame)
         return result, detail
     return film_motion(d, q, detail)
+
+
+def point_dir(d):
+    """Where this deck's loaded point lives: one folder per QEMU, kernel, stick
+    and set of QEMU options, so a rebuild never restores an older machine."""
+    files = [f for f in (d.qemu, d.kernel, d.stick) if f]
+    root = snapshot.root(os.environ.get("TMP", "/tmp"), files, " ".join(d.args) + " deck_smoke")
+    return native(os.path.join(root, d.name, "loaded"))
+
+
+def migrate_status(d):
+    out = monitor(d.port, "info migrate").decode("utf-8", "replace")
+    for line in out.splitlines():
+        if "Migration status:" in line:
+            return line.split(":", 1)[1].strip()
+    return ""
+
+
+def save_point(d):
+    """Stop the deck, write it to <point>/main.vm and let it run on. True when
+    the file is complete."""
+    os.makedirs(d.point, exist_ok=True)
+    part = os.path.join(d.point, "main.vm.part")
+    monitor(d.port, "stop")
+    try:
+        monitor(d.port, 'migrate "file:%s"' % part.replace("\\", "/"))
+        deadline = time.time() + SAVE_TIMEOUT
+        status = migrate_status(d)
+        while status not in ("completed", "failed", "cancelled") and time.time() < deadline:
+            time.sleep(0.5)
+            status = migrate_status(d)
+    finally:
+        monitor(d.port, "cont")
+    if status != "completed":
+        return False
+    os.replace(part, os.path.join(d.point, "main.vm"))
+    return True
+
+
+def run_restored(d, q, start):
+    """The deck was started with -incoming: wait until it runs, then film it."""
+    deadline = time.time() + RESTORE_TIMEOUT
+    while time.time() < deadline:
+        if q.poll() is not None:
+            return "FAIL", "qemu exited %d while restoring" % q.returncode
+        try:
+            if b"running" in monitor(d.port, "info status"):
+                break
+        except OSError:
+            pass
+        time.sleep(1.0)
+    else:
+        return "FAIL", "not running %d s after the restore" % RESTORE_TIMEOUT
+    detail = "restored, running after %.0f s" % (time.time() - start)
+    if not d.motion:
+        for _ in range(5):
+            try:
+                grab(d)
+                break
+            except (OSError, ValueError):
+                time.sleep(POLL)
+        else:
+            return "FAIL", detail + "; no screen"
+        keep_frame(d, d.frame)
+        return "PASS", detail
+    return film_motion(d, q, detail, RESTORED_FRAMES, tries=2)
 
 
 def keep_frame(d, ppm):
@@ -407,30 +498,35 @@ def save_kept(d):
         f.write("\n")
 
 
-def film_motion(d, q, detail):
-    """Film the loaded deck MOTION_FRAMES times and let the playhead scorer
-    say whether it plays."""
+def film_motion(d, q, detail, frames=MOTION_FRAMES, tries=1):
+    """Film the loaded deck `frames` times and let the playhead scorer say
+    whether it plays. A frame read while the strip is being repainted looks
+    like a lost waveform, so a deck that fails that way is filmed again, up
+    to `tries` times."""
     stem = d.frame[:-4] + "-motion-"
-    for i in range(MOTION_FRAMES):
-        if i:
-            time.sleep(MOTION_EVERY)
-        for _ in range(5):
-            if q.poll() is not None:
-                return "FAIL", "qemu exited %d while filming the playhead" % q.returncode
-            try:
-                grab(d)
-                break
-            except (OSError, ValueError):
-                time.sleep(POLL)
-        else:
-            return "FAIL", "no screen to film the playhead"
-        os.replace(d.frame, "%s%d.ppm" % (stem, i))
-    keep_frame(d, "%s%d.ppm" % (stem, MOTION_FRAMES - 1))
-    r = subprocess.run([sys.executable, SCORER, "--model", d.motion, stem + "*.ppm"],
-                       capture_output=True, text=True)
-    verdict = next((" ".join(line.split("VERDICT:", 1)[1].replace("*", "").split())
-                    for line in r.stdout.splitlines()
-                    if "VERDICT:" in line), (r.stderr.strip().splitlines() or ["no verdict"])[-1])
+    for attempt in range(tries):
+        for i in range(frames):
+            if i:
+                time.sleep(MOTION_EVERY)
+            for _ in range(5):
+                if q.poll() is not None:
+                    return "FAIL", "qemu exited %d while filming the playhead" % q.returncode
+                try:
+                    grab(d)
+                    break
+                except (OSError, ValueError):
+                    time.sleep(POLL)
+            else:
+                return "FAIL", "no screen to film the playhead"
+            os.replace(d.frame, "%s%d.ppm" % (stem, i))
+        keep_frame(d, "%s%d.ppm" % (stem, frames - 1))
+        r = subprocess.run([sys.executable, SCORER, "--model", d.motion, stem + "*.ppm"],
+                           capture_output=True, text=True)
+        verdict = next((" ".join(line.split("VERDICT:", 1)[1].replace("*", "").split())
+                        for line in r.stdout.splitlines()
+                        if "VERDICT:" in line), (r.stderr.strip().splitlines() or ["no verdict"])[-1])
+        if not verdict.startswith(("WAVELOST", "CORRUPT")):
+            break
     return ("PASS" if verdict.startswith("MOTION") else "FAIL"), "%s; playhead %s" % (detail, verdict)
 
 
@@ -494,6 +590,8 @@ def main():
     ap.add_argument("decks")
     ap.add_argument("--record", action="store_true")
     ap.add_argument("--tier2", action="store_true", help="run each deck's steps and check the screen they lead to")
+    ap.add_argument("--snapshot", action="store_true",
+                    help="--tier2 from a saved loaded point, which the first run writes")
     ap.add_argument("--only", default="")
     ap.add_argument("--lock-wait", type=float, default=20.0,
                     help="seconds to wait for a busy deck lock before skipping the deck")
@@ -501,6 +599,9 @@ def main():
     ap.add_argument("--keep-frames", default="", metavar="DIR",
                     help="--tier2: save each loaded deck's screen as DIR/<deck>.png, with a .json beside it")
     args = ap.parse_args()
+    if args.snapshot and args.record:
+        ap.error("--snapshot and --record do not combine")
+    args.tier2 = args.tier2 or args.snapshot
 
     ini = configparser.ConfigParser()
     ini.read(args.decks)
@@ -519,7 +620,7 @@ def main():
             os.makedirs(os.path.dirname(d.golden2 if args.tier2 else d.golden), exist_ok=True)
 
     start = time.time()
-    threads = [threading.Thread(target=run_deck, args=(d, args.record, args.tier2, args.lock_wait)) for d in decks]
+    threads = [threading.Thread(target=run_deck, args=(d, args.record, args.tier2, args.lock_wait, args.snapshot)) for d in decks]
     for t in threads:
         t.start()
     for t in threads:

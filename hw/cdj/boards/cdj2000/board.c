@@ -145,7 +145,7 @@ static void sh7763_board_init(MachineState *machine, const CdjBoardDesc *desc,
                  cdj_count_irq(irq[S63_TMU4], "TMU4 tick"),
                  cdj_count_irq(irq[S63_TMU5], "TMU5"));
     cdj_irqcount_exit.notify = cdj_irqcount_dump;
-    qemu_add_exit_notifier(&cdj_irqcount_exit);
+    cdj_add_exit_report(&cdj_irqcount_exit);
 
     /* The same SH-4A DMAC as the NXS2's, at another base, with its resource
      * selectors (DMARS) at +0x1000. The USB host's FIFO window is its DREQ

@@ -963,6 +963,19 @@ static void cdj_ether_dump(Notifier *n, void *unused)
     }
 }
 
+static const VMStateDescription vmstate_cdj_ether = {
+    .name = "cdj-ether",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        CDJ_VMSTATE_SPAN(CdjEtherState, reg, phy),
+        VMSTATE_TIMER_PTR(rx_retry, CdjEtherState),
+        CDJ_VMSTATE_SPAN(CdjEtherState, tx_cur, txlen),
+        VMSTATE_BOOL(rx_stalled, CdjEtherState),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 /* The MAC attaches to a named netdev, e.g. for two decks on one segment:
  *
  *   -netdev socket,id=djlink,mcast=230.0.0.1:50000
@@ -980,7 +993,7 @@ void cdj_ether_init(MemoryRegion *sysmem, const char *name, hwaddr base,
                           CDJ_ETHER_SIZE);
     memory_region_add_subregion_overlap(sysmem, base, &s->iomem, 1);
     s->exit.notify = cdj_ether_dump;
-    qemu_add_exit_notifier(&s->exit);
+    cdj_add_exit_report(&s->exit);
     s->irq = irq;
     cdj_ether_link_change(s);        /* the cable is in at power on */
 
@@ -996,6 +1009,7 @@ void cdj_ether_init(MemoryRegion *sysmem, const char *name, hwaddr base,
     s->nic = qemu_new_nic(&cdj_ether_net_info, &s->conf, "cdj.ether",
                           "ether", &s->reentrancy_guard, s);
     s->rx_retry = timer_new_ns(QEMU_CLOCK_VIRTUAL, cdj_ether_rx_retry, s);
+    vmstate_register_any(NULL, &vmstate_cdj_ether, s);
     info_report("%s: EtherMAC attached to netdev '%s'",
                 cdj_board->name, id && *id ? id : "djlink");
 }

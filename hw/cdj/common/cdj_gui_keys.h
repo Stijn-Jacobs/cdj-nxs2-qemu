@@ -21,4 +21,7 @@ typedef struct {
 /* Register the keyboard handler when CDJ_PANEL_KEYSOCK is set. */
 void cdj_gui_keys_init(const CdjGuiKey *keys, size_t count, const char *board);
 
+/* Make the window's pointer absolute, so the host never grabs the mouse. */
+void cdj_gui_pointer_init(void);
+
 #endif /* CDJ_GUI_KEYS_H */

@@ -669,11 +669,22 @@ static void cdj_usbf_realize(DeviceState *dev, Error **errp)
     s->reg[CDJ_USB_DCPMAXP / 2] = 0x0040;
 }
 
+static const VMStateDescription vmstate_cdj_usbf = {
+    .name = "cdj-usbf",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        CDJ_VMSTATE_SPAN(CdjUsbfState, vbus, reg),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static void cdj_usbf_class_init(ObjectClass *klass, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->realize = cdj_usbf_realize;
+    dc->vmsd = &vmstate_cdj_usbf;
     dc->desc = "SH7724 USB 2.0 function module (R8A66597)";
 }
 

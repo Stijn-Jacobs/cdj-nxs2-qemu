@@ -482,9 +482,9 @@ static void cdj_c6x_stop(void)
     }
 }
 
-/* Fresh chip, program in L2, PC at the entry: what the ROM does at the end of
- * an I2C boot. A new core each time, so no predecode survives a reload. */
-static void cdj_c6x_start(uint32_t entry)
+/* A new core and SoC on the shared L2 and DDR, under run_lock. A new core
+ * each time, so no predecode survives a reload. */
+static void cdj_c6x_build(void)
 {
     CdjC6x *c = &cdj_c6x;
     c66x_bus bus = { c, cdj_c6x_bus_read, cdj_c6x_bus_write };
@@ -498,7 +498,6 @@ static void cdj_c6x_start(uint32_t entry)
         .log = cdj_c6x_soc_log,
     };
 
-    qemu_mutex_lock(&c->run_lock);
     if (c->soc) {
         c6655_soc_free(c->soc);
     }
@@ -546,6 +545,16 @@ static void cdj_c6x_start(uint32_t entry)
     /* An undriven input reads high, but READY must read low until the first
      * stage drives it, or MAIN ships all its windows before the stage runs. */
     c6655_soc_gpio_set_input(c->soc, C6X_PIN_READY, 0);
+}
+
+/* Fresh chip, program in L2, PC at the entry: what the ROM does at the end of
+ * an I2C boot. */
+static void cdj_c6x_start(uint32_t entry)
+{
+    CdjC6x *c = &cdj_c6x;
+
+    qemu_mutex_lock(&c->run_lock);
+    cdj_c6x_build();
     c66x_reset(c->core, entry);
 
     qemu_mutex_lock(&c->link_lock);
@@ -1841,6 +1850,138 @@ static void cdj_c6x_summary(Notifier *n, void *unused)
     }
 }
 
+/*
+ * Snapshots. L2 and DDR are RAM regions and travel with the machine's RAM,
+ * but the core stores into them through host pointers that dirty tracking
+ * never sees, so the core must not run a cycle once a save has started.
+ * When the machine stops, the DSP finishes its quantum and steps on to a
+ * quiet point (see c66x_quiet); a stopped machine grants it no more quanta.
+ * run_lock is held from pre_save to post_save as well.
+ */
+static void cdj_c6x_vm_state(void *opaque, bool running, RunState state)
+{
+    CdjC6x *c = opaque;
+
+    if (running || !c->core) {
+        return;
+    }
+    qemu_mutex_lock(&c->run_lock);
+    cdj_c6x_run_to(c->sync_target);
+    for (unsigned i = 0; i < 1000000 && !c66x_quiet(c->core); i++) {
+        cdj_c6x_run_to(c6655_soc_now_ns(c->soc) + 1);
+    }
+    qemu_mutex_unlock(&c->run_lock);
+}
+
+static int cdj_c6x_pre_save(void *opaque)
+{
+    CdjC6x *c = opaque;
+    size_t core_len;
+
+    qemu_mutex_lock(&c->run_lock);
+    c->tick_deadline = timer_expire_time_ns(c->tick);
+    c->rx_deadline = c->rx_timer ? timer_expire_time_ns(c->rx_timer) : -1;
+    g_byte_array_set_size(c->snap, 0);
+    if (!c->core) {
+        return 0;
+    }
+    if (!c66x_quiet(c->core)) {
+        error_report("c6x: the DSP is not at a quiet point, pc 0x%08x: "
+                     "stop the machine before saving it",
+                     c66x_get_pc(c->core));
+        qemu_mutex_unlock(&c->run_lock);
+        return -EBUSY;
+    }
+    core_len = c66x_save(c->core, NULL);
+    g_byte_array_set_size(c->snap, core_len + c6655_soc_save(c->soc, NULL));
+    c66x_save(c->core, c->snap->data);
+    c6655_soc_save(c->soc, c->snap->data + core_len);
+    return 0;
+}
+
+static int cdj_c6x_post_save(void *opaque)
+{
+    qemu_mutex_unlock(&((CdjC6x *)opaque)->run_lock);
+    return 0;
+}
+
+static int cdj_c6x_post_load(void *opaque, int version_id)
+{
+    CdjC6x *c = opaque;
+
+    qemu_mutex_lock(&c->run_lock);
+    if (c->snap->len) {
+        cdj_c6x_build();
+        c66x_load(c->core, c->snap->data);
+        c6655_soc_load(c->soc, c->snap->data + c66x_save(c->core, NULL));
+    }
+    if (c->tick_deadline >= 0) {
+        timer_mod_ns(c->tick, c->tick_deadline);
+    }
+    if (c->rx_timer && c->rx_deadline >= 0) {
+        timer_mod_ns(c->rx_timer, c->rx_deadline);
+    }
+    qemu_mutex_unlock(&c->run_lock);
+    return 0;
+}
+
+static const VMStateDescription vmstate_cdj_c6x = {
+    .name = "cdj-c6x",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .pre_save = cdj_c6x_pre_save,
+    .post_save = cdj_c6x_post_save,
+    .post_load = cdj_c6x_post_load,
+    .fields = (const VMStateField[]) {
+        CDJ_VMSTATE_BYTES(snap, CdjC6x),
+        VMSTATE_INT64(tick_deadline, CdjC6x),
+        VMSTATE_INT64(rx_deadline, CdjC6x),
+        VMSTATE_UINT64(mhz, CdjC6x),
+        VMSTATE_BOOL(running, CdjC6x),
+        VMSTATE_BOOL(halted, CdjC6x),
+        VMSTATE_UINT64(sync_target, CdjC6x),
+        VMSTATE_UINT64(dsp_now_pub, CdjC6x),
+        VMSTATE_UINT32(ship_pending, CdjC6x),
+        VMSTATE_INT32(ready_level, CdjC6x),
+        VMSTATE_INT32(booted_level, CdjC6x),
+        VMSTATE_INT64(epoch_ns, CdjC6x),
+        VMSTATE_UINT64(cyc_rem, CdjC6x),
+        VMSTATE_INT64(start_virt_ns, CdjC6x),
+        VMSTATE_INT32(pth0, CdjC6x),
+        VMSTATE_BOOL(loaded, CdjC6x),
+        VMSTATE_INT32(ack, CdjC6x),
+        VMSTATE_BOOL(booted_latch, CdjC6x),
+        VMSTATE_INT64(booted_virt_ns, CdjC6x),
+        VMSTATE_UINT32(windows_seen, CdjC6x),
+        VMSTATE_UINT16_ARRAY(rxq, CdjC6x, C6X_RXQ),
+        VMSTATE_UINT64_ARRAY(rx_stamp, CdjC6x, C6X_RXQ),
+        VMSTATE_UINT32(rx_head, CdjC6x),
+        VMSTATE_UINT32(rx_len, CdjC6x),
+        VMSTATE_UINT32(watch_tag, CdjC6x),
+        VMSTATE_UINT32_ARRAY(lane_a_read_tag, CdjC6x, 16),
+        VMSTATE_UINT32(lane_a_read_n, CdjC6x),
+        VMSTATE_UINT32_ARRAY(arm_tag, CdjC6x, 16),
+        VMSTATE_UINT32(arm_n, CdjC6x),
+        VMSTATE_UINT64(tx_hold_until_ns, CdjC6x),
+        VMSTATE_UINT32(rx_ch, CdjC6x),
+        VMSTATE_UINT32(rx_want, CdjC6x),
+        VMSTATE_UINT64(rx_pending_since, CdjC6x),
+        VMSTATE_UINT16_2DARRAY(txf, CdjC6x, C6X_TXFRAMES, C6X_TXWORDS),
+        VMSTATE_UINT32_ARRAY(txf_len, CdjC6x, C6X_TXFRAMES),
+        VMSTATE_UINT32(tx_head, CdjC6x),
+        VMSTATE_UINT32(tx_count, CdjC6x),
+        VMSTATE_INT32(tx_cur, CdjC6x),
+        VMSTATE_UINT32(tx_pos, CdjC6x),
+        VMSTATE_UINT32(tx_ch, CdjC6x),
+        VMSTATE_BOOL(tx_waiting, CdjC6x),
+        VMSTATE_UINT64(last_word_ns, CdjC6x),
+        VMSTATE_UINT32(wpos, CdjC6x),
+        VMSTATE_UINT64(cycles, CdjC6x),
+        VMSTATE_INT64(report_at, CdjC6x),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 void cdj_c6x_init(void)
 {
     CdjC6x *c = &cdj_c6x;
@@ -1876,8 +2017,13 @@ void cdj_c6x_init(void)
     if (e && *e) {
         c->pcm = fopen(e, "wb");
     }
-    c->l2 = g_malloc0(C6X_L2_SIZE);
-    c->ddr = g_malloc0(C6X_DDR_SIZE);
+    memory_region_init_ram(&c->l2_ram, NULL, "c6655.l2", C6X_L2_SIZE, &error_fatal);
+    memory_region_init_ram(&c->ddr_ram, NULL, "c6655.ddr", C6X_DDR_SIZE, &error_fatal);
+    c->l2 = memory_region_get_ram_ptr(&c->l2_ram);
+    c->ddr = memory_region_get_ram_ptr(&c->ddr_ram);
+    c->snap = g_byte_array_new();
+    vmstate_register_any(NULL, &vmstate_cdj_c6x, c);
+    qemu_add_vm_change_state_handler(cdj_c6x_vm_state, c);
     c->i2c = g_byte_array_new();
     c->table = g_byte_array_new();
     c->upp_in = g_queue_new();

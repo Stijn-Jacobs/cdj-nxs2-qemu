@@ -74,6 +74,8 @@ class Model:
         self.fw_steps = values["MODEL_FW_STEPS"].split()
         self.display_upd = values.get("MODEL_DISPLAY_UPD", "")
         self.launch = values.get("MODEL_LAUNCH") or "rig"
+        self.idle_s = values.get("MODEL_IDLE_S", "")
+        self.load_steps = values.get("MODEL_LOAD_STEPS", "")
         self.expected = tuple(tuple(line.split(None, 1))
                               for line in values.get("MODEL_EXPECTED", "").splitlines() if line.strip())
 

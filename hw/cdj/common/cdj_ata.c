@@ -340,6 +340,16 @@ static void cdj_ata_summary(Notifier *n, void *unused)
                 s->packets, s->not_ready, s->irqs);
 }
 
+static const VMStateDescription vmstate_cdj_ata = {
+    .name = "cdj-ata",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        CDJ_VMSTATE_SPAN(CdjAtaState, irq_level, ctl),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 void cdj_ata_init(MemoryRegion *sysmem, const char *name, hwaddr base,
                   qemu_irq irq)
 {
@@ -352,7 +362,8 @@ void cdj_ata_init(MemoryRegion *sysmem, const char *name, hwaddr base,
     s->irq = irq;
     s->ch[0].status = s->ch[1].status = ST_IDLE;
     s->exit.notify = cdj_ata_summary;
-    qemu_add_exit_notifier(&s->exit);
+    cdj_add_exit_report(&s->exit);
+    vmstate_register_any(NULL, &vmstate_cdj_ata, s);
     memory_region_init_io(&s->iomem, NULL, &cdj_ata_ops, s, name,
                           CDJ_ATA_SIZE);
     memory_region_add_subregion_overlap(sysmem, base, &s->iomem, 1);

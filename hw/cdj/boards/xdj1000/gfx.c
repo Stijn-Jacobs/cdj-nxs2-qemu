@@ -29,7 +29,18 @@
 typedef struct XdjRegs {
     MemoryRegion iomem;
     uint8_t *reg;
+    uint32_t size;
 } XdjRegs;
+
+static const VMStateDescription vmstate_xdj_regs = {
+    .name = "xdj1000-regs",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_VBUFFER_UINT32(reg, XdjRegs, 0, NULL, size),
+        VMSTATE_END_OF_LIST()
+    }
+};
 
 static uint64_t regs_read(void *opaque, hwaddr off, unsigned size)
 {
@@ -58,6 +69,8 @@ static void regs_init(MemoryRegion *sysmem, const char *name, hwaddr base,
     XdjRegs *s = g_new0(XdjRegs, 1);
 
     s->reg = g_malloc0(size);
+    s->size = size;
+    vmstate_register_any(NULL, &vmstate_xdj_regs, s);
     memory_region_init_io(&s->iomem, NULL, &regs_ops, s, name, size);
     memory_region_add_subregion(sysmem, base, &s->iomem);
 }
@@ -296,13 +309,26 @@ static const MemoryRegionOps gfx2d_ops = {
     .valid = { .min_access_size = 1, .max_access_size = 4 },
 };
 
+static const VMStateDescription vmstate_gfx2d = {
+    .name = "xdj1000-2dg",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_STRUCT(regs, XdjGfx2d, 1, vmstate_xdj_regs, XdjRegs),
+        VMSTATE_TIMER_PTR(done_timer, XdjGfx2d),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static void gfx2d_init(MemoryRegion *sysmem, qemu_irq irq)
 {
     XdjGfx2d *s = g_new0(XdjGfx2d, 1);
 
     s->regs.reg = g_malloc0(GFX2D_SIZE);
+    s->regs.size = GFX2D_SIZE;
     s->irq = irq;
     s->done_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, gfx2d_done, s);
+    vmstate_register_any(NULL, &vmstate_gfx2d, s);
     memory_region_init_io(&s->regs.iomem, NULL, &gfx2d_ops, s, "sh7724.2dg",
                           GFX2D_SIZE);
     memory_region_add_subregion(sysmem, GFX2D_BASE, &s->regs.iomem);

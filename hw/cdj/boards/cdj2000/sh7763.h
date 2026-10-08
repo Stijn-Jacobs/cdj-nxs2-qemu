@@ -49,6 +49,11 @@ void cdj2000_latch_init(MemoryRegion *sysmem, const CdjDspWires *dsp,
 /* The CDJ-2000NXS's C6747-class DSP, behind its host port on MAIN's area 3;
  * returns its end of the latch wires. */
 const CdjDspWires *cdj_c6747_init(MemoryRegion *sysmem, hwaddr hpi_base);
+/* The DSP application's polling main loop, which the core skips while it is
+ * a fixed point (c66x_set_idle_loop): its head and the stack range its
+ * passes may store to. Per firmware image; none by default. */
+void cdj_c6747_set_idle_loop(uint32_t head, uint32_t stack_lo,
+                             uint32_t stack_hi);
 /* The CDJ-2000's C6727, behind a full-address host port on area 3. */
 const CdjDspWires *cdj_c6727_init(MemoryRegion *sysmem, hwaddr hpi_base);
 

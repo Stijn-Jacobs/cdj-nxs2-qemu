@@ -63,10 +63,21 @@ static const MemoryRegionOps sdhi_ops = {
     .impl = { .min_access_size = 2, .max_access_size = 2 },
 };
 
+static const VMStateDescription vmstate_sdhi = {
+    .name = "cdj2000-sdhi",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT16_ARRAY(reg, CdjSdhi, SDHI_SIZE / 2),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 void cdj2000_sdhi_init(MemoryRegion *sysmem)
 {
     CdjSdhi *s = g_new0(CdjSdhi, 1);
 
+    vmstate_register_any(NULL, &vmstate_sdhi, s);
     memory_region_init_io(&s->iomem, NULL, &sdhi_ops, s, "sh7763.sdhi",
                           SDHI_SIZE);
     memory_region_add_subregion(sysmem, SDHI_BASE, &s->iomem);

@@ -49,6 +49,13 @@ uint16_t bf531_flags(const bf531 *s);
  * instruction (BFIN_STOP_UNDEF) or when it idles with no event left. */
 bfin_stop bf531_run(bf531 *s, uint64_t n);
 
+/* Snapshots: the core, the SoC's registers and all its RAM as one image,
+ * between two bf531_run calls; bf531_save(s, NULL) returns its size. The boot
+ * flash is not in it, so load the same update before bf531_load. Only the
+ * build that wrote an image can read it. */
+size_t bf531_save(const bf531 *s, uint8_t *buf);
+void   bf531_load(bf531 *s, const uint8_t *buf);
+
 bfin_core *bf531_core(bf531 *s);
 uint64_t   bf531_frames(const bf531 *s);
 const uint8_t *bf531_sdram(const bf531 *s, uint32_t *size);

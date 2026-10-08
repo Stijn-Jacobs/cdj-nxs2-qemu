@@ -171,6 +171,23 @@ static QemuInputHandler cdj_gui_kbd = {
     .event = cdj_gui_key_event,
 };
 
+/* Only here so that the window counts as having an absolute pointer: with
+ * none, Cocoa, GTK and SDL grab the host mouse on the first click. */
+static void cdj_gui_pointer_event(DeviceState *dev, QemuConsole *src,
+                                  InputEvent *evt)
+{
+}
+
+static QemuInputHandler cdj_gui_pointer = {
+    .name  = "CDJ window pointer",
+    .mask  = INPUT_EVENT_MASK_ABS | INPUT_EVENT_MASK_BTN,
+    .event = cdj_gui_pointer_event,
+};
+
+void cdj_gui_pointer_init(void)
+{
+    qemu_input_handler_register(NULL, &cdj_gui_pointer);
+}
 
 void cdj_gui_keys_init(const CdjGuiKey *keys, size_t count, const char *board)
 {

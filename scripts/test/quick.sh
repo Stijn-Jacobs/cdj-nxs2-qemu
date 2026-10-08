@@ -16,12 +16,15 @@
 #           must reach its second reference frame (deck_smoke.py --tier2);
 #           a deck with `motion = <model>` must then also move its playhead
 #           (scripts/run/score_playhead.py)
+#   snap    decks2 from a saved loaded point (deck_smoke.py --snapshot): the first
+#           run boots and saves each deck, every later one restores it and
+#           checks the playhead moves, in about a minute per deck
 #   nxs2    CDJ_TEST_NXS2=1: one CDJ-2000NXS2 loads a track and its waveform
 #           strip must move (scripts/test/nxs2_play.sh)
 #
 # A part with nothing to run (no recordings, no deck table) is skipped.
 #
-#   usage: scripts/test/quick.sh [--tier2] [unit|c6x|decks|decks2|nxs2 ...]
+#   usage: scripts/test/quick.sh [--tier2] [unit|c6x|decks|decks2|snap|nxs2 ...]
 #
 #   CDJ_TEST_OUT      logs and frames (default $TMPDIR/cdj-quick)
 #   CDJ_TEST_PYTHON   a Python with pytest (default: the first that has it)
@@ -101,6 +104,8 @@ run_decks() {
 
 run_decks2() { run_decks --tier2 decks2; }
 
+run_snap() { run_decks --snapshot snap; }
+
 run_nxs2() {
     [ "${CDJ_TEST_NXS2:-}" = 1 ] || { echo "SKIP set CDJ_TEST_NXS2=1 to run the NXS2 deck"; return; }
     bash "$HERE/nxs2_play.sh" | tail -1
@@ -109,8 +114,8 @@ run_nxs2() {
 start=$(date +%s)
 for p in $PARTS; do
     case "$p" in
-        unit | c6x | decks | decks2 | nxs2) "run_$p" > "$OUT/$p.result" 2>&1 & ;;
-        *) echo "unknown part '$p' (unit, c6x, decks, decks2, nxs2)" >&2; exit 2 ;;
+        unit | c6x | decks | decks2 | snap | nxs2) "run_$p" > "$OUT/$p.result" 2>&1 & ;;
+        *) echo "unknown part '$p' (unit, c6x, decks, decks2, snap, nxs2)" >&2; exit 2 ;;
     esac
 done
 wait
@@ -120,7 +125,7 @@ for p in $PARTS; do
     r="$(cat "$OUT/$p.result")"
     printf '%-6s %s\n' "$p" "$r"
     case "$r" in FAIL*) fail=1 ;; esac
-    case "$p" in decks | decks2) [ -f "$OUT/$p.log" ] && sed 's/^/         /' "$OUT/$p.log" ;; esac
+    case "$p" in decks | decks2 | snap) [ -f "$OUT/$p.log" ] && sed 's/^/         /' "$OUT/$p.log" ;; esac
 done
 echo "quick check: $(( $(date +%s) - start )) s, logs in $OUT"
 exit $fail

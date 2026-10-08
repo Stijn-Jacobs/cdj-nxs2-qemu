@@ -9,6 +9,7 @@
 #include "bf531.h"
 #include <stdarg.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -801,6 +802,47 @@ bfin_core *bf531_core(bf531 *s)
 uint64_t bf531_frames(const bf531 *s)
 {
     return s->frames;
+}
+
+/* ---- snapshots ---------------------------------------------------------- */
+
+/* The SoC's state between two runs, as (offset, length) runs of the struct:
+ * the L1 banks, every register through the DMA channels, the frame count and
+ * the standing SPORT1 packet. The SDRAM and the core follow them. */
+#define SNAP_RUN(first, end) { offsetof(bf531, first),                                offsetof(bf531, end) - offsetof(bf531, first) }
+
+static const struct { size_t off, len; } snap_runs[] = {
+    SNAP_RUN(l1_data_a, flash),
+    SNAP_RUN(mmr, fb),
+    { offsetof(bf531, frames), sizeof(uint64_t) },
+    { offsetof(bf531, sport1_rx), sizeof(bf531) - offsetof(bf531, sport1_rx) },
+};
+
+size_t bf531_save(const bf531 *s, uint8_t *buf)
+{
+    size_t at = 0;
+
+    for (size_t i = 0; i < sizeof(snap_runs) / sizeof(snap_runs[0]); i++) {
+        if (buf) {
+            memcpy(buf + at, (const uint8_t *)s + snap_runs[i].off, snap_runs[i].len);
+        }
+        at += snap_runs[i].len;
+    }
+    if (buf) {
+        memcpy(buf + at, s->sdram, s->sdram_size);
+    }
+    at += s->sdram_size;
+    return at + bfin_snap_save(s->core, buf ? buf + at : NULL);
+}
+
+void bf531_load(bf531 *s, const uint8_t *buf)
+{
+    for (size_t i = 0; i < sizeof(snap_runs) / sizeof(snap_runs[0]); i++) {
+        memcpy((uint8_t *)s + snap_runs[i].off, buf, snap_runs[i].len);
+        buf += snap_runs[i].len;
+    }
+    memcpy(s->sdram, buf, s->sdram_size);
+    bfin_snap_load(s->core, buf + s->sdram_size);
 }
 
 const uint8_t *bf531_sdram(const bf531 *s, uint32_t *size)

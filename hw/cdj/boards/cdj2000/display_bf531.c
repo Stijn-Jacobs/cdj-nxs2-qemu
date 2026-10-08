@@ -32,6 +32,7 @@ typedef struct CdjBf531 {
     QEMUTimer *tick;
     unsigned w, h;
     uint64_t frames;
+    GByteArray *snap;           /* the chip's image, only while saving or loading */
     Notifier exit;
 } CdjBf531;
 
@@ -116,6 +117,58 @@ static void cdj_bf531_report(Notifier *n, void *opaque)
 
     info_report("cdj_bf531: %" PRIu64 " PPI frames rendered", s->frames);
 }
+
+/* The chip runs only inside the tick, on the main loop, so between two ticks
+ * it is always at a point it can be saved from. Its SDRAM is in the image:
+ * tens of MiB, held only while the save or load lasts. */
+static int cdj_bf531_pre_save(void *opaque)
+{
+    CdjBf531 *s = opaque;
+    size_t len = bf531_save(s->chip, NULL);
+
+    s->snap = g_byte_array_sized_new(len);
+    g_byte_array_set_size(s->snap, len);
+    bf531_save(s->chip, s->snap->data);
+    return 0;
+}
+
+static int cdj_bf531_post_save(void *opaque)
+{
+    CdjBf531 *s = opaque;
+
+    g_byte_array_free(s->snap, true);
+    s->snap = NULL;
+    return 0;
+}
+
+static int cdj_bf531_post_load(void *opaque, int version_id)
+{
+    CdjBf531 *s = opaque;
+    bool fits = s->snap && s->snap->len == bf531_save(s->chip, NULL);
+
+    if (fits) {
+        bf531_load(s->chip, s->snap->data);
+    } else {
+        error_report("cdj_bf531: the saved display does not fit this machine");
+    }
+    cdj_bf531_post_save(s);
+    return fits ? 0 : -EINVAL;
+}
+
+static const VMStateDescription vmstate_cdj_bf531 = {
+    .name = "cdj-bf531",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .pre_save = cdj_bf531_pre_save,
+    .post_save = cdj_bf531_post_save,
+    .post_load = cdj_bf531_post_load,
+    .fields = (const VMStateField[]) {
+        CDJ_VMSTATE_BYTES(snap, CdjBf531),
+        VMSTATE_TIMER_PTR(tick, CdjBf531),
+        VMSTATE_UINT64(frames, CdjBf531),
+        VMSTATE_END_OF_LIST()
+    }
+};
 
 static size_t cdj_bf531_parse_hex(const char *s, uint8_t *out, size_t cap)
 {
@@ -254,11 +307,13 @@ bool cdj2000_display_init(const Cdj2000Display *desc)
     dpy_gfx_replace_surface(s->con, qemu_create_displaysurface(s->w, s->h));
     qemu_console_resize(s->con, s->w, s->h);
     cdj_gui_keys_init(desc->keys, desc->key_count, "cdj_bf531");
+    cdj_gui_pointer_init();
 
     s->exit.notify = cdj_bf531_report;
-    qemu_add_exit_notifier(&s->exit);
+    cdj_add_exit_report(&s->exit);
 
     s->tick = timer_new_ns(QEMU_CLOCK_VIRTUAL, cdj_bf531_tick, s);
     timer_mod(s->tick, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
+    vmstate_register_any(NULL, &vmstate_cdj_bf531, s);
     return true;
 }

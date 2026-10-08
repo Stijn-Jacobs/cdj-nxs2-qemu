@@ -214,6 +214,10 @@ typedef struct CdjC6x {
     c66x_core *core;
     c6655_soc *soc;
     uint8_t *l2, *ddr;
+    MemoryRegion l2_ram, ddr_ram;   /* QEMU RAM, so a snapshot carries them */
+    /* Snapshot: the core and SoC images, and the timers' pending expiries. */
+    GByteArray *snap;
+    int64_t tick_deadline, rx_deadline;
     QEMUTimer *tick;
     int64_t quantum_ns;
     uint64_t mhz;

@@ -220,6 +220,17 @@ static const MemoryRegionOps cdj_pfc_ops = {
     .valid = { .min_access_size = 1, .max_access_size = 4 },
 };
 
+static const VMStateDescription vmstate_cdj_pfc = {
+    .name = "cdj-pfc",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT8_ARRAY(reg, CdjPfcState, CDJ_PFC_SIZE),
+        VMSTATE_INT32(last_led, CdjPfcState),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 void cdj_pfc_init(MemoryRegion *sysmem)
 {
     CdjPfcState *s = g_new0(CdjPfcState, 1);
@@ -230,6 +241,7 @@ void cdj_pfc_init(MemoryRegion *sysmem)
     cdj_pfc_singleton = s;
     cdj_pfc_exit.notify = cdj_pfc_summary;
     qemu_add_exit_notifier(&cdj_pfc_exit);
+    vmstate_register_any(NULL, &vmstate_cdj_pfc, s);
     memory_region_init_io(&s->iomem, NULL, &cdj_pfc_ops, s,
                           "sh7724.pfc", CDJ_PFC_SIZE);
     memory_region_add_subregion(sysmem, CDJ_PFC_BASE, &s->iomem);

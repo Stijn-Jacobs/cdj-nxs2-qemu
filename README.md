@@ -13,7 +13,7 @@ Pioneer DJ players on your computer, from the CDJ-2000 to the NXS2 and XDJ famil
 
 [Quick start](#quick-start) · [Supported players](#supported-players) · [Screenshots](#screenshots) · [Virtual deck](#virtual-deck) · [Mods](#mods)
 
-<a href="docs/img/deck-showcase.png"><img src="docs/img/deck-showcase.png" alt="Real emulator screens for six players: supported CDJ-2000NXS2, and experimental CDJ-2000, CDJ-2000NXS, XDJ-1000, XDJ-700 and CDJ-900NXS. Older decks run below real time and have no sound." width="960"></a>
+<a href="docs/img/deck-showcase.png"><img src="docs/img/deck-showcase.png" alt="Real emulator screens for six players: supported CDJ-2000NXS2, and experimental CDJ-2000, CDJ-2000NXS, XDJ-1000, XDJ-700 and CDJ-900NXS. Older decks run below real time and their sound is chopped." width="960"></a>
 
 <sub>Actual emulator captures from development builds. Select the image for a closer look.</sub>
 
@@ -48,22 +48,22 @@ The features below are the CDJ-2000NXS2's; the older players are covered under
 
 ## Supported players
 
-The CDJ-2000NXS2 is the fully supported player. The five older models below
-are experimental: playback is far slower than real time and they do not yet
-produce sound. Screenshots show the firmware interface, not a claim of feature parity.
+The CDJ-2000NXS2 is the fully supported player. The six older models below
+are experimental: playback is far slower than real time, so their sound is
+chopped (it is on by default; `NOSOUND=1` turns it off). Screenshots show the firmware interface, not a claim of feature parity.
 
 | player | status | what works |
 |---|---|---|
 | **CDJ-2000NXS2** | ✅ Fully supported | Boots, loads and plays tracks from USB: the waveform and playhead move and the time counts down. The sound is computed by the firmware's own DSP program. Pro DJ Link, MIDI controllers and [mods](#mods). |
-| **CDJ-2000** | 🧪 Experimental | Boots with its display and keys, loads a track from USB and plays it forward, far slower than real time: the playhead moves and the time counts down. As on a real deck with AUTO CUE off (the factory setting), a loaded track starts playing straight away; PLAY pauses and resumes. No sound. |
-| **CDJ-2000NXS** | 🧪 Experimental | The same as the CDJ-2000, but its DSP lags like the XDJ-1000's: the playhead and the time start moving a few minutes after the load. No sound. |
-| **XDJ-1000** | 🧪 Experimental | Boots with its screen and keys, loads a track from USB and plays it, but at about a tenth of real speed: the playhead and the time start moving a few minutes after the load. PLAY pauses and resumes. No sound. |
+| **CDJ-2000** | 🧪 Experimental | Boots with its display and keys, loads a track from USB and plays it forward, far slower than real time: the playhead moves and the time counts down. As on a real deck with AUTO CUE off (the factory setting), a loaded track starts playing straight away; PLAY pauses and resumes. The music and pitch are right, but the sound is chopped where the DSP cannot keep up. |
+| **CDJ-2000NXS** | 🧪 Experimental | The same as the CDJ-2000, but its DSP lags like the XDJ-1000's: the playhead and the time start moving a few minutes after the load. Sound as on the CDJ-2000: chopped. |
+| **XDJ-1000** | 🧪 Experimental | Boots with its screen and keys, loads a track from USB and plays it, but at about a tenth of real speed: the playhead and the time start moving a few minutes after the load. PLAY pauses and resumes. Sound is on and chopped. |
 | **XDJ-700** | 🧪 Experimental | The XDJ-1000's board: the same as above. |
 | **CDJ-900NXS** | 🧪 Experimental | The XDJ-1000's board. Boots, loads a track from USB and plays it, as slowly as the XDJ-1000: the waveform moves and the time counts down. |
+| **XDJ-1000MK2** | 🧪 Experimental | The XDJ-1000's board on its own firmware. Loads a track from USB and plays it as slowly as the XDJ-1000; PLAY pauses and resumes, and CUE returns to the cue point when AUTO CUE is on. |
 
-**On other development branches:** the **XDJ-1000MK2** boots and browses a USB
-library; track playback is still being investigated. **CDJ-900** bring-up is
-also in progress. These models are not included in this checkout's setup menu.
+**On other development branches:** **CDJ-900** bring-up is in progress. It is
+not included in this checkout's setup menu.
 
 Everything below, from the quick start on, describes the CDJ-2000NXS2 unless it
 says otherwise.
@@ -283,7 +283,8 @@ The CDJ-2000 and CDJ-2000NXS have a board model of their own
 processor, and a DSP behind a host port (a C6727 on the CDJ-2000, a C6747 on
 the CDJ-2000NXS). The XDJ-1000, XDJ-700 and CDJ-900NXS share the NXS2's
 SH7724 MAIN, which draws their screen itself, with a C6747 DSP
-(`hw/cdj/boards/xdj1000/`). None of the older players makes sound yet, and the
+(`hw/cdj/boards/xdj1000/`). The older players' DSPs are too slow to keep up, so
+their sound is chopped, and the
 launcher starts each in one window (see Quick start, other players).
 
 None of the three knows it is emulated. MAIN talks to the display processor
@@ -410,6 +411,8 @@ The screen comes from each deck's display board, a QEMU of its own. After
 end of that board's log (`bridge-gui-show1.log` in `/tmp`, or the system's
 temp folder on Windows). `logs/app.log` records every attempt the app made
 to reach each screen. Those two files are what to send with a bug report.
+The emulator itself prints little; `CDJ_REPORT=1` brings back its exit reports
+for diagnostics.
 
 </details>
 
@@ -676,6 +679,32 @@ Pro DJ Link protocol from a player that speaks it natively, or experimenting
 with the audio chain. Keep what you derive from the firmware on your own
 machine: the update file, and anything built from it, is Pioneer's.
 
+### Starting from a saved deck
+
+Booting a deck and loading a track takes minutes on the older players and
+longer on the NXS2; a test or a change to the firmware's later stages should
+not pay that every time. A deck can be saved while it runs and started from
+that moment:
+
+```
+SNAPSHOT=loaded ./start.sh --model xdj1000      # or idle, the settled screen
+```
+
+The first start boots as usual, drives the deck to the point (the model
+profile's `MODEL_IDLE_S` and `MODEL_LOAD_STEPS`) and saves it; every later
+start restores it at once. Saves live in `/tmp/cdj-snap/`, one folder per
+combination of QEMU build, firmware, USB image and `MAIN_ARGS`, so a rebuild or
+a new stick starts a fresh save by itself; delete the folder to forget them.
+A save only comes back into the machine that wrote it, so a device that gains
+state needs that state in its `VMStateDescription` before saves of it restore
+correctly. The USB image is not part of a save: the stick is attached as a
+read-only-in-practice snapshot and comes back as the original file.
+
+`scripts/test/quick.sh snap` is the same thing as a test: with the deck table
+of `deck_smoke.py` it restores each deck's loaded point and checks that the
+playhead moves (`deck_smoke.py --snapshot`). The first run saves the points,
+so it takes as long as `decks2`; after that a deck takes a minute and a half.
+
 <a id="limits"></a>
 
 ## Limits
@@ -697,7 +726,7 @@ machine: the update file, and anything built from it, is Pioneer's.
   emulator.
 - **Only firmware v1.87** is supported for the CDJ-2000NXS2.
 - **Work in progress.** The older players are experimental: they load and
-  play, but without sound and far slower than real time (see
+  play, with chopped sound and far slower than real time (see
   [Supported players](#supported-players)). On the NXS2 the USB stick is the only medium so far. Some panel
   keys are decoded by the firmware but have not been tried here; the
   controller tools say so when you bind one.

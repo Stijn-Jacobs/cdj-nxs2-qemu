@@ -113,3 +113,17 @@ const char *cdj_getenv(const char *name)
     }
     return getenv(name);                        /* table full */
 }
+
+bool cdj_report_enabled(void)
+{
+    const char *on = getenv("CDJ_REPORT");
+
+    return on && strcmp(on, "0");
+}
+
+void cdj_add_exit_report(Notifier *n)
+{
+    if (cdj_report_enabled()) {
+        qemu_add_exit_notifier(n);
+    }
+}

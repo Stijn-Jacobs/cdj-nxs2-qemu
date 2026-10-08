@@ -148,6 +148,28 @@ def test_deck_without_a_display_board_gets_no_display_update(tree):
     assert argv[1:3] == ["-M", "xdj1000"] and "CDJ_BF531_UPD" not in env
 
 
+def test_deck_without_a_display_board_plans_its_snapshot(tree, tmp_path):
+    for mid in ("xdj1000", "xdj700", "cdj900nxs"):
+        m = model.load(mid)
+        assert m.idle_s and m.load_steps
+        tree.tmp, tree.run = str(tmp_path), str(tmp_path)
+        qemu, kernel = tmp_path / "qemu", tmp_path / mid
+        for f in (qemu, kernel, tree.usb_image):
+            os.makedirs(os.path.dirname(str(f)), exist_ok=True)
+            open(str(f), "wb").close()
+        argv = [str(qemu), "-kernel", str(kernel)]
+        reach = deck.plan_snapshot(tree, m, argv, {"SNAPSHOT": "loaded"})
+        assert reach and "--reach" in reach and "-monitor" in argv
+
+
+def test_deck_plays_sound_unless_told_not_to(tree):
+    m = model.load("cdj2000")
+    argv, env = deck.command(tree, m, {"MAIN_QEMU": "/q/qemu-system-sh4"})
+    assert "-audio" in argv and env["CDJ_DSP_AUDIO"].startswith("1:")
+    argv, env = deck.command(tree, m, {"MAIN_QEMU": "/q/qemu-system-sh4", "NOSOUND": "1"})
+    assert "-audio" not in argv and "CDJ_DSP_AUDIO" not in env
+
+
 def test_deck_dry_run_says_what_is_skipped(tree, capsys):
     m = model.load("cdj2000nxs")
     os.makedirs(os.path.join(tree.extract, "cdj2000nxs"))

@@ -10,6 +10,8 @@
 #   NXS2_LOCK                    lock directory held for the run (default /tmp/cdj-emu.lock)
 #   LOCK_WAIT                    seconds to wait for that lock before skipping (default 240)
 #   FILMN, MOTION_MS             frames and gap in ms between them (default 4 x 2000)
+#   SNAPSHOT=loaded              start from the saved 'loaded' point (track loaded and
+#                                playing); the first run of a build saves it on the way
 #
 # On Windows run it from MSYS2's MINGW64 shell.
 set -u
