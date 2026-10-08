@@ -42,6 +42,9 @@
  *   CDJ_C6727_MHZ=<n>       DSP clock (default 300)
  *   CDJ_C6727=0             no core: the window is plain memory
  *   CDJ_C6X_RECORD=<path>   record what the core receives, for c6xreplay
+ *   CDJ_C6727_IDLE=<head>:<stack_lo>:<stack_hi>[:<reads>]  the busy-wait
+ *                           loop the core skips (c66x_set_idle_loop) in
+ *                           place of the board's; 0 turns the skip off
  *   CDJ_HPI_DUMP=<dir>      at exit, save internal RAM and the first MiB of
  *                           SDRAM as <dir>/iram.bin and <dir>/sdram.bin
  */
@@ -68,6 +71,9 @@
 
 #define DSPINT_IRQ      6
 
+/* MAIN's window accesses never wait for a slice, so slices can be long. */
+#define C6727_SLICE_CYCLES 8000
+
 #define WIN_OFF         0xC0000
 #define WIN_SIZE        0x10000
 
@@ -93,6 +99,7 @@ typedef struct CdjC6727 {
     uint64_t dspint_writes;     /* MAIN raising HPIC.DSPINT */
     uint32_t creg9_last;
     DspAddrTable polls;
+    uint32_t idle_head, idle_lo, idle_hi;
 
     Notifier exit;
 } CdjC6727;
@@ -114,6 +121,11 @@ static uint32_t hpi_page(CdjC6727 *s)
 {
     return (s->cfg[CFG_HPIAMSB / 4] & 0xFF) << 24
          | (s->cfg[CFG_HPIAUMB / 4] & 0xFF) << 16;
+}
+
+static uint8_t *host_ram(void *opaque, uint32_t addr)
+{
+    return dsp_ram(opaque, addr);
 }
 
 static void set_command_pins(void *opaque, unsigned bits)
@@ -228,6 +240,19 @@ static void dsp_attach(CdjC6727 *s)
     c66x_map_ram(core, IRAM_BASE, IRAM_SIZE, s->iram);
     c66x_map_ram(core, SDRAM_BASE, SDRAM_SIZE, s->sdram);
     c66x_hook_pc(core, CREG9_FUNC, creg9_hook, s);
+
+    const char *idle = getenv("CDJ_C6727_IDLE");
+    unsigned long h = s->idle_head, lo = s->idle_lo, hi = s->idle_hi;
+    int reads = 0;
+
+    if (idle && !strcmp(idle, "0")) {
+        h = 0;
+    } else if (idle) {
+        sscanf(idle, "%lx:%lx:%lx:%d", &h, &lo, &hi, &reads);
+    }
+    if (h) {
+        c66x_set_idle_loop(core, h, lo, hi, reads);
+    }
 }
 
 static void dsp_start(CdjC6727 *s)
@@ -246,13 +271,12 @@ static void note_outside(CdjC6727 *s, hwaddr off, const char *what)
                   what, off);
 }
 
+/* The window reaches the core's RAM through MAIN's posted accesses, so the
+ * core keeps running; narrower accesses are done on the word they sit in. */
 static uint64_t hpi_read(void *opaque, hwaddr off, unsigned size)
 {
     CdjC6727 *s = opaque;
-    uint32_t addr;
-    uint8_t *p;
-    uint64_t val = 0;
-    CDJ_DSP_HOST_GUARD(&s->host);
+    uint32_t addr, val;
 
     if (off == 0) {
         return cdj_dsp_host_hpic(&s->host);
@@ -262,9 +286,9 @@ static uint64_t hpi_read(void *opaque, hwaddr off, unsigned size)
         return 0;
     }
     addr = hpi_page(s) + (off - WIN_OFF);
-    p = dsp_ram(s, addr);
-    if (p) {
-        val = ldn_le_p(p, size);
+    val = cdj_dsp_host_read_word(&s->host, addr) >> (addr & 3) * 8;
+    if (size < 4) {
+        val &= (1u << size * 8) - 1;
     }
     s->win_reads++;
     cdj_dsp_count(&s->polls, addr, val);
@@ -274,11 +298,11 @@ static uint64_t hpi_read(void *opaque, hwaddr off, unsigned size)
 static void hpi_write(void *opaque, hwaddr off, uint64_t val, unsigned size)
 {
     CdjC6727 *s = opaque;
-    uint32_t addr;
-    uint8_t *p;
-    CDJ_DSP_HOST_GUARD(&s->host);
+    uint32_t addr, word, shift;
 
     if (off == 0) {
+        CDJ_DSP_HOST_GUARD(&s->host);
+
         s->dspint_writes += cdj_dsp_host_main_hpic(&s->host, val);
         return;
     }
@@ -287,16 +311,17 @@ static void hpi_write(void *opaque, hwaddr off, uint64_t val, unsigned size)
         return;
     }
     addr = hpi_page(s) + (off - WIN_OFF);
-    p = dsp_ram(s, addr);
     s->win_writes++;
-    if (!p) {
+    if (size < 4) {
+        shift = (addr & 3) * 8;
+        word = cdj_dsp_host_read_word(&s->host, addr);
+        val = (word & ~(((1u << size * 8) - 1) << shift)) | val << shift;
+    }
+    if (!cdj_dsp_host_write_word(&s->host, addr, val)) {
         s->dropped++;
         return;
     }
-    stn_le_p(p, size, val);
-    if (s->host.core) {
-        c66x_invalidate(s->host.core, addr, size);
-    } else if (addr == ROM_START && val && s->host.enabled) {
+    if (!s->host.core && addr == ROM_START && val && s->host.enabled) {
         dsp_start(s);
     }
 }
@@ -365,6 +390,14 @@ static const VMStateDescription vmstate_c6727 = {
     }
 };
 
+void cdj_c6727_set_idle_loop(uint32_t head, uint32_t stack_lo,
+                             uint32_t stack_hi)
+{
+    c6727.idle_head = head;
+    c6727.idle_lo = stack_lo;
+    c6727.idle_hi = stack_hi;
+}
+
 const CdjDspWires *cdj_c6727_init(MemoryRegion *sysmem, hwaddr hpi_base)
 {
     CdjC6727 *s = &c6727;
@@ -384,6 +417,8 @@ const CdjDspWires *cdj_c6727_init(MemoryRegion *sysmem, hwaddr hpi_base)
     s->dmax.audio_frame = dmax_audio_frame;
     s->dmax.chip = s;
     s->host.after_chunk = dmax_after_chunk;
+    s->host.ram = host_ram;
+    s->host.slice_cycles = C6727_SLICE_CYCLES;
 
     memory_region_init_io(&s->iomem, NULL, &hpi_ops, s, "c6727.hpi", 0x100000);
     memory_region_add_subregion(sysmem, hpi_base, &s->iomem);

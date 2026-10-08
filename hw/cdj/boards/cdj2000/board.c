@@ -244,7 +244,10 @@ static void sh7763_board_init(MachineState *machine, const CdjBoardDesc *desc,
 
 static void cdj2000nxs_init(MachineState *machine)
 {
-    /* The NXS's DSP is a C674x behind its host port, addressed through HPIA. */
+    /* The NXS's DSP is a C674x behind its host port, addressed through HPIA.
+     * fw 1.44's DSP application polls in a main loop at 0xC004CB8C, its
+     * stack at B15 0x11805AE0 on entry. */
+    cdj_c6747_set_idle_loop(0xC004CB8C, 0x11804AE0, 0x11805C00);
     sh7763_board_init(machine, &cdj2000nxs_board,
                       cdj_c6747_init,
                       &cdj2000nxs_display, true);
@@ -254,7 +257,9 @@ static void cdj2000_init(MachineState *machine)
 {
     /* The CDJ-2000's is a C6727 behind a full-address host port: its
      * uncached area-3 window at 0x0C0C0000 (454 references in the image) is
-     * DSP memory. */
+     * DSP memory. fw 4.33's DSP application polls in a main loop at
+     * 0x80047B80, its stack at B15 0x100064B0 on entry. */
+    cdj_c6727_set_idle_loop(0x80047B80, 0x10005000, 0x10006600);
     sh7763_board_init(machine, &cdj2000_board,
                       cdj_c6727_init,
                       &cdj2000_display, false);

@@ -264,7 +264,9 @@ void cdj_edma3_paced(CdjEdma3 *e, int64_t dsp_ns)
     if (dsp_ns < e->deadline_ns) {
         return;
     }
-    e->deadline_ns = dsp_ns + NS_PER_HALF;
+    /* Carried, not restarted from dsp_ns: the core is stepped in 100 us chunks,
+     * and rounding each 362.8 us half buffer up to 400 us would play at 40 kHz. */
+    e->deadline_ns = MAX(e->deadline_ns + NS_PER_HALF, dsp_ns);
     for (ch = 0; ch < CHANNELS; ch++) {
         if (enabled & (1u << ch)) {
             for (n = 0; n < 2 * AUDIO_FRAMES; n++) {

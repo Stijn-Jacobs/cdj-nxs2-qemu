@@ -88,6 +88,34 @@ MODS = {
         args=[],
         literal=False,
     ),
+    # The colour-preview overview strip's per-column loop-bottom merge point:
+    # every fill style the renderer can take for one column rejoins here,
+    # right before the column counter is bumped (r8 = the just-finished
+    # column, 0..599). Hooking here instead of the colour lookup means the
+    # waveform's own fill is already painted before this call runs, so
+    # gui_phrase.s draws its band on top rather than the fill overwriting it,
+    # and the waveform's own colours are never touched by this mod at all.
+    #
+    # sig carries 9 words of context before the replaced pair and 2 after
+    # (neither replaced) purely so this site matches uniquely; the two
+    # replaced words are sig[9] (the counter load) and sig[10] (the column
+    # increment). gui_phrase.s reproduces both, then the branch they lead
+    # into, itself -- see that file for why (sigpatch's own auto-resume can
+    # only express one target, and this merge point has two).
+    'phrase': Mod(
+        what='overview strip phrase band',
+        target='gui',
+        fw_versions=('1.81',),
+        sig=[
+            0xE627, 0x60F2, 0x3658, 0x59F1, 0x4680, 0x4600, 0x36BC, 0x369C,
+            0x2611, 0x52F2, 0x7801, 0x72FF, 0x2228, 0x8D02, 0x1F22, 0xAECE,
+            0x0009, 0xDB34, 0x6DB3,
+        ],
+        start=9,
+        end=17,
+        args=[],
+        literal=False,
+    ),
 }
 
 

@@ -690,8 +690,9 @@ void jit_init(c66x_core *c)
         j->qprof = calloc(JIT_PROF, sizeof j->qprof[0]);
         j->kprof = calloc(4096, sizeof j->kprof[0]);
     }
+    /* "0" reads as off, as the core's other switches do, not as a directory. */
     const char *adir = getenv("C66X_JIT_AUTO");
-    if (adir && *adir) {
+    if (adir && *adir && strcmp(adir, "0")) {
         struct c66x_jit *j = jit_get(c);
         j->auto_dir = strdup(adir);
         if (!j->kprof)

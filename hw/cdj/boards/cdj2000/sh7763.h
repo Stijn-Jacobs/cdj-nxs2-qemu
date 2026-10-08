@@ -56,6 +56,9 @@ void cdj_c6747_set_idle_loop(uint32_t head, uint32_t stack_lo,
                              uint32_t stack_hi);
 /* The CDJ-2000's C6727, behind a full-address host port on area 3. */
 const CdjDspWires *cdj_c6727_init(MemoryRegion *sysmem, hwaddr hpi_base);
+/* As cdj_c6747_set_idle_loop, for the C6727. */
+void cdj_c6727_set_idle_loop(uint32_t head, uint32_t stack_lo,
+                             uint32_t stack_hi);
 
 /* The front-panel MCU link on SCIF2: a 24-byte DMA-fed exchange, the NXS2's
  * protocol at a shorter frame length and with no touch screen. The idle frame

@@ -304,7 +304,10 @@ void cdj_dmax_audio_run(CdjDmax *d, int64_t dsp_ns)
         d->audio_deadline_ns = dsp_ns + AUDIO_NS_PER_HALF;
     }
     if (dsp_ns >= d->audio_deadline_ns && audio_half_done(d)) {
-        d->audio_deadline_ns = dsp_ns + AUDIO_NS_PER_HALF;
+        /* The core is stepped in 100 us chunks and a half buffer lasts 362.8 us:
+         * counting from dsp_ns would round every period up to 400 us, 40 kHz. */
+        d->audio_deadline_ns = MAX(d->audio_deadline_ns + AUDIO_NS_PER_HALF,
+                                   dsp_ns);
     }
 }
 
