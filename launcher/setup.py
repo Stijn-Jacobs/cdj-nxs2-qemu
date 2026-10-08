@@ -77,6 +77,9 @@ VALUE_OPTS = {"--model": ("model", "a player"), "--firmware": ("firmware", "a fi
               "--build-dir": ("build_dir", "a directory")}
 
 
+ON_OFF = ("on", "1", "yes", "y", "off", "0", "no", "n")
+
+
 class Options:
     def __init__(self):
         self.dry = self.yes = self.skip_build = self.rebuild = self.reconfigure = False
@@ -114,6 +117,9 @@ def parse_args(argv):
             if i + 1 >= len(argv) or not argv[i + 1]:
                 sys.stderr.write("%s needs %s\n" % (a, what))
                 raise SystemExit(2)
+            if attr in ("djlink", "audio") and argv[i + 1].lower() not in ON_OFF:
+                sys.stderr.write("%s needs %s\n" % (a, what))
+                raise SystemExit(2)
             setattr(o, attr, argv[i + 1])
             i += 1
         elif a in ("-h", "--help"):
@@ -145,7 +151,7 @@ def _mb(path):
 
 
 def _onoff(v):
-    return "1" if v in ("on", "1", "yes", "y") else "0"
+    return "1" if v.lower() in ("on", "1", "yes", "y") else "0"
 
 
 def _yesno(v):
@@ -597,7 +603,8 @@ class Setup:
                 con.die("no USB image: pass --music <a rekordbox export folder>, or --tracks <a folder of music>")
             music, tracks = self._choose_usb_source()
 
-        os.makedirs(lay.extract, exist_ok=True)
+        if not o.dry:
+            os.makedirs(lay.extract, exist_ok=True)
         if tracks:
             while not os.path.isdir(tracks):
                 if not con.interactive:
@@ -621,7 +628,7 @@ class Setup:
 
     def deck_ready(self):
         main, gui, dsp = self.binaries()
-        return all(os.path.exists(p) for p in (main, gui, dsp)) and firmware.installed(self.lay.extract) \
+        return all(os.path.exists(p) for p in (main, gui, dsp) if p) and self.firmware_ready() \
             and os.path.isfile(self.lay.usb_image)
 
     def _stop_background(self):
@@ -725,17 +732,18 @@ class Setup:
         con.step(6, "Your setup")
         if not self.model.is_rig:
             con.dim("nothing to ask: the %s starts as one window with your stick" % self.model.title)
-            stored = self.values.get("CDJ_MODEL") or model.DEFAULT
-            self.ask5 = stored != self.model.id or not os.path.isfile(lay.conf)
+            self.ask5 = self._conf_differs()
             return
         asked = bool(o.decks or o.name or o.djlink or o.audio or o.controller or o.relay)
         if self.configured and not o.reconfigure and not asked:
             con.good("keeping your setup in cdj.conf (./setup.sh --reconfigure to change it)")
-            self.ask5 = False
+            self.ask5 = self._conf_differs()
         else:
             self.ask5 = True
         if self.ask5:
             self._questions()
+            if not o.dry:
+                conf.save(lay.conf, self._conf_values(mods.load(lay)))
         # A kept setup still takes the Pythons found now, e.g. after installing mido.
         if not self.ask5 and not lay.packaged and (
                 (self.py_midi and not _same(self.py_midi, c["CDJ_MIDI_PYTHON"]))
@@ -744,14 +752,24 @@ class Setup:
             c["CDJ_TOOLS_PYTHON"] = host.posix(self.py_tools or c["CDJ_TOOLS_PYTHON"])
             self.ask5 = True
 
-    def _save_conf(self, mod_list):
-        con, o, c, lay = self.con, self.o, self.c, self.lay
+    def _conf_differs(self):
+        """Whether cdj.conf lacks something this run decided (the player, a
+        build directory), so that a kept setup still writes it."""
+        return not os.path.isfile(self.lay.conf) or any(self.c[k] != self.values.get(k, "") for k in conf.KEYS)
+
+    def _conf_values(self, mod_list):
+        c = self.c
         values = dict(self.values)
         values.update({k: c[k] for k in conf.KEYS})
         for m in mod_list:
             confkey = mods.conf_key(m.env)
             val = c.get(confkey, "")
             values[confkey] = val if val in (m.on, m.off) else (m.on if m.default == "on" else m.off)
+        return values
+
+    def _save_conf(self, mod_list):
+        con, o, lay = self.con, self.o, self.lay
+        values = self._conf_values(mod_list)
         if o.dry:
             con.info("(dry run) would write cdj.conf:")
             for line in conf.render(values).splitlines():
@@ -804,8 +822,8 @@ class Setup:
         if o.djlink:
             c["CDJ_DJLINK"] = _onoff(o.djlink)
         else:
-            c["CDJ_DJLINK"] = _onoff(con.choose("Pro DJ Link network?",
-                                                "on" if c["CDJ_DECKS"] == "2" else "off", "on", "off"))
+            djlink = c["CDJ_DJLINK"] or ("1" if c["CDJ_DECKS"] == "2" else "0")
+            c["CDJ_DJLINK"] = _onoff(con.choose("Pro DJ Link network?", _yesno(djlink), "on", "off"))
         if o.audio:
             c["CDJ_AUDIO"] = _onoff(o.audio)
         else:
@@ -867,11 +885,12 @@ class Setup:
         c["CDJ_RELAY_PORT"] = str(port)
         if port != want:
             con.warn("TCP %d is reserved or in use here; the controller relay uses %d" % (want, port))
-        gport = int((c["CDJ_GROUP"] or "239.77.77.1:45000").rsplit(":", 1)[-1] or 45000)
+        group_ip, _, group_port = (c["CDJ_GROUP"] or "239.77.77.1:45000").rpartition(":")
+        gport = int(group_port or 45000)
         gfree = host.pick_udp_port(gport)
         if gfree != gport and c["CDJ_DJLINK"] == "1":
             con.warn("UDP %d is reserved by Windows; Pro DJ Link uses %d" % (gport, gfree))
-        c["CDJ_GROUP"] = "239.77.77.1:%d" % gfree
+        c["CDJ_GROUP"] = "%s:%d" % (group_ip or "239.77.77.1", gfree)
         if not lay.packaged:
             c["CDJ_MIDI_PYTHON"] = host.posix(self.py_midi or "")
             c["CDJ_TOOLS_PYTHON"] = host.posix(self.py_tools or "")

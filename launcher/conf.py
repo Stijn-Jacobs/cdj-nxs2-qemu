@@ -64,7 +64,9 @@ def load(path, warn=None):
 
 def with_start_defaults(values):
     merged = dict(START_DEFAULTS)
-    merged.update(values)
+    # Setup writes every key; the ones it had no answer for (an older player
+    # has no decks or sound to ask about) are empty and mean "not set".
+    merged.update({k: v for k, v in values.items() if v != ""})
     return merged
 
 

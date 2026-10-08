@@ -88,14 +88,15 @@ class Model:
     @property
     def images(self):
         """What a firmware install leaves in the extract folder."""
-        names = tuple(os.path.basename(rel) for rel, _ in self.expected)
+        # A profile that has not pinned its images yet still needs the kernel.
+        names = tuple(os.path.basename(rel) for rel, _ in self.expected) or ("main_unpacked.bin",)
         return names + (DISPLAY_UPD_IMAGE,) if self.display_upd else names
 
 
 def load(model_id=None):
     """The named profile (CDJ_MODEL, else cdj2000nxs2). Raises ModelError with
     the script's message on an unknown id or an incomplete profile."""
-    model_id = model_id or os.environ.get("CDJ_MODEL") or DEFAULT
+    model_id = (model_id or os.environ.get("CDJ_MODEL") or DEFAULT).strip().lower()
     path = os.path.join(models_dir(), model_id + ".conf")
     if not os.path.isfile(path):
         raise ModelError("unknown model '%s'; known: %s" % (model_id, "".join(m + " " for m in list_models())))
@@ -104,6 +105,14 @@ def load(model_id=None):
     for v in REQUIRED:
         if not values.get(v):
             raise ModelError("model profile %s does not set %s" % (path, v))
+    launch = values.get("MODEL_LAUNCH") or "rig"
+    if launch not in ("rig", "deck"):
+        raise ModelError("model profile %s: MODEL_LAUNCH is '%s', not rig or deck" % (path, launch))
+    # The rig reads the images from extract/ itself, and a deck model sharing
+    # that folder would overwrite the NXS2's firmware.
+    if (launch == "rig") != (values["MODEL_EXTRACT"] == "extract"):
+        raise ModelError("model profile %s: a rig model installs to extract, a deck model to its own folder "
+                         "(MODEL_LAUNCH=deck is missing, or MODEL_EXTRACT is wrong)" % path)
     return Model(model_id, values)
 
 

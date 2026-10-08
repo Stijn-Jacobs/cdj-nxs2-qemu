@@ -79,6 +79,8 @@ def plan_snapshot(lay, m, argv, env):
         return None
     if point not in snapshot.POINTS:
         raise SystemExit("SNAPSHOT point %r: known points are %s" % (point, ", ".join(snapshot.POINTS)))
+    if not (m.idle_s and m.load_steps):
+        raise SystemExit("SNAPSHOT: models/%s.conf sets no MODEL_IDLE_S and MODEL_LOAD_STEPS to reach a point" % m.id)
     kernel = argv[argv.index("-kernel") + 1]
     files = [argv[0], kernel] + ([env["CDJ_BF531_UPD"]] if m.display_upd else []) + [lay.usb_image]
     point_dir = os.path.join(snapshot.root(lay.tmp, files, env.get("MAIN_ARGS", "")), point)

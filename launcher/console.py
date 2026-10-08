@@ -86,17 +86,16 @@ class Console:
             # passes isatty(), so this is the check that holds everywhere.
             self.interactive = False
             return default
-        a = a.rstrip("\r\n")
-        return a if a else default
+        return a.strip() or default
 
     def ask_yn(self, q, default):
-        return self.ask(q + " (y/n)", default) in ("y", "Y", "yes", "Yes")
+        return self.ask(q + " (y/n)", default).lower() in ("y", "yes")
 
     def choose(self, q, default, *options):
         while True:
             a = self.ask("%s (%s)" % (q, " ".join(options)), default)
-            if a in options:
-                return a
+            if a.lower() in options:
+                return a.lower()
             if not self.interactive:
                 return default
             sys.stderr.write("  %splease answer one of: %s%s\n" % (self.Y, " ".join(options), self.N))
@@ -206,6 +205,7 @@ def dropped_path(p, windows):
         from . import host
 
         return host.native(p) if p else p
+    p = os.path.expanduser(p)
     if not os.path.exists(p):
         p = re.sub(r"\\(.)", r"\1", p)
     return p
