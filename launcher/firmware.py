@@ -79,8 +79,9 @@ def sha256(path):
 
 
 def installed(extract, model_id=None):
+    # A profile with no MODEL_EXPECTED names no images; that is not "installed".
     images = _model.load(model_id).images
-    return all(os.path.isfile(os.path.join(extract, f)) for f in images)
+    return bool(images) and all(os.path.isfile(os.path.join(extract, f)) for f in images)
 
 
 def _python():

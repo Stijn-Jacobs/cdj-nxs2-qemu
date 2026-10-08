@@ -36,6 +36,13 @@ def test_installed_checks_the_named_models_images(tmp_path):
     assert not firmware.installed(str(tmp_path))
 
 
+def test_a_profile_naming_no_images_is_not_installed(tmp_path, monkeypatch):
+    m = model.load("xdj1000mk2")
+    monkeypatch.setattr(m, "expected", ())
+    monkeypatch.setattr(model, "load", lambda mid=None: m)
+    assert not firmware.installed(str(tmp_path), "xdj1000mk2")
+
+
 def test_upd_files_single_file_update(tmp_path):
     m = model.load()  # cdj2000nxs2: one update file
     upd = tmp_path / "C2KNXS2.UPD"

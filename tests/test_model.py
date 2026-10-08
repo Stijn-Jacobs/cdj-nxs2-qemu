@@ -37,6 +37,16 @@ def test_bring_up_models_have_no_gui_board():
         assert m.fw_steps == ["sections", "srec_coverage", "lzss_decode", "gui_decode"]
 
 
+def test_every_profile_names_its_images_and_decodes_the_sparse_section():
+    # No MODEL_EXPECTED made firmware.installed() vacuously true, and
+    # lzss_decode reads the section<N>.sparse.bin that srec_coverage writes.
+    for mid in model.list_models():
+        m = model.load(mid)
+        assert "extract/main_unpacked.bin" in [rel for rel, _ in m.expected], mid
+        if "lzss_decode" in m.fw_steps:
+            assert "srec_coverage" in m.fw_steps[:m.fw_steps.index("lzss_decode")], mid
+
+
 def test_only_the_nxs2_starts_the_two_board_rig():
     # A profile without MODEL_LAUNCH=deck falls back to the rig, which boots
     # the NXS2 whatever the title says.
