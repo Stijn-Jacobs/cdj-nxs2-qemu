@@ -51,6 +51,7 @@ def _setup(tmp_path, stored="", conf_exists=False, answers=None, **opts):
     s.lay.conf = str(tmp_path / "cdj.conf")
     if conf_exists:
         (tmp_path / "cdj.conf").write_text("CDJ_DECKS=1\n")
+    s.values = {"CDJ_DECKS": "1", "CDJ_MODEL": stored} if conf_exists else {}
     s.c = {"CDJ_MODEL": stored}
     s.con = Console(dry=False, interactive=answers is not None)
     return s
@@ -104,6 +105,14 @@ def test_rerun_offers_another_player(tmp_path, monkeypatch, capsys):
     s = _setup(tmp_path, stored="cdj2000", conf_exists=True, answers=True)
     s.choose_model()
     assert s.model.id == "cdj2000nxs"
+
+
+def test_reconfigure_saves_the_new_player_before_the_later_steps(tmp_path, monkeypatch):
+    _answer(monkeypatch, "xdj1000mk2\n")
+    s = _setup(tmp_path, stored="xdj1000", conf_exists=True, answers=True, reconfigure=True)
+    s.choose_model()
+    saved = conf.load(s.lay.conf)
+    assert saved["CDJ_MODEL"] == "xdj1000mk2" and saved["CDJ_DECKS"] == "1"
 
 
 def test_unknown_model_is_refused(tmp_path):

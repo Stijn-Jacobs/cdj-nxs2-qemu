@@ -37,6 +37,13 @@ def test_bring_up_models_have_no_gui_board():
         assert m.fw_steps == ["sections", "srec_coverage", "lzss_decode", "gui_decode"]
 
 
+def test_only_the_nxs2_starts_the_two_board_rig():
+    # A profile without MODEL_LAUNCH=deck falls back to the rig, which boots
+    # the NXS2 whatever the title says.
+    rigs = [mid for mid in model.list_models() if model.load(mid).is_rig]
+    assert rigs == [model.DEFAULT]
+
+
 def test_cdj2000_update_is_four_files_in_section_order():
     m = model.load("cdj2000")
     assert m.upd == ["C2KGUI.UPD", "C2KDRIV.UPD", "C2KMAIN.UPD", "C2KPANL.UPD"]

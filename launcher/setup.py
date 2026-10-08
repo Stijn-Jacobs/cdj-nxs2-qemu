@@ -224,6 +224,10 @@ class Setup:
         except model.ModelError as e:
             con.die(str(e))
         c["CDJ_MODEL"] = self.model.id
+        # Saved now: a later step that stops setup (no firmware for the new
+        # player, say) would otherwise leave cdj.conf on the old one.
+        if self.model.id != stored and not o.dry and os.path.isfile(self.lay.conf):
+            conf.save(self.lay.conf, dict(self.values, CDJ_MODEL=self.model.id))
         if not self.model.is_rig:
             con.info("player: %s (one window; no DSP code, mods or deck setup)" % self.model.title)
 
