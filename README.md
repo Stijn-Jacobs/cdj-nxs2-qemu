@@ -121,7 +121,9 @@ skipped when it is already done:
 5. **DSP code** — boots one deck without a window and lets it play a track for
    a few minutes while MASTER TEMPO and the tempo fader are swept, so the DSP's
    JIT compiles the program's hot code into its cache (`~/c14gen`) and your
-   first real session already keeps up (about 15 minutes).
+   first real session already keeps up (about 15 minutes). For the smoothest
+   playback, including the first seconds after a load, build the curated
+   module once instead: `./setup.sh --curated-jit` (about an hour).
 6. **Your setup** — one deck or two, Pro DJ Link, sound, a MIDI controller;
    saved to `cdj.conf`.
 7. **Mods** — small on/off tweaks to how the deck behaves: take the defaults
@@ -203,7 +205,7 @@ version), and your own music.
 ./setup.sh --rebuild            build even when the emulators are already built
 ./setup.sh --no-warm            leave the DSP warm-up out
 ./setup.sh --warm               warm the DSP code cache again
-./setup.sh --curated-jit        build a profile-guided DSP module instead (about an hour)
+./setup.sh --curated-jit        build a profile-guided DSP module instead (about an hour; smoothest playback)
   --keep-recording              keep that build's DSP recording (~10 GB)
   --firmware <file>             the C2KNXS2.UPD to use (re-installs the images)
   --music <folder>              the rekordbox USB export to image
@@ -724,7 +726,9 @@ so it takes as long as `decks2`; after that a deck takes a minute and a half.
   further: it records the DSP running your own firmware and builds one
   profile-guided module from that recording, the way the maintainers build
   theirs. It takes about an hour and ~16 GB of free disk while it runs, and the
-  module is installed only if it replays the recording exactly.
+  module is installed only if it replays the recording exactly. With it,
+  playback holds real time from the first seconds after a load, so it is the
+  recommended setup when you can spare the hour.
 - **MASTER TEMPO is heavy.** It makes the DSP program do far more work per
   sample, and it is currently the most demanding thing you can ask of the
   emulator.

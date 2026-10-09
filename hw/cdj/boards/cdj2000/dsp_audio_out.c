@@ -20,6 +20,12 @@ void cdj_dsp_audio_arm(void)
     static const CdjHostAudioCfg cfg = {
         .env = "CDJ_DSP_AUDIO", .card = "cdj-dsp", .voice = "cdj-dsp-mcasp1",
         .label = "dsp", .source = "McASP1",
+        /* Paused, the DSP program keeps sending the McASP buffer it last
+         * filled: 15288 frames (two 7644-frame halves) at deck speed 1.0, bit
+         * for bit, on both chips. Right after the stop it first sends the
+         * buffer from 17880 frames back. */
+        .loop = { .period = 15288, .replay = 17880,
+                  .lag_min = 12000, .lag_max = 24000 },
     };
 
     sink = cdj_host_audio_open(&cfg);

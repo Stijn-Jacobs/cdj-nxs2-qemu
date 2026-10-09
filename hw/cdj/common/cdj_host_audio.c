@@ -26,6 +26,7 @@ struct CdjHostAudio {
     uint32_t asrc_step;         /* 16.16 step, 0x10000 = 1:1 */
     int16_t asrc_prev[2];       /* the frame the position has just passed */
     int64_t last_report_ms;
+    CdjLoopMute *loop;          /* NULL when the board has no pause loop */
 };
 
 /* Trim target floor above prefill (10 ms), to stay clear of the underrun edge. */
@@ -168,6 +169,7 @@ CdjHostAudio *cdj_host_audio_open(const CdjHostAudioCfg *cfg)
     char name[64];
     const char *opt;
     CdjHostAudio *a;
+    CdjLoopMuteCfg loop;
     Error *err = NULL;
 
     if (!e || atoi(e) <= 0) {
@@ -190,6 +192,15 @@ CdjHostAudio *cdj_host_audio_open(const CdjHostAudioCfg *cfg)
     snprintf(name, sizeof(name), "%s_TRIM_MS", cfg->env);
     opt = getenv(name);
     a->trim = (opt ? (unsigned)MAX(atoi(opt), 0) : 0u) * 44100 / 1000;
+    snprintf(name, sizeof(name), "%s_LOOP", cfg->env);
+    opt = getenv(name);
+    loop = cfg->loop;
+    if (opt && *opt) {
+        loop.period = strtoul(opt, NULL, 0);
+    }
+    if (loop.period) {
+        a->loop = cdj_loop_mute_new(&loop, cfg->label);
+    }
     a->ring = g_new0(int16_t, a->cap * 2);
     a->priming = true;
     qemu_mutex_init(&a->lock);
@@ -215,6 +226,9 @@ CdjHostAudio *cdj_host_audio_open(const CdjHostAudioCfg *cfg)
 
 void cdj_host_audio_put(CdjHostAudio *a, int16_t left, int16_t right)
 {
+    if (a->loop && cdj_loop_mute_frame(a->loop, left, right)) {
+        left = right = 0;
+    }
     qemu_mutex_lock(&a->lock);
     if (a->fill == a->cap) {
         a->rd = (a->rd + 1) % a->cap;
