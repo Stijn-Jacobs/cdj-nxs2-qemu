@@ -575,6 +575,9 @@ static void cdj_c6x_start(uint32_t entry)
     c->sync_target = 0;
     qatomic_set(&c->dsp_now_pub, 0);
     c->report_at = c->start_virt_ns + 5 * NANOSECONDS_PER_SECOND;
+    c->tl_on = cdj_report_enabled();
+    memset(&c->tl, 0, sizeof(c->tl));
+    c->tl.virt = c->start_virt_ns;
     qatomic_set(&c->running, true);
     qemu_mutex_unlock(&c->run_lock);
     info_report("c6x: DSP released at 0x%08x, %" PRIu64 " MHz on the virtual "
@@ -1536,6 +1539,41 @@ static void cdj_c6x_run_to(uint64_t target)
 }
 
 /*
+ * CDJ_REPORT=1: one line per 5 virtual seconds, so a log shows the start of a
+ * track against the steady state. Rates are per host second of the DSP thread
+ * (M/host) or of the interval; waited, busy and skipped are shares of the
+ * interval's wall or virtual time; lag is how far the DSP is behind MAIN.
+ */
+static void cdj_c6x_timeline(CdjC6x *c, int64_t virt, uint64_t dsp_now)
+{
+    int64_t wall = get_clock_realtime();
+    uint64_t cycles = c->cycles, host_ns = c->host_ns;
+    uint64_t compiled = c->core ? c66x_jit_cycles(c->core) : 0;
+    uint64_t wait_ns = c->sync_waits_ns, skipped_ns = c->idle_skipped_ns;
+    uint64_t now = virt > c->epoch_ns ? virt - c->epoch_ns : 0;
+    double dv = virt - c->tl.virt, dw = wall - c->tl.wall;
+    uint64_t dc = cycles - c->tl.cycles, dh = host_ns - c->tl.host_ns;
+
+    if (c->tl.wall) {
+        info_report("c6x: t %.0f s: DSP %.0f M/host s, %.0f%% compiled, busy %.0f%%, "
+                    "MAIN waited %.0f%%, idle skipped %.0f%%, lag %.1f ms, "
+                    "virtual/wall %.2f, clock %" PRIu64 " MHz",
+                    (virt - c->start_virt_ns) / 1e9, dh ? dc * 1e3 / dh : 0,
+                    dc ? 100.0 * (compiled - c->tl.compiled) / dc : 0,
+                    100 * dh / dw, 100 * (wait_ns - c->tl.wait_ns) / dw,
+                    100 * (skipped_ns - c->tl.skipped_ns) / dv,
+                    now > dsp_now ? (now - dsp_now) / 1e6 : 0, dv / dw, c->mhz);
+    }
+    c->tl.virt = virt;
+    c->tl.wall = wall;
+    c->tl.cycles = cycles;
+    c->tl.compiled = compiled;
+    c->tl.host_ns = host_ns;
+    c->tl.wait_ns = wait_ns;
+    c->tl.skipped_ns = skipped_ns;
+}
+
+/*
  * Single-thread stepping (CDJ_C6X_THREAD unset or 0): deterministic, but every
  * DSP cycle is paid for inside QEMU's main loop, which caps the chip at a few
  * tens of MHz. Also the report timer in threaded mode.
@@ -1560,6 +1598,9 @@ static void cdj_c6x_tick(void *opaque)
         c->sync_waits_ns += get_clock() - w0;
         c->vcpu_cpu_ns = cdj_c6x_thread_cpu_ns();
         c->ticks++;
+        if (c->tl_on && virt >= c->tl.virt + 5 * NANOSECONDS_PER_SECOND) {
+            cdj_c6x_timeline(c, virt, qatomic_read(&c->dsp_now_pub));
+        }
         qatomic_set(&c->sync_target, now + c->quantum_ns +
                     (cdj_c6x_pacing(c) ? c->quantum_ns : 0));
         qemu_sem_post(&c->go_sem);
@@ -1597,6 +1638,9 @@ static void cdj_c6x_tick(void *opaque)
         }
         cdj_c6x_sample(c);
         c->ticks++;
+        if (c->tl_on && virt >= c->tl.virt + 5 * NANOSECONDS_PER_SECOND) {
+            cdj_c6x_timeline(c, virt, c6655_soc_now_ns(c->soc));
+        }
         if (c->halted) {
             cdj_c6x_report("halt");
         } else if (virt >= c->report_at) {
@@ -1661,6 +1705,52 @@ static void cdj_c6x_tick(void *opaque)
 }
 
 /*
+ * A host that cannot run the DSP at its modelled clock stalls MAIN's virtual
+ * clock, and a sink paced by wall time then starves. When the DSP thread is busy
+ * for nearly a whole window and still falls behind, the clock drops to what the
+ * host delivered; it climbs back a few percent per window once the thread has
+ * slack. Only the clock changes: what the DSP computes does not.
+ */
+static void cdj_c6x_govern(CdjC6x *c)
+{
+    const int64_t window_ns = 200 * SCALE_MS;
+    int64_t wall = get_clock();
+    uint64_t dsp_ns = c6655_soc_now_ns(c->soc);
+    int64_t dw = wall - c->gov.wall;
+    uint64_t dv, busy, dc;
+
+    if (!c->gov.wall || !c->booted_latch) {
+        c->gov.wall = wall;
+        c->gov.dsp_ns = dsp_ns;
+        c->gov.host_ns = c->host_ns;
+        c->gov.cycles = c->cycles;
+        return;
+    }
+    if (dw < window_ns) {
+        return;
+    }
+    dv = dsp_ns - c->gov.dsp_ns;
+    busy = c->host_ns - c->gov.host_ns;
+    dc = c->cycles - c->gov.cycles;
+    if (busy * 10 >= dw * 9 && dv * 100 < dw * 97) {
+        uint64_t host_mhz = dc * 1000 / busy;
+        uint64_t mhz = MAX(host_mhz * 97 / 100, c->mhz_floor);
+
+        if (mhz < c->mhz) {
+            c->mhz = mhz;
+            c->cyc_rem = 0;
+        }
+    } else if (busy * 5 < dw * 4 && c->mhz < c->mhz_run) {
+        c->mhz = MIN(c->mhz + c->mhz / 32 + 1, c->mhz_run);
+        c->cyc_rem = 0;
+    }
+    c->gov.wall = wall;
+    c->gov.dsp_ns = dsp_ns;
+    c->gov.host_ns = c->host_ns;
+    c->gov.cycles = c->cycles;
+}
+
+/*
  * The DSP's own thread. It may run at most one quantum ahead of QEMU's virtual
  * clock and waits when it gets there, so a stalled vCPU (or a paused VM, whose
  * virtual clock stops) holds the DSP back instead of letting it slip. When the
@@ -1670,6 +1760,7 @@ static void *cdj_c6x_thread(void *opaque)
 {
     CdjC6x *c = &cdj_c6x;
 
+    cdj_thread_prefer_fast_core();
     /* Named so it can be told apart in a host profile. */
     info_report("c6x: DSP thread is host thread %d", qemu_get_thread_id());
     if (c->sync && c->slack_ns) {
@@ -1716,6 +1807,9 @@ static void *cdj_c6x_thread(void *opaque)
             }
             cdj_c6x_drain_upp_in();
             cdj_c6x_run_to(c->sync_target);
+            if (c->mhz_floor) {
+                cdj_c6x_govern(c);
+            }
             c->chunks_run++;
             qatomic_set(&c->dsp_cpu_ns, cdj_c6x_thread_cpu_ns());
             qemu_cond_broadcast(&c->done_cond);
@@ -2001,6 +2095,10 @@ void cdj_c6x_init(void)
      * busy-waits in its GPIO handshake, and at high rates that stall outruns
      * MAIN's handshake timeouts. */
     c->mhz_run = c->mhz;
+    /* CDJ_C6X_GOVERN=<MHz>: let the clock fall to what the host delivers, but
+     * not below this. Needs the lockstep thread. */
+    e = getenv("CDJ_C6X_GOVERN");
+    c->mhz_floor = e ? strtoull(e, NULL, 0) : 0;
     e = getenv("CDJ_C6X_MHZ_BOOT");
     if (e && strtoull(e, NULL, 0)) {
         c->mhz = strtoull(e, NULL, 0);

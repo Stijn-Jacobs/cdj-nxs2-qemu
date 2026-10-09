@@ -158,6 +158,13 @@ def test_deck_without_a_display_board_gets_no_display_update(tree):
     assert argv[1:3] == ["-M", "xdj1000"] and "CDJ_BF531_UPD" not in env
 
 
+def test_cdj900_deck_gets_its_display_processor_flash(tree):
+    m = model.load("cdj900")
+    assert m.images == ("main_unpacked.bin", "gui.flat")
+    argv, env = deck.command(tree, m, {"MAIN_QEMU": "/q/qemu-system-sh4"})
+    assert env["CDJ_M16C_GUI"].endswith("cdj900/gui.flat") and "CDJ_BF531_UPD" not in env
+
+
 def test_deck_without_a_display_board_plans_its_snapshot(tree, tmp_path):
     for mid in ("xdj1000", "xdj700", "cdj900nxs"):
         m = model.load(mid)

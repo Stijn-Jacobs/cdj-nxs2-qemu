@@ -70,6 +70,8 @@ def command(lay, m, env):
         env.update(dsp_env(lay, m, env))
     if m.display_upd:
         env["CDJ_BF531_UPD"] = host.native(os.path.join(folder, model.DISPLAY_UPD_IMAGE))
+    if m.display_flash:
+        env["CDJ_M16C_GUI"] = host.native(os.path.join(folder, m.display_flash))
     env["CDJ_PANEL_KEYSOCK"] = nonempty(env, "CDJ_PANEL_KEYSOCK", str(host.pick_udp_port(PANEL_KEY_PORT)))
     argv = [main_qemu(lay, env), "-M", m.main_machine, "-name", m.title,
             "-kernel", host.native(os.path.join(folder, "main_unpacked.bin")),
@@ -102,8 +104,12 @@ def plan_snapshot(lay, m, argv, env):
     if not (m.idle_s and m.load_steps):
         raise SystemExit("SNAPSHOT: models/%s.conf sets no MODEL_IDLE_S and MODEL_LOAD_STEPS to reach a point" % m.id)
     kernel = argv[argv.index("-kernel") + 1]
-    files = [argv[0], kernel] + ([env["CDJ_BF531_UPD"]] if m.display_upd else []) + [lay.usb_image]
-    point_dir = os.path.join(snapshot.root(lay.tmp, files, env.get("MAIN_ARGS", "")), point)
+    files = [argv[0], kernel] + [env[k] for k in ("CDJ_BF531_UPD", "CDJ_M16C_GUI") if k in env] + [lay.usb_image]
+    # The sound device and the DSP module shape the machine as well.
+    if os.path.isfile(env.get("C66X_JIT", "")):
+        files.append(env["C66X_JIT"])
+    audio = argv[argv.index("-audio") + 1] if "-audio" in argv else ""
+    point_dir = os.path.join(snapshot.root(lay.tmp, files, env.get("MAIN_ARGS", "") + " " + audio), point)
     if snapshot.saved(point_dir, ("main.vm",)):
         argv += ["-incoming", "file:%s/main.vm" % host.native(point_dir)]
         say("starting from the saved '%s' point %s" % (point, host.native(point_dir)))
@@ -132,7 +138,7 @@ def start(m, env, dry):
     say("%s: one window with the USB stick. Pro DJ Link, a second deck, MIDI controllers, mods and "
         "the virtual deck app are CDJ-2000NXS2 features and are skipped." % m.title)
     if dry:
-        knobs = ["CDJ_ATA", "CDJ_BF531_UPD", "CDJ_PANEL_KEYSOCK", "CDJ_DSP_AUDIO", "CDJ_C6747_IDLE",
+        knobs = ["CDJ_ATA", "CDJ_BF531_UPD", "CDJ_M16C_GUI", "CDJ_PANEL_KEYSOCK", "CDJ_DSP_AUDIO", "CDJ_C6747_IDLE",
                  "C66X_IDLE_ISR_FAST", "C66X_JIT"]
         say("would run:  %s %s" % (" ".join("%s=%s" % (k, env[k]) for k in knobs if k in env),
                                    " ".join(shlex.quote(a) for a in argv)))

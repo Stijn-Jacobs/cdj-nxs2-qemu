@@ -222,6 +222,11 @@ typedef struct CdjC6x {
     int64_t quantum_ns;
     uint64_t mhz;
     uint64_t mhz_run;               /* CDJ_C6X_MHZ, taken up once stage 1 boots */
+    uint64_t mhz_floor;             /* CDJ_C6X_GOVERN: lowest clock the governor picks, 0 = off */
+    struct {
+        int64_t wall;
+        uint64_t dsp_ns, host_ns, cycles;
+    } gov;
     uint64_t max_catchup_ns;
     bool running;
     bool halted;
@@ -358,6 +363,12 @@ typedef struct CdjC6x {
     uint64_t ahead_ns;              /* how far the DSP thread may lead MAIN */
     uint64_t prof_inval, prof_inval_ns, prof_spi, prof_spi_ns, prof_pcm_ns;
     int64_t report_at;
+    /* CDJ_REPORT=1: totals at the last 5 s timeline line, to difference. */
+    struct {
+        int64_t virt, wall;
+        uint64_t cycles, compiled, host_ns, wait_ns, skipped_ns;
+    } tl;
+    bool tl_on;
     c66x_stop last_stop;
     Notifier exit;
 } CdjC6x;

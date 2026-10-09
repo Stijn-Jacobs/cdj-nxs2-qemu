@@ -156,4 +156,7 @@ const char *cdj_getenv(const char *name);
 /* Statistics the models print at start and exit are off unless CDJ_REPORT=1. */
 bool cdj_report_enabled(void);
 void cdj_add_exit_report(Notifier *n);
+
+/* Ask the host to run the calling thread on a performance core. */
+void cdj_thread_prefer_fast_core(void);
 #endif

@@ -44,6 +44,12 @@
  * The lever is a position, not a key, so a press or hold of 0x0F/0x02 on
  * the key socket puts it in REV for as long as it lasts: the bit is
  * inverted after the presses are laid in, and reads 1 (FWD) otherwise.
+ *
+ * The CDJ-900 (fw 4.32) is the other way round: its handler at 0x0426C5E0
+ * writes the reverse flag 0x04FDA482 only when the bit rises (to 1 in one
+ * mode, 0 in the other), and the flag is 0 from the 0x0426C4F0 reset. A set
+ * bit from the first frame is a rising edge that reverses every PLAY, so its
+ * idle frame keeps the bit clear and gets no hook.
  */
 #define CDJ2000_PNL_FRAME 0x18
 #define CDJ2000_PNL_SYNC  0x8F
@@ -70,9 +76,11 @@ static uint8_t cdj2000_panel_link_byte(void *extra, uint8_t tx)
 void cdj2000_panel_init(MemoryRegion *sysmem, hwaddr addr,
                         const Cdj2000Display *display)
 {
-    static CdjPnlLinkHooks hooks = {
-        .build_last = cdj2000_panel_lever,
-    };
+    static CdjPnlLinkHooks hooks;
+
+    if (display->lever_fwd) {
+        hooks.build_last = cdj2000_panel_lever;
+    }
 
     if (display->link_byte) {
         cdj2000_panel_gui = display;

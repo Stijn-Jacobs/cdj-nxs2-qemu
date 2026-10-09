@@ -73,12 +73,14 @@ class Model:
         self.main_lzss = values["MODEL_MAIN_LZSS"]
         self.fw_steps = values["MODEL_FW_STEPS"].split()
         self.display_upd = values.get("MODEL_DISPLAY_UPD", "")
+        self.display_flash = values.get("MODEL_DISPLAY_FLASH", "")
         self.launch = values.get("MODEL_LAUNCH") or "rig"
         self.dsp_idle = values.get("MODEL_DSP_IDLE", "")
         self.dsp_isr_fast = values.get("MODEL_DSP_ISR_FAST", "")
         self.dsp_gen_args = values.get("MODEL_DSP_GEN_ARGS", "")
         self.idle_s = values.get("MODEL_IDLE_S", "")
         self.load_steps = values.get("MODEL_LOAD_STEPS", "")
+        self.rig_env = dict(w.split("=", 1) for w in values.get("MODEL_RIG_ENV", "").split())
         self.expected = tuple(tuple(line.split(None, 1))
                               for line in values.get("MODEL_EXPECTED", "").splitlines() if line.strip())
 
@@ -122,11 +124,14 @@ def load(model_id=None):
     launch = values.get("MODEL_LAUNCH") or "rig"
     if launch not in ("rig", "deck"):
         raise ModelError("model profile %s: MODEL_LAUNCH is '%s', not rig or deck" % (path, launch))
-    # The rig reads the images from extract/ itself, and a deck model sharing
-    # that folder would overwrite the NXS2's firmware.
-    if (launch == "rig") != (values["MODEL_EXTRACT"] == "extract"):
-        raise ModelError("model profile %s: a rig model installs to extract, a deck model to its own folder "
-                         "(MODEL_LAUNCH=deck is missing, or MODEL_EXTRACT is wrong)" % path)
+    # The rig starts the CDJ-2000NXS2's machines, and a deck model sharing
+    # extract/ would overwrite the NXS2's firmware.
+    if launch == "rig" and values["MODEL_MAIN_MACHINE"] != "cdj2000nxs2":
+        raise ModelError("model profile %s: only a model on the cdj2000nxs2 machine starts the rig "
+                         "(MODEL_LAUNCH=deck is missing)" % path)
+    if launch == "deck" and values["MODEL_EXTRACT"] == "extract":
+        raise ModelError("model profile %s: a deck model installs to its own folder, not extract "
+                         "(MODEL_EXTRACT is wrong)" % path)
     return Model(model_id, values)
 
 

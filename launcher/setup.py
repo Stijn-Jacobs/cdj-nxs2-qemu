@@ -118,7 +118,8 @@ def parse_args(argv):
             if i + 1 >= len(argv) or not argv[i + 1]:
                 sys.stderr.write("%s needs %s\n" % (a, what))
                 raise SystemExit(2)
-            if attr in ("djlink", "audio") and argv[i + 1].lower() not in ON_OFF:
+            if (attr in ("djlink", "audio") and argv[i + 1].lower() not in ON_OFF) or (
+                    attr == "relay" and not argv[i + 1].isdigit()):
                 sys.stderr.write("%s needs %s\n" % (a, what))
                 raise SystemExit(2)
             setattr(o, attr, argv[i + 1])
@@ -219,14 +220,16 @@ class Setup:
         known = model.list_models()
         stored = c["CDJ_MODEL"] or model.DEFAULT
         wanted = o.model
-        if not wanted:
-            wanted = stored
-            fresh = not os.path.isfile(self.lay.conf)
-            if con.interactive and (fresh or o.reconfigure or con.ask_yn(
-                    "player: %s. choose a different one?" % model.load(stored).title, "n")):
-                con.info("Players: %s" % ", ".join("%s (%s)" % (m, model.load(m).title) for m in known))
-                wanted = con.choose("which player?", stored, *known)
         try:
+            if not wanted:
+                wanted = stored
+                fresh = not os.path.isfile(self.lay.conf)
+                if con.interactive and (fresh or o.reconfigure or con.ask_yn(
+                        "player: %s. choose a different one?" % model.load(stored).title, "n")):
+                    titles = {m: model.load(m).title for m in known}
+                    con.info("Players: %s" % ", ".join("%s (%s)" % (m, t) for m, t in titles.items()))
+                    wanted = con.choose("which player?", stored, *known,
+                                        aliases={t.lower(): m for m, t in titles.items()})
             self.model = model.load(wanted)
         except model.ModelError as e:
             con.die(str(e))
@@ -971,7 +974,10 @@ class Setup:
 def ready(lay):
     if not os.path.isfile(lay.conf):
         return False
-    player = model.load(conf.load(lay.conf).get("CDJ_MODEL") or None)
+    try:
+        player = model.load(conf.load(lay.conf).get("CDJ_MODEL") or None)
+    except model.ModelError:
+        return False
     return firmware.installed(model.extract_dir(lay, player), player.id) and os.path.isfile(lay.usb_image)
 
 

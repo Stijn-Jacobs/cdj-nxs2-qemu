@@ -91,11 +91,14 @@ class Console:
     def ask_yn(self, q, default):
         return self.ask(q + " (y/n)", default).lower() in ("y", "yes")
 
-    def choose(self, q, default, *options):
+    def choose(self, q, default, *options, aliases=None):
+        """One of `options`; `aliases` maps other lowercase spellings to one."""
         while True:
-            a = self.ask("%s (%s)" % (q, " ".join(options)), default)
-            if a.lower() in options:
-                return a.lower()
+            a = self.ask("%s (%s)" % (q, " ".join(options)), default).lower()
+            if a in options:
+                return a
+            if aliases and a in aliases:
+                return aliases[a]
             if not self.interactive:
                 return default
             sys.stderr.write("  %splease answer one of: %s%s\n" % (self.Y, " ".join(options), self.N))

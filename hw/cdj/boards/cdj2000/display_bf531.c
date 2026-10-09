@@ -258,12 +258,14 @@ const Cdj2000Display cdj2000_display = {
     .sdram_size = 16 * MiB,
     .keys = cdj_bf531_keys,
     .key_count = ARRAY_SIZE(cdj_bf531_keys),
+    .lever_fwd = true,
 };
 
 const Cdj2000Display cdj2000nxs_display = {
     .sdram_size = 32 * MiB,
     .keys = cdj_bf531_nxs_keys,
     .key_count = ARRAY_SIZE(cdj_bf531_nxs_keys),
+    .lever_fwd = true,
 };
 
 /* CDJ_BF531_UPD=<path to a Pioneer GUI .UPD section> turns the display

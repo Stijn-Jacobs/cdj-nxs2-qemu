@@ -16,6 +16,7 @@ import os
 import subprocess
 
 from . import chain, host, mods
+from . import model as cdj_model
 from .chain import export_default, ifset, nonempty
 from .layout import Layout
 
@@ -79,6 +80,8 @@ def rig_env(env, tag, ndecks, frames):
     DHCP server (the Pro DJ Link group, or tap:<host ip>) when the rig should
     run one."""
     say, warn = chain.say, chain.err
+    for name, value in cdj_model.load().rig_env.items():
+        export_default(env, name, value)
     if env.get("NOSOUND", "0") != "1":
         # Ring/prefill/cap 3000/150/450 ms; a narrower band ping-pongs between
         # underruns and trims. The larger buffer rides over a host sink that
@@ -163,6 +166,10 @@ def rig_env(env, tag, ndecks, frames):
     # position; at 16 ms the Pro DJ Link beat sender misses a few beats. One
     # deck can afford 4 ms, two decks cannot.
     export_default(env, "CDJ_C6X_QUANTUM_US", "4000" if str(ndecks) == "1" else "16000")
+    # The start-up burst needs more DSP cycles per second than a slow host has, which
+    # stalls the machine's clock and starves the audio sink. The DSP clock may fall to
+    # what the host delivers, down to this many MHz.
+    export_default(env, "CDJ_C6X_GOVERN", "100")
     # A new heartbeat supersedes the queued ones on the GUI side, so keys reach
     # the screen quickly. 16, not 2: a queue of 2 starves the GUI link.
     export_default(env, "CDJ_SPILINK_FRESH", "16")

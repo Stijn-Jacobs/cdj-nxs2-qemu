@@ -89,6 +89,9 @@ struct Cdj2000Display {
     bool (*init)(void);
     bool (*link_selected)(void);
     uint8_t (*link_byte)(uint8_t tx);
+    /* The firmware reads report byte 0x0F bit 0x02 as the DIRECTION lever in
+     * its FWD position (1 = forward); see panel.c. */
+    bool lever_fwd;
 };
 
 extern const Cdj2000Display cdj2000_display, cdj2000nxs_display;

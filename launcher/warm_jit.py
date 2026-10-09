@@ -40,7 +40,11 @@ def main(argv):
         else:
             tag = a
     lay = Layout()
-    m = model.load()
+    try:
+        m = model.load()
+    except model.ModelError as e:
+        chain.err(str(e))
+        return 1
     if m.has_dsp_module:
         return record_deck(lay, m, tag, dry)
     deck = tag + "1"

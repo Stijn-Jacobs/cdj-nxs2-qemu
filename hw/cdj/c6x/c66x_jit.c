@@ -751,6 +751,13 @@ void c66x_jit_report(const c66x_core *c, char *buf, size_t len)
              j->auto_batch, j->auto_modules, j->auto_failed);
 }
 
+uint64_t c66x_jit_cycles(const c66x_core *c)
+{
+    const struct c66x_jit *j = c->jit;
+
+    return j ? j->cycles + j->kcycles + j->dcycles + j->lcycles + j->qcycles : 0;
+}
+
 void jit_free(c66x_core *c)
 {
     struct c66x_jit *j = c->jit;

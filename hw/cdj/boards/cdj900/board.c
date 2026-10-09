@@ -9,7 +9,7 @@
  * same two C6727 images byte for byte at 0x04001000. So the board is the
  * CDJ-2000's; what differs is where the linker put the firmware's globals.
  * The GUI processor is an M16C/63, not the CDJ-2000's BF531 (display_m16c.c):
- * it shares SCIF2 with the panel, and MAIN boots without a display unless
+ * it shares SCIF2 with the panel, and MAIN does not start unless
  * CDJ_M16C_GUI names its flash image.
  */
 

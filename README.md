@@ -25,7 +25,7 @@ player's own DSP program on an emulated DSP. Start two and they find each other
 on an emulated Pro DJ Link network, where MASTER and SYNC work between them.
 Plug in a MIDI controller and it plays them, or use the [virtual deck](#virtual-deck).
 
-**The family is growing.** Five older players now have experimental emulation,
+**The family is growing.** Seven older players now have experimental emulation,
 with further models in development. Support varies by model and branch; the
 [status table](#supported-players) separates usable features from ongoing work.
 
@@ -61,9 +61,7 @@ chopped (it is on by default; `NOSOUND=1` turns it off). Screenshots show the fi
 | **XDJ-700** | 🧪 Experimental | The XDJ-1000's board: the same as above. |
 | **CDJ-900NXS** | 🧪 Experimental | The XDJ-1000's board. Boots, loads a track from USB and plays it, as slowly as the XDJ-1000: the waveform moves and the time counts down. |
 | **XDJ-1000MK2** | 🧪 Experimental | The XDJ-1000's board on its own firmware. Loads a track from USB and plays it as slowly as the XDJ-1000; PLAY pauses and resumes, and CUE returns to the cue point when AUTO CUE is on. |
-
-**On other development branches:** **CDJ-900** bring-up is in progress. It is
-not included in this checkout's setup menu.
+| **CDJ-900** | 🧪 Experimental | The CDJ-2000's platform with a smaller display. Boots, loads a track from USB and plays it: the overview playhead moves and the time counts down. The window shows its dot-matrix display (source line, track info, overview) with the time readout below it. |
 
 Everything below, from the quick start on, describes the CDJ-2000NXS2 unless it
 says otherwise.
@@ -140,13 +138,13 @@ The deck window opens and the CDJ-2000NXS2 boots to its screen. Click the window
 press `U` for the USB stick, `↓` to a track, `Enter` to load it and `Space` to
 play (every key: [Keyboard](#keyboard)). Click the screen to touch it.
 
-**Other players:** the CDJ-2000, CDJ-2000NXS, XDJ-1000, XDJ-700 and CDJ-900NXS
+**Other players:** the CDJ-2000, CDJ-2000NXS, CDJ-900, XDJ-1000, XDJ-700, XDJ-1000MK2 and CDJ-900NXS
 start from the same two commands with `--model`; plain `./setup.sh` also asks
 which player you want (Enter keeps the CDJ-2000NXS2):
 
 ```sh
 ./setup.sh --model cdj2000 --firmware path/to/C2KGUI.UPD   # the others of the four files beside it
-./start.sh --model cdj2000                                  # or cdj2000nxs, with its C2KNXS.UPD
+./start.sh --model cdj2000                                  # or cdj2000nxs, with its C2KNXS.UPD; cdj900 takes the four C900*.UPD
 ./setup.sh --model xdj1000 --firmware path/to/XDJ1000.UPD  # v1.13; xdj700 takes XDJ700.UPD v1.15,
 ./start.sh --model xdj1000                                  # cdj900nxs C900NXS.UPD v1.31
 ```
@@ -746,6 +744,7 @@ so it takes as long as `decks2`; after that a deck takes a minute and a half.
 | `hw/cdj/common/` | what every board shares: the boot (DRAM, NOR flash, image, reset vector), the SH-4 core blocks and the board descriptor (`cdj_common.h`) |
 | `hw/cdj/boards/nxs2/` | the CDJ-2000NXS2: its MAIN board, one file per device, and the display board (`sh7269gui.c`); `diag/` holds the diagnostic hooks, `standin/` historical models that are off by default |
 | `hw/cdj/boards/cdj2000/` | the CDJ-2000 and CDJ-2000NXS: MAIN board (Renesas SH7763), Blackfin display and C6727 / C6747 DSP models, experimental |
+| `hw/cdj/boards/cdj900/` and `hw/cdj/m16c/` | the CDJ-900: the CDJ-2000's MAIN board with its M16C display micro (core, SoC and the display model), experimental |
 | `hw/cdj/boards/xdj1000/` | the XDJ-1000, XDJ-700 and CDJ-900NXS: their SH7724 MAIN board with its LCD controller and graphics blocks, experimental |
 | `mods/` | the [mods](#mods) registry and the display- and MAIN-firmware patches behind them |
 | `models/` | one profile per player, read by the firmware and launch scripts (see `models/README.md`) |

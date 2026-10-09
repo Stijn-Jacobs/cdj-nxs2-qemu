@@ -58,6 +58,7 @@ STEPS = {
     "srec_coverage": lambda m: ("srec_coverage.py", ["extract/section%s.bin" % m.main_section]),
     "lzss_decode": lambda m: ("lzss_decode.py", ["extract/section%s.sparse.bin" % m.main_section, m.main_lzss]),
     "gui_decode": lambda m: ("gui_decode.py", ["extract/section%s.bin" % m.gui_section, "extract/gui_unpacked.bin"]),
+    "srec_flat": lambda m: ("srec_flat.py", ["extract/section%s.bin" % m.gui_section, "extract/" + m.display_flash]),
     "gui_resources": lambda m: ("gui_resources.py", ["extract/resblob.bin"]),
     "gui_artwork": lambda m: ("gui_artwork.py", ["extract/artblob.bin"]),
     "make_settings": lambda m: ("make_settings.py", ["extract/settings.bin"]),

@@ -407,6 +407,16 @@ static inline int pending_interrupt(c66x_core *c)
     return __builtin_ctz(en);
 }
 
+/* Whether pending_interrupt can be nonzero: a flag counts only when IER enables
+ * it and, outside the NMI, GIE is set. The generated code asks this every
+ * cycle, and the firmware spends most of its time in interrupt handlers with
+ * GIE off and a flag waiting. */
+static inline int irq_possible(const c66x_core *c)
+{
+    uint32_t reachable = (c->cr[CR_TSR] & TSR_GIE) ? 0xfff0u | IER_NMIE : IER_NMIE;
+    return (c->ifr & c->cr[CR_IER] & reachable) != 0;
+}
+
 /* A region's commit of the ring slot landing now, for writes scheduled before
  * the region was entered (commit_writes' ring half). Returns 1 when it
  * committed a control-register write, after which an interrupt may be

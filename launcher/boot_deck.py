@@ -63,11 +63,10 @@ class Deck:
     def _plan(self):
         env, lay, tag, profile = self.env, self.lay, self.tag, self.profile
         tmp = lay.tmp
-        extract_n = host.native(lay.extract)
-        # Only the two kernel images live under the model's own folder; the
-        # flash image, the USB medium and the GUI archives are the
-        # CDJ-2000NXS2's own, which is the only model this launcher runs (a
-        # model still in bring-up boots MAIN alone, with boot_main.sh).
+        # The kernel images and the flash image live under the model's own
+        # folder; the USB medium and the GUI archives are shared by the models
+        # on the CDJ-2000NXS2 platform, which are the ones this launcher runs
+        # (a model still in bring-up boots MAIN alone, with boot_main.sh).
         model_extract_n = host.native(cdj_model.extract_dir(lay, profile))
         sfx = host.exe_suffix()
         home = host.home()
@@ -133,7 +132,7 @@ class Deck:
         # PDJ0000001XX).
         playerno = env.get("PLAYERNO", "").replace("%N%", n)
         serial = env.get("SERIAL", "").replace("%N%", n)
-        flash = extract_n + "/flash.bin"
+        flash = model_extract_n + "/flash.bin"
         snap = "snapshot=on"
         if nonempty(env, "PERSIST", "0") == "1":
             fl = os.path.join(lay.extract, "flash-%s.bin" % tag)
@@ -141,7 +140,7 @@ class Deck:
                 if playerno:
                     self.mint = self._mint_argv(playerno, serial, fl)
                 else:
-                    self.flash_copy = (os.path.join(lay.extract, "flash.bin"), fl)
+                    self.flash_copy = (os.path.join(cdj_model.extract_dir(lay, profile), "flash.bin"), fl)
                 self.persist_new = fl
             flash = host.native(fl)
             snap = "snapshot=off"
@@ -202,7 +201,7 @@ class Deck:
         env.update({"CDJ_AREA4": "1", "CDJ_DSP_LINK": "1", "CDJ_DSP_READY": "1", "CDJ_DMA1_IEACK": "1",
                     # Subsystem 5 (E-7206 AUTH CHIP ERROR) needs IIC0 to answer 0x10.
                     "CDJ_IIC_SLAVE": "1", "CDJ_USB_OC": "1"})
-        export_default(env, "CDJ_IIC_ADDR", "0x30,0x2c")
+        export_default(env, "CDJ_IIC_ADDR", "0x30,0x2c,0x49")
         export_default(env, "CDJ_IIC_CH", "1")
         env["CDJ_GUI_VDC_SCANOUT"] = "1"
         env["USB_MEDIA"] = "1"
@@ -315,8 +314,10 @@ class Deck:
             for d, dirs, names in os.walk(os.path.join(self.lay.emu, "mods")):
                 dirs[:] = sorted(n for n in dirs if n != "__pycache__")
                 sources += [os.path.join(d, n) for n in sorted(names)]
-        root = snapshot.root(self.lay.tmp, [self.main_qemu, self.gui_qemu, media_src] + images + sources,
-                             ",".join(mods))
+        # A different audio device or DSP module is a different machine too.
+        module = [env["C66X_JIT"]] if os.path.isfile(env.get("C66X_JIT", "")) else []
+        root = snapshot.root(self.lay.tmp, [self.main_qemu, self.gui_qemu, media_src] + images + sources + module,
+                             ",".join(mods) + " " + env.get("CDJ_AUDIODEV", ""))
         env["SNAPSHOT_ROOT"] = host.native(root)
         point_dir = os.path.join(root, point) if point else ""
         if point and snapshot.saved(point_dir):
@@ -362,7 +363,8 @@ class Deck:
 
     def _mint_argv(self, playerno, serial, out):
         argv = host.python_argv() + [os.path.join(self.lay.scripts, "firmware", "player_flash.py"),
-                                      playerno, out, os.path.join(self.lay.extract, "flash.bin")]
+                                      playerno, out,
+                                      os.path.join(cdj_model.extract_dir(self.lay, self.profile), "flash.bin")]
         return argv + ["--serial", serial] if serial else argv
 
     def _display(self):
@@ -656,9 +658,10 @@ def main(argv):
     if not profile.gui_machine:
         chain.err("boot_deck.sh: %s has no GUI board yet; use scripts/run/boot_main.sh" % profile.title)
         return 1
-    if os.environ.get("MAIN_BOOT") == "flash" and not flash_has_bootloader(os.path.join(lay.extract, "flash.bin")):
-        chain.err("[%s] extract/flash.bin holds no bootloader (made by an older setup); run "
-                  "./setup.sh --firmware <C2KNXS2.UPD> again, or leave MAIN_BOOT unset" % tag)
+    if os.environ.get("MAIN_BOOT") == "flash" and not flash_has_bootloader(
+            os.path.join(cdj_model.extract_dir(lay, profile), "flash.bin")):
+        chain.err("[%s] %s/flash.bin holds no bootloader (made by an older setup); run "
+                  "./setup.sh --firmware <C2KNXS2.UPD> again, or leave MAIN_BOOT unset" % (tag, profile.extract))
         return 1
     deck = Deck(tag, dict(os.environ), lay, profile)
     if not deck.start():

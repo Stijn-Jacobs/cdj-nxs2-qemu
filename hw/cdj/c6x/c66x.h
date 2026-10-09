@@ -153,6 +153,8 @@ uint64_t c66x_state_hash(const c66x_core *c);
 /* One line on the compiled code (C66X_JIT / C66X_JIT_AUTO): regions, entries,
  * cycles run compiled, verify failures, kernels. Empty when none is loaded. */
 void c66x_jit_report(const c66x_core *c, char *buf, size_t len);
+/* Cycles run in compiled code so far, of every kind. */
+uint64_t c66x_jit_cycles(const c66x_core *c);
 
 /* Snapshots. The image holds everything architectural and every write or
  * branch in flight; decoded code, the loop buffer and the busy-wait

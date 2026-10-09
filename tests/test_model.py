@@ -16,7 +16,7 @@ from launcher import model  # noqa: E402
 
 
 def test_lists_the_committed_profiles():
-    assert model.list_models() == ["cdj2000", "cdj2000nxs", "cdj2000nxs2", "cdj900nxs", "xdj1000", "xdj1000mk2", "xdj700"]
+    assert model.list_models() == ["cdj2000", "cdj2000nxs", "cdj2000nxs2", "cdj900", "cdj900nxs", "xdj1000", "xdj1000mk2", "xdj700"]
 
 
 def test_default_is_the_nxs2():
@@ -47,11 +47,20 @@ def test_every_profile_names_its_images_and_decodes_the_sparse_section():
             assert "srec_coverage" in m.fw_steps[:m.fw_steps.index("lzss_decode")], mid
 
 
-def test_only_the_nxs2_starts_the_two_board_rig():
+def test_the_nxs2_platform_models_start_the_two_board_rig():
     # A profile without MODEL_LAUNCH=deck falls back to the rig, which boots
-    # the NXS2 whatever the title says.
+    # the NXS2 machines whatever the title says.
     rigs = [mid for mid in model.list_models() if model.load(mid).is_rig]
     assert rigs == [model.DEFAULT]
+
+
+def test_deck_model_may_not_share_the_default_extract_folder(tmp_path, monkeypatch):
+    text = open(os.path.join(model.models_dir(), "cdj2000.conf"), encoding="utf-8").read()
+    (tmp_path / "shared.conf").write_text(text.replace("MODEL_EXTRACT=extract/cdj2000", "MODEL_EXTRACT=extract"),
+                                          encoding="utf-8")
+    monkeypatch.setattr(model, "models_dir", lambda: str(tmp_path))
+    with pytest.raises(model.ModelError, match="deck model installs to its own folder"):
+        model.load("shared")
 
 
 def test_cdj2000_update_is_four_files_in_section_order():

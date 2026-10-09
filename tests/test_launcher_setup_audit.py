@@ -183,7 +183,7 @@ def test_onoff_reads_upper_case():
 def test_every_profile_launches_and_installs_consistently():
     for mid in model.list_models():
         m = model.load(mid)
-        assert m.is_rig == (m.extract == "extract"), mid
+        assert m.is_rig == (m.main_machine == "cdj2000nxs2"), mid
         assert m.images, mid
 
 
@@ -197,3 +197,65 @@ def test_a_profile_without_its_launch_line_is_refused(tmp_path, monkeypatch):
     with pytest.raises(model.ModelError):
         model.load("broken")
 
+
+def test_a_snapshot_of_a_model_with_no_steps_is_refused(tmp_path):
+    from launcher import deck
+
+    m = model.load("cdj900")
+    assert not (m.idle_s and m.load_steps)
+    with pytest.raises(SystemExit):
+        deck.plan_snapshot(None, m, [], {"SNAPSHOT": "idle"})
+
+
+def test_a_player_title_typed_at_the_prompt_picks_that_player(monkeypatch):
+    monkeypatch.setattr(sys, "stdin", io.StringIO("CDJ-2000NXS\n"))
+    con = Console(dry=False, interactive=True)
+    known = model.list_models()
+    aliases = {model.load(m).title.lower(): m for m in known}
+    assert con.choose("which player?", "cdj2000nxs2", *known, aliases=aliases) == "cdj2000nxs"
+
+
+def test_a_relay_port_that_is_not_a_number_is_refused(capsys):
+    with pytest.raises(SystemExit) as e:
+        parse_args(["--relay-port", "abc"])
+    assert e.value.code == 2
+    assert "--relay-port needs a number" in capsys.readouterr().err
+    assert parse_args(["--relay-port", "7300"]).relay == "7300"
+
+
+def test_an_unknown_model_in_the_environment_is_reported(monkeypatch, capsys):
+    from launcher import warm_jit
+
+    monkeypatch.setenv("CDJ_MODEL", "bogus")
+    assert warm_jit.main([]) == 1
+    err = capsys.readouterr().err
+    assert "unknown model 'bogus'" in err and "cdj2000nxs2" in err
+
+
+def test_a_stored_unknown_model_stops_setup_with_the_list(tmp_path):
+    s = _setup(tmp_path, "cdj2000nxs2", stored={"CDJ_MODEL": "bogus"})
+    s.c["CDJ_MODEL"] = "bogus"
+    s.con = Console(dry=False, interactive=True)
+    with pytest.raises(SystemExit):
+        s.choose_model()
+
+
+def test_a_snapshot_is_keyed_by_the_audio_device_and_the_dsp_module(tmp_path):
+    from types import SimpleNamespace
+
+    from launcher import deck
+
+    m = model.load("xdj1000")
+    lay = SimpleNamespace(tmp=str(tmp_path), run=str(tmp_path), usb_image=str(tmp_path / "usb.img"))
+    for n in ("qemu", "kernel", "usb.img", "m1.so", "m2.so"):
+        (tmp_path / n).write_bytes(n.encode())
+
+    def point_dir(audio, module):
+        argv = [str(tmp_path / "qemu"), "-kernel", str(tmp_path / "kernel")] + (["-audio", audio] if audio else [])
+        env = {"SNAPSHOT": "idle", "C66X_JIT": str(tmp_path / module) if module else ""}
+        return deck.plan_snapshot(lay, m, argv, dict(env))[-1]
+
+    assert point_dir("a", "m1.so") == point_dir("a", "m1.so")
+    assert point_dir("a", "m1.so") != point_dir("b", "m1.so")
+    assert point_dir("a", "m1.so") != point_dir("a", "m2.so")
+    assert point_dir("a", "m1.so") != point_dir("a", "")

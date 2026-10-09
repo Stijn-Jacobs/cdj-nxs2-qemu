@@ -3,8 +3,8 @@
 #define CDJ900_DISPLAY_M16C_H
 #include "cdj_common.h"
 
-/* The M16C/63 display processor in its own window. Does nothing and returns
- * false unless CDJ_M16C_GUI names its flash image. */
+/* The M16C/63 display processor in its own window. Exits unless
+ * CDJ_M16C_GUI names its flash image. */
 bool cdj900_gui_init(void);
 
 /* Runs the chip up to MAIN's clock; called before the chip-select wire

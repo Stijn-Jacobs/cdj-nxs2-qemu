@@ -258,7 +258,7 @@ static int fast_cycles(c66x_core *c, uint64_t end, c66x_stop *stop)
          * changes nothing the general loop would do: gate on a deliverable one. */
         if (c->spl.active | c->int_entry | c->idle | c->spl_irq_pending
             | (c->trace != NULL) | (c->cycle < c->pm_resume_at)
-            || (c->ifr && pending_interrupt(c)))
+            || (irq_possible(c) && pending_interrupt(c)))
             return FAST_HANDOFF;
         if (c->mcnop > 0) {
             /* A run of NOP cycles whose commits would all be empty and in which

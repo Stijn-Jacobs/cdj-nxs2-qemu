@@ -13,7 +13,12 @@
  * the handler writes 0 over them.
  *
  * The window shows the panel's 800x480 RGB565 frame buffer, read from the
- * bus address in LDSA1R with the line stride in LDMLSR.
+ * bus address in LDSA1R with the line stride in LDMLSR. The firmware draws
+ * each frame into the buffer that is not on screen, writes its address to
+ * the second start address at 0x2430 and then sets or clears bit 1 of
+ * LDRCNTR, which swaps the scan-out between the two start addresses: it
+ * alternates 0x14600000 and 0x146bb800 and writes 2 for the second. Scanning
+ * only LDSA1R showed the buffer the firmware was still drawing into.
  */
 #define LCDC_BASE       0xFE940000
 #define LCDC_SIZE       0x10000
@@ -25,6 +30,9 @@
 #define LDINTR_STATUS   0x7f
 #define LDINTR_ENABLE_SHIFT 8
 #define LDSA1R          0x430
+#define LDSA1R_SET2     0x2430
+#define LDRCNTR         0x478
+#define LDRCNTR_SET2    (1u << 1)
 #define LDMLSR          0x438
 #define LCD_W           800
 #define LCD_H           480
@@ -89,7 +97,8 @@ static void lcdc_gfx_update(void *opaque)
 {
     XdjLcdc *s = opaque;
     uint32_t *dst = surface_data(qemu_console_surface(s->con));
-    hwaddr base = ldl_le_p(&s->reg[LDSA1R]);
+    bool set2 = ldl_le_p(&s->reg[LDRCNTR]) & LDRCNTR_SET2;
+    hwaddr base = ldl_le_p(&s->reg[set2 ? LDSA1R_SET2 : LDSA1R]);
     uint32_t stride = ldl_le_p(&s->reg[LDMLSR]);
     uint16_t line[LCD_W];
 

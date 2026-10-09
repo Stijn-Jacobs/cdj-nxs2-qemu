@@ -158,6 +158,7 @@ static void cdj_pfc_write(void *opaque, hwaddr off, uint64_t val, unsigned size)
 {
     CdjPfcState *s = opaque;
 
+    cdj_thread_prefer_fast_core();
     for (unsigned i = 0; i < size && off + i < CDJ_PFC_SIZE; i++) {
         uint8_t nv = (val >> (8 * i)) & 0xFF;
         if (!s->wr_count[off + i] || s->reg[off + i] != nv) {

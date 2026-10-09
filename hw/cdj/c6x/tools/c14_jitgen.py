@@ -470,7 +470,7 @@ class RegionGen:
         if not root:
             e("    if (__builtin_expect(c->cycle >= end, 0)) { c->jit_exit[%d]++; goto X%d; }" % (EXIT_BUDGET, label))
             e("    if (__builtin_expect(c->code_gen != gen, 0)) { c->jit_exit[%d]++; goto X%d; }" % (EXIT_GEN, label))
-            e("    if (__builtin_expect(c->ifr && pending_interrupt(c), 0)) { c->jit_exit[%d]++; goto X%d; }"
+            e("    if (__builtin_expect(irq_possible(c) && pending_interrupt(c), 0)) { c->jit_exit[%d]++; goto X%d; }"
               % (EXIT_IRQ, label))
             # the commit: writes from before entry, this cycle's ring slot, last cycle's delay-0 writes
             ctrl = []
@@ -491,7 +491,7 @@ class RegionGen:
                     e("    " + guarded(w["flag"], "JIT_API(c)->ctrl_write(c, %d, %s);" % (w["idx"], w["val"])))
                     ctrl.append(w["flag"] or "1")
             if ctrl:
-                e("    if (__builtin_expect((%s) && c->ifr && pending_interrupt(c), 0)) { c->jit_exit[%d]++; goto P%d; }"
+                e("    if (__builtin_expect((%s) && irq_possible(c) && pending_interrupt(c), 0)) { c->jit_exit[%d]++; goto P%d; }"
                   % (" || ".join(ctrl), EXIT_POSTIRQ, label))
                 post_used = True
             ring = [dict(w) for w in st.ring if w["land"] > 0]
@@ -1568,7 +1568,7 @@ class KernelGen(RegionGen):
             else:
                 fast = "c->cr[CR_ILC] != 0"
                 step = "c->cr[CR_ILC]--; "
-            e("    if (__builtin_expect(%s && !(c->ifr && pending_interrupt(c)), 1)) {" % fast)
+            e("    if (__builtin_expect(%s && !(irq_possible(c) && pending_interrupt(c)), 1)) {" % fast)
             e("        %sc->spl.last_iter = (int)((c->cycle - c->spl.t0 + 1) / %d);" % (step, k.ii))
             e("    } else {")
             e("        JIT_API(c)->spl_end_cycle(c);")
@@ -1840,7 +1840,7 @@ class LoopGen(KernelGen):
             if boundary and phase == "L" and not early3:
                 tests.append("c->cr[CR_ILC] == 0")        # ends before the steady state
             if boundary and (phase == "S" or idx >= k.dynlen - 1):
-                tests.append("(c->ifr && pending_interrupt(c))")   # may drain for an interrupt
+                tests.append("(irq_possible(c) && pending_interrupt(c))")   # may drain for an interrupt
             if tests:
                 e("    if (__builtin_expect(%s, 0)) { c->jit_exit[%d]++; goto P%d; }"
                   % (" || ".join(tests), EXIT_STUB, label))

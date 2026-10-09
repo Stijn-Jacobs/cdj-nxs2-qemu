@@ -1,5 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "cdj_common.h"
+#ifdef __APPLE__
+#include <pthread/qos.h>
+#endif
 /*
  * Cached getenv(). The board reads many knobs on per-access paths, and
  * msvcrt's getenv() walks the whole environment each time.
@@ -119,6 +122,24 @@ bool cdj_report_enabled(void)
     const char *on = getenv("CDJ_REPORT");
 
     return on && strcmp(on, "0");
+}
+
+/*
+ * Apple Silicon schedules a thread at the default QoS onto an efficiency core
+ * when the load is light, and the DSP and MAIN's vCPU thread both need a
+ * performance core for the whole run. Elsewhere this does nothing. It may be
+ * called from every access on a hot path: only the first call per thread acts.
+ */
+void cdj_thread_prefer_fast_core(void)
+{
+#ifdef __APPLE__
+    static __thread bool done;
+
+    if (!done) {
+        done = true;
+        pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+    }
+#endif
 }
 
 void cdj_add_exit_report(Notifier *n)
