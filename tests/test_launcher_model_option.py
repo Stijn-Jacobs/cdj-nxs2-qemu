@@ -214,3 +214,8 @@ def test_deck_dsp_env_comes_from_the_profile(tree, tmp_path):
     assert deck.dsp_env(lay, m, {})["C66X_JIT"].endswith("curated-cdj2000nxs/m.so")
     assert "C66X_JIT" not in deck.dsp_env(lay, m, {"MODULE": "none"})
     assert deck.dsp_env(lay, m, {"C66X_IDLE_ISR_FAST": "0"})["C66X_IDLE_ISR_FAST"] == "0"
+
+
+def test_cdj2000_names_its_idle_loop_for_the_c6727(tree):
+    knobs = deck.dsp_env(tree, model.load("cdj2000"), {})
+    assert knobs == {"CDJ_C6727_IDLE": "0x80047B80:0x10005000:0x10006600", "C66X_IDLE_ISR_FAST": "1"}

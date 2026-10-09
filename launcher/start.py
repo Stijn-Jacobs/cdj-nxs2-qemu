@@ -278,8 +278,10 @@ def _start_deck(lay, player, c, dry):
     env = dict(os.environ)
     if lay.packaged:
         env["MAIN_QEMU"] = lay.qemu_binaries()[0]
-    elif c["QEMU_BUILD"] and not env.get("MAIN_QEMU"):
-        env["QEMU_BUILD"] = c["QEMU_BUILD"]
+    elif not env.get("MAIN_QEMU"):
+        for k in ("QEMU_BUILD", "QEMU_EB_BUILD"):
+            if c[k]:
+                env[k] = c[k]
     if c["CDJ_AUDIO"] != "1":
         env["NOSOUND"] = "1"
     if not _offer_rebuild(lay, env, dry):

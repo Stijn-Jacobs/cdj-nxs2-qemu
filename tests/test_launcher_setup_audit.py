@@ -57,6 +57,16 @@ def test_an_older_players_start_has_sound_after_its_own_setup(tmp_path, monkeypa
     assert seen.get("NOSOUND") != "1"
 
 
+def test_an_older_players_stale_check_looks_at_the_recorded_build_trees(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(start.deck, "start", lambda player, env, dry: 0)
+    monkeypatch.setattr(start, "_stale_builds", lambda lay, env: seen.update(env) or [])
+    monkeypatch.delenv("MAIN_QEMU", raising=False)
+    c = conf.with_start_defaults({"CDJ_MODEL": "cdj900", "QEMU_BUILD": "/x/build", "QEMU_EB_BUILD": "/x/build-eb"})
+    start._start_deck(Layout(), model.load("cdj900"), c, True)
+    assert (seen["QEMU_BUILD"], seen["QEMU_EB_BUILD"]) == ("/x/build", "/x/build-eb")
+
+
 def test_a_new_build_dir_is_saved_when_the_setup_is_kept(tmp_path):
     stored = {"CDJ_DECKS": "1", "CDJ_MODEL": "cdj2000nxs2", "QEMU_BUILD": "/old", "QEMU_EB_BUILD": "/old-eb"}
     s = _setup(tmp_path, "cdj2000nxs2", stored)

@@ -384,6 +384,34 @@ void cdj900_gui_link_end(void)
     s->link_len = 0;
 }
 
+/*
+ * Host keyboard to front panel (cdj_gui_keys.c). MAIN decodes the same report
+ * bytes as the CDJ-2000; the 900 has no SD slot, so the source keys are LINK,
+ * USB and DISC. Keys seen to act on the screen are confirmed; CUE and BACK did
+ * nothing and TRACK + has no second track to go to on the test stick.
+ */
+static const CdjGuiKey cdj900_keys[] = {
+    { Q_KEY_CODE_SPC,           0x10, 0x01, "PLAY/PAUSE",   true  },
+    { Q_KEY_CODE_C,             0x10, 0x02, "CUE",          false },
+    { Q_KEY_CODE_RET,           0x11, 0x01, "ROTARY PUSH",  true  },
+    { Q_KEY_CODE_KP_ENTER,      0x11, 0x01, "ROTARY PUSH",  true  },
+    { Q_KEY_CODE_RIGHT,         0x11, 0x01, "ROTARY PUSH",  true  },
+    { Q_KEY_CODE_COMMA,         0x12, 0x02, "TRACK -",      true  },
+    { Q_KEY_CODE_DOT,           0x12, 0x04, "TRACK +",      false },
+    { Q_KEY_CODE_BRACKET_LEFT,  0x12, 0x08, "SEARCH -",     true  },
+    { Q_KEY_CODE_BRACKET_RIGHT, 0x12, 0x10, "SEARCH +",     true  },
+    { Q_KEY_CODE_L,             0x13, 0x01, "LINK",         true  },
+    { Q_KEY_CODE_U,             0x13, 0x02, "USB",          true  },
+    { Q_KEY_CODE_D,             0x13, 0x08, "DISC",         true  },
+    { Q_KEY_CODE_B,             0x14, 0x01, "BROWSE",       true  },
+    { Q_KEY_CODE_T,             0x14, 0x02, "TAG LIST",     true  },
+    { Q_KEY_CODE_I,             0x14, 0x04, "INFO",         true  },
+    { Q_KEY_CODE_M,             0x14, 0x08, "MENU",         true  },
+    { Q_KEY_CODE_ESC,           0x14, 0x10, "BACK",         false },
+    { Q_KEY_CODE_LEFT,          0x14, 0x10, "BACK",         false },
+    { Q_KEY_CODE_BACKSPACE,     0x14, 0x10, "BACK",         false },
+};
+
 /* CDJ_M16C_GUI=<GUI flash image, based at 0xC0000> is the display
  * processor's firmware; MAIN waits on its answers, so the board refuses to
  * start without it. CDJ_M16C_LINK_LOG=<n> logs the
@@ -421,6 +449,7 @@ bool cdj900_gui_init(void)
         LCD_COLS * SCALE, (LCD_ROWS + TIME_ROWS) * SCALE));
     qemu_console_resize(s->con, LCD_COLS * SCALE,
                         (LCD_ROWS + TIME_ROWS) * SCALE);
+    cdj_gui_keys_init(cdj900_keys, ARRAY_SIZE(cdj900_keys), "cdj900");
     cdj_gui_pointer_init();
     s->dirty = true;
     qemu_add_exit_notifier(&exit_notifier);

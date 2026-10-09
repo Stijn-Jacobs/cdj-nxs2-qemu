@@ -16,7 +16,16 @@ from launcher import model  # noqa: E402
 
 
 def test_lists_the_committed_profiles():
-    assert model.list_models() == ["cdj2000", "cdj2000nxs", "cdj2000nxs2", "cdj900", "cdj900nxs", "xdj1000", "xdj1000mk2", "xdj700"]
+    assert model.list_models() == ["cdj2000nxs2", "xdj1000mk2", "xdj700", "xdj1000", "cdj900nxs",
+                                  "cdj2000nxs", "cdj900", "cdj2000"]
+
+
+def test_default_first_then_newest_first():
+    released = {m: model._released(m) for m in model.list_models()}
+    rest = model.list_models()[1:]
+    assert model.list_models()[0] == model.DEFAULT
+    assert rest == sorted(rest, key=lambda m: -released[m])
+    assert released["cdj900"] > released["cdj2000"]
 
 
 def test_default_is_the_nxs2():
@@ -77,7 +86,7 @@ def test_cdj_model_env_names_the_profile(monkeypatch):
 
 
 def test_unknown_model_names_the_known_ones():
-    with pytest.raises(model.ModelError, match=r"unknown model 'nope'; known: cdj2000 "):
+    with pytest.raises(model.ModelError, match=r"unknown model 'nope'; known: cdj2000nxs2 "):
         model.load("nope")
 
 
@@ -118,6 +127,11 @@ def test_dsp_module_models_name_their_idle_loop():
         assert m.dsp_isr_fast == "1"
         assert m.dsp_gen_args.split() == ["--wide-mem", "--ret-predict", "16"]
         assert m.module_dir == "curated-" + mid
-    for mid in ("cdj2000nxs2", "cdj2000", "xdj700"):
+    c2k = model.load("cdj2000")
+    assert c2k.has_dsp_module
+    assert c2k.dsp_idle == "0x80047B80:0x10005000:0x10006600"
+    assert c2k.dsp_idle_knob == "CDJ_C6727_IDLE"
+    assert c2k.module_dir == "curated-cdj2000"
+    for mid in ("cdj2000nxs2", "xdj700"):
         assert not model.load(mid).has_dsp_module
     assert model.load().module_dir == "curated"

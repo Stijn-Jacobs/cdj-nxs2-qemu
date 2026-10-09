@@ -123,7 +123,7 @@ def test_no_frames_is_an_instrument_failure(frames_dir):
 #
 # Their frames come from a directory or a glob, so these run on Windows too.
 
-OLD = lift("scripts/run/score_playhead.py", ["Layout", "NXS2", "LAYOUTS", "marker_x"],
+OLD = lift("scripts/run/score_playhead.py", ["THR", "Layout", "NXS2", "LAYOUTS", "marker_x"],
            {"namedtuple": namedtuple, "WAVE": None, "REMAIN": None})
 
 
@@ -203,6 +203,27 @@ def test_cdj900nxs_strip_lost_is_a_repaint(tmp_path):
     lay = OLD["LAYOUTS"]["cdj900nxs"]
     out = score_dir(tmp_path, [player(lay, 130), player(lay, wave=False)], "--model", "cdj900nxs")
     assert "VERDICT: WAVELOST" in out
+
+
+def glass(x=None):
+    """A CDJ-900 screen: a lit waveform band and, when x is given, the playhead dot under it."""
+    lay = OLD["LAYOUTS"]["cdj900"]
+    img = Image.new("RGB", lay.size, (16, 32, 42))
+    img.paste((159, 232, 255), (0, 0, lay.size[0], 45))
+    img.paste((159, 232, 255), (lay.wave[0], lay.wave[1] + 20, lay.wave[2], lay.wave[3]))
+    if x is not None:
+        img.paste((159, 232, 255), (x, lay.head[1], x + 5, lay.head[3]))
+    return img
+
+
+def test_cdj900_playhead_dot_moving_is_motion(tmp_path):
+    out = score_dir(tmp_path, [glass(x) for x in (115, 120, 135)], "--model", "cdj900")
+    assert "** MOTION **" in out and "(x 115 120 135)" in out
+
+
+def test_cdj900_waveform_bars_are_not_the_playhead():
+    lay = OLD["LAYOUTS"]["cdj900"]
+    assert OLD["marker_x"](glass(), lay) == -1
 
 
 def test_an_800x480_frame_without_a_model_is_still_the_nxs2(tmp_path):

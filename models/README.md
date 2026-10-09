@@ -7,12 +7,15 @@ of their own. The default is `cdj2000nxs2`.
 | profile | player | update | state |
 |---|---|---|---|
 | `cdj2000nxs2.conf` | CDJ-2000NXS2 | v1.87, `C2KNXS2.UPD` | plays |
-| `cdj2000nxs.conf` | CDJ-2000NXS | v1.44, `C2KNXS.UPD` | experimental |
-| `cdj2000.conf` | CDJ-2000 | v4.33, four `C2K*.UPD` files | experimental |
-| `xdj1000.conf` | XDJ-1000 | v1.13, `XDJ1000.UPD` | experimental |
+| `xdj1000mk2.conf` | XDJ-1000MK2 | v1.45, `XDJ1KMK2.UPD` | experimental |
 | `xdj700.conf` | XDJ-700 | v1.15, `XDJ700.UPD` | experimental |
+| `xdj1000.conf` | XDJ-1000 | v1.13, `XDJ1000.UPD` | experimental |
 | `cdj900nxs.conf` | CDJ-900NXS | v1.31, `C900NXS.UPD` | experimental |
+| `cdj2000nxs.conf` | CDJ-2000NXS | v1.44, `C2KNXS.UPD` | experimental |
 | `cdj900.conf` | CDJ-900 | v4.32, four `C900*.UPD` files | experimental |
+| `cdj2000.conf` | CDJ-2000 | v4.33, four `C2K*.UPD` files | experimental |
+
+The table lists the default first, then the others newest first by `MODEL_RELEASED`.
 
 The CDJ-2000 and the CDJ-2000NXS are one platform (an older SH-4A MAIN with
 its peripherals at `0xFFxxxxxx`, a C672x-class DSP), so both boot the
@@ -24,6 +27,7 @@ DSP, SH7269 GUI processor).
 | variable | meaning |
 |---|---|
 | `MODEL_TITLE` | the player's name, for messages |
+| `MODEL_RELEASED` | `<year>.<n>`: the release year and, where two players share it, the order within it (CDJ-900 after the CDJ-2000). Setup and the launcher list the default player first, then the rest by this, newest first |
 | `MODEL_MAIN_MACHINE` | QEMU machine for the MAIN board (`-M`) |
 | `MODEL_GUI_MACHINE` | QEMU machine for the GUI board; empty while the model boots MAIN alone |
 | `MODEL_EXTRACT` | where the images are installed, relative to the repository |

@@ -46,7 +46,7 @@ def dsp_env(lay, m, env):
     """The DSP knobs a model's profile sets: the busy-wait loop the core skips,
     the interrupt fast path, and the module built by build_dsp_module.sh unless
     MODULE=none or C66X_JIT names one by hand."""
-    knobs = {"CDJ_C6747_IDLE": nonempty(env, "CDJ_C6747_IDLE", m.dsp_idle)}
+    knobs = {m.dsp_idle_knob: nonempty(env, m.dsp_idle_knob, m.dsp_idle)}
     if m.dsp_isr_fast:
         knobs["C66X_IDLE_ISR_FAST"] = nonempty(env, "C66X_IDLE_ISR_FAST", m.dsp_isr_fast)
     module = os.path.join(lay.jit_cache, m.module_dir, "m.so")
@@ -139,7 +139,7 @@ def start(m, env, dry):
         "the virtual deck app are CDJ-2000NXS2 features and are skipped." % m.title)
     if dry:
         knobs = ["CDJ_ATA", "CDJ_BF531_UPD", "CDJ_M16C_GUI", "CDJ_PANEL_KEYSOCK", "CDJ_DSP_AUDIO", "CDJ_C6747_IDLE",
-                 "C66X_IDLE_ISR_FAST", "C66X_JIT"]
+                 "CDJ_C6727_IDLE", "C66X_IDLE_ISR_FAST", "C66X_JIT"]
         say("would run:  %s %s" % (" ".join("%s=%s" % (k, env[k]) for k in knobs if k in env),
                                    " ".join(shlex.quote(a) for a in argv)))
         return 0

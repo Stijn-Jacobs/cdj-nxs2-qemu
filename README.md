@@ -13,7 +13,7 @@ Pioneer DJ players on your computer, from the CDJ-2000 to the NXS2 and XDJ famil
 
 [Quick start](#quick-start) · [Supported players](#supported-players) · [Screenshots](#screenshots) · [Virtual deck](#virtual-deck) · [Mods](#mods)
 
-<a href="docs/img/deck-showcase.png"><img src="docs/img/deck-showcase.png" alt="Real emulator screens for six players: supported CDJ-2000NXS2, and experimental CDJ-2000, CDJ-2000NXS, XDJ-1000, XDJ-700 and CDJ-900NXS. Older decks run below real time and their sound is chopped." width="960"></a>
+<a href="docs/img/deck-showcase.png"><img src="docs/img/deck-showcase.png" alt="Real emulator screens for six players: supported CDJ-2000NXS2, and experimental XDJ-700, XDJ-1000, CDJ-900NXS, CDJ-2000NXS and CDJ-2000. Older decks run below real time and their sound is chopped." width="960"></a>
 
 <sub>Actual emulator captures from development builds. Select the image for a closer look.</sub>
 
@@ -48,20 +48,19 @@ The features below are the CDJ-2000NXS2's; the older players are covered under
 
 ## Supported players
 
-The CDJ-2000NXS2 is the fully supported player. The six older models below
-are experimental: playback is far slower than real time, so their sound is
-chopped (it is on by default; `NOSOUND=1` turns it off). Screenshots show the firmware interface, not a claim of feature parity.
+The CDJ-2000NXS2 is the fully supported player; the older models are
+experimental. Sound is on by default (`NOSOUND=1` turns it off). Screenshots show the firmware interface, not a claim of feature parity.
 
 | player | status | what works |
 |---|---|---|
-| **CDJ-2000NXS2** | ✅ Fully supported | Boots, loads and plays tracks from USB: the waveform and playhead move and the time counts down. The sound is computed by the firmware's own DSP program. Pro DJ Link, MIDI controllers and [mods](#mods). |
-| **CDJ-2000** | 🧪 Experimental | Boots with its display and keys, loads a track from USB and plays it forward, far slower than real time: the playhead moves and the time counts down. As on a real deck with AUTO CUE off (the factory setting), a loaded track starts playing straight away; PLAY pauses and resumes. The music and pitch are right, but the sound is chopped where the DSP cannot keep up. |
-| **CDJ-2000NXS** | 🧪 Experimental | The same as the CDJ-2000, but its DSP lags like the XDJ-1000's: the playhead and the time start moving a few minutes after the load. Sound as on the CDJ-2000: chopped. |
-| **XDJ-1000** | 🧪 Experimental | Boots with its screen and keys, loads a track from USB and plays it, but at about a tenth of real speed: the playhead and the time start moving a few minutes after the load. PLAY pauses and resumes. Sound is on and chopped. |
-| **XDJ-700** | 🧪 Experimental | The XDJ-1000's board: the same as above. |
-| **CDJ-900NXS** | 🧪 Experimental | The XDJ-1000's board. Boots, loads a track from USB and plays it, as slowly as the XDJ-1000: the waveform moves and the time counts down. |
-| **XDJ-1000MK2** | 🧪 Experimental | The XDJ-1000's board on its own firmware. Loads a track from USB and plays it as slowly as the XDJ-1000; PLAY pauses and resumes, and CUE returns to the cue point when AUTO CUE is on. |
-| **CDJ-900** | 🧪 Experimental | The CDJ-2000's platform with a smaller display. Boots, loads a track from USB and plays it: the overview playhead moves and the time counts down. The window shows its dot-matrix display (source line, track info, overview) with the time readout below it. |
+| **CDJ-2000NXS2** | ✅ Fully supported | Plays tracks from USB in real time with sound. Pro DJ Link, MIDI controllers and [mods](#mods). |
+| **XDJ-1000MK2** | 🧪 Experimental | Loads and plays from USB, below real time (chopped sound). PLAY, CUE and touch work. |
+| **XDJ-700** | 🧪 Experimental | Loads and plays from USB, below real time (chopped sound). Touch works. |
+| **XDJ-1000** | 🧪 Experimental | Loads and plays from USB in real time with the DSP module setup builds. Touch works. |
+| **CDJ-900NXS** | 🧪 Experimental | Loads and plays from USB, below real time (chopped sound). |
+| **CDJ-2000NXS** | 🧪 Experimental | Loads and plays from USB in real time with the DSP module setup builds. |
+| **CDJ-900** | 🧪 Experimental | Loads and plays from USB; its display shows the overview, playhead and time. |
+| **CDJ-2000** | 🧪 Experimental | Loads and plays from USB in real time with the DSP module setup builds. PLAY pauses and resumes. |
 
 Everything below, from the quick start on, describes the CDJ-2000NXS2 unless it
 says otherwise.
@@ -138,7 +137,7 @@ The deck window opens and the CDJ-2000NXS2 boots to its screen. Click the window
 press `U` for the USB stick, `↓` to a track, `Enter` to load it and `Space` to
 play (every key: [Keyboard](#keyboard)). Click the screen to touch it.
 
-**Other players:** the CDJ-2000, CDJ-2000NXS, CDJ-900, XDJ-1000, XDJ-700, XDJ-1000MK2 and CDJ-900NXS
+**Other players:** the XDJ-1000MK2, XDJ-700, XDJ-1000, CDJ-900NXS, CDJ-2000NXS, CDJ-900 and CDJ-2000
 start from the same two commands with `--model`; plain `./setup.sh` also asks
 which player you want (Enter keeps the CDJ-2000NXS2):
 
@@ -149,14 +148,18 @@ which player you want (Enter keeps the CDJ-2000NXS2):
 ./start.sh --model xdj1000                                  # cdj900nxs C900NXS.UPD v1.31
 ```
 
-On the XDJ-1000, XDJ-700 and CDJ-900NXS only `U` (USB), `Enter` (the select knob's push) and `Space`
+On the XDJ-700, XDJ-1000 and CDJ-900NXS only `U` (USB), `Enter` (the select knob's push) and `Space`
 (PLAY) are mapped so far: `U` and seven `Enter`s load the first track.
+
+The CDJ-900 also has `↑` / `↓`, `,` (TRACK back), `[` / `]` (SEARCH), `B`, `T`, `I`, `M`, `L` and `D`;
+`U` and four `Enter`s load the first track. `C` (CUE) and `Esc` (BACK) are mapped, but the
+emulated deck does not react to them yet.
 
 Setup stores the player in `cdj.conf`, so `./start.sh` alone starts it from
 then on. An older player gets the build, firmware and USB steps and opens one
 window with your stick; a second deck, Pro DJ Link, MIDI controllers, mods and
 the virtual deck app are CDJ-2000NXS2 features and are skipped. The
-CDJ-2000NXS and XDJ-1000 also get setup's step 5, which records one headless
+CDJ-2000, CDJ-2000NXS and XDJ-1000 also get setup's step 5, which records one headless
 deck playing and builds their DSP module from it (about an hour); `./start.sh`
 loads it from `~/c14gen/curated-<player>/`. Which players exist is whatever has a profile in `models/`.
 
@@ -281,9 +284,9 @@ flowchart LR
 The CDJ-2000 and CDJ-2000NXS have a board model of their own
 (`hw/cdj/boards/cdj2000/`): an SH7763 MAIN, a Blackfin BF531 display
 processor, and a DSP behind a host port (a C6727 on the CDJ-2000, a C6747 on
-the CDJ-2000NXS). The XDJ-1000, XDJ-700 and CDJ-900NXS share the NXS2's
+the CDJ-2000NXS). The XDJ-700, XDJ-1000 and CDJ-900NXS share the NXS2's
 SH7724 MAIN, which draws their screen itself, with a C6747 DSP
-(`hw/cdj/boards/xdj1000/`). The CDJ-2000NXS and XDJ-1000 keep up once setup has built their DSP
+(`hw/cdj/boards/xdj1000/`). The CDJ-2000, CDJ-2000NXS and XDJ-1000 keep up once setup has built their DSP
 module; the other older players' DSPs are too slow, so their sound is chopped, and the
 launcher starts each in one window (see Quick start, other players).
 
@@ -745,7 +748,7 @@ so it takes as long as `decks2`; after that a deck takes a minute and a half.
 | `hw/cdj/boards/nxs2/` | the CDJ-2000NXS2: its MAIN board, one file per device, and the display board (`sh7269gui.c`); `diag/` holds the diagnostic hooks, `standin/` historical models that are off by default |
 | `hw/cdj/boards/cdj2000/` | the CDJ-2000 and CDJ-2000NXS: MAIN board (Renesas SH7763), Blackfin display and C6727 / C6747 DSP models, experimental |
 | `hw/cdj/boards/cdj900/` and `hw/cdj/m16c/` | the CDJ-900: the CDJ-2000's MAIN board with its M16C display micro (core, SoC and the display model), experimental |
-| `hw/cdj/boards/xdj1000/` | the XDJ-1000, XDJ-700 and CDJ-900NXS: their SH7724 MAIN board with its LCD controller and graphics blocks, experimental |
+| `hw/cdj/boards/xdj1000/` | the XDJ-700, XDJ-1000 and CDJ-900NXS: their SH7724 MAIN board with its LCD controller and graphics blocks, experimental |
 | `mods/` | the [mods](#mods) registry and the display- and MAIN-firmware patches behind them |
 | `models/` | one profile per player, read by the firmware and launch scripts (see `models/README.md`) |
 | `hw/cdj/c6x/` | the C66x DSP core, its SoC peripherals, the JIT generator (`tools/`) and unit tests |

@@ -59,8 +59,10 @@ THR = 150
 COLLAPSE = 0.5
 
 # wave is the overview strip; on the decks with a marker it is also where the
-# marker is looked for, and a column needs `marker` marker pixels to count.
-Layout = namedtuple("Layout", "size wave remain marker")
+# marker is looked for (head, when the marker has a row of its own), and a
+# column needs `marker` marker pixels to count. A monochrome glass has no white
+# or red marker: its marker is a lit dot.
+Layout = namedtuple("Layout", "size wave remain marker head lit", defaults=(None, False))
 NXS2 = Layout((800, 480), WAVE, REMAIN, 0)
 LAYOUTS = {
     # 480x255 screendumps: the overview strip under the readout, the marker
@@ -70,6 +72,11 @@ LAYOUTS = {
     "xdj": Layout((800, 480), (105, 408, 640, 442), (290, 360, 470, 400), 20),
     # The CDJ-900NXS: overview above the bottom edge, REMAIN centre right.
     "cdj900nxs": Layout((800, 480), (128, 350, 632, 400), (380, 295, 540, 340), 20),
+    # The CDJ-900 glass, 180x45 dots drawn 5x5 with the readout dots below:
+    # the overview fills dot columns 23-122 of the last text band (rows 36-43)
+    # and its playhead is the dot under it, row 44.
+    "cdj900": Layout((900, 295), (115, 180, 615, 220), (180, 225, 575, 295), 5,
+                     (115, 220, 615, 225), True),
 }
 MODELS = {
     "cdj2000nxs2": NXS2,
@@ -78,6 +85,7 @@ MODELS = {
     "xdj1000": LAYOUTS["xdj"],
     "xdj700": LAYOUTS["xdj"],
     "cdj900nxs": LAYOUTS["cdj900nxs"],
+    "cdj900": LAYOUTS["cdj900"],
 }
 
 
@@ -130,13 +138,15 @@ def full_count(img):
 
 def marker_x(img, lay):
     """The strip column with the most white or red pixels (the playhead is
-    white playing and red paused), or -1 when none has lay.marker of them."""
-    x0, y0, x1, y1 = lay.wave
+    white playing and red paused; lit on a monochrome glass), or -1 when none
+    has lay.marker of them."""
+    x0, y0, x1, y1 = lay.head or lay.wave
     px = img.load()
     best, at = 0, -1
     for x in range(x0, x1):
         n = sum(1 for y in range(y0, y1)
-                if px[x, y][0] > 200 and (min(px[x, y]) > 200 or max(px[x, y][1:]) < 80))
+                if (px[x, y][2] > THR if lay.lit else
+                    px[x, y][0] > 200 and (min(px[x, y]) > 200 or max(px[x, y][1:]) < 80)))
         if n > best:
             best, at = n, x
     return at if best >= lay.marker else -1

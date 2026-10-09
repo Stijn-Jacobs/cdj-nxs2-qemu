@@ -44,6 +44,7 @@ IDLE_SPEC="${MODEL_DSP_IDLE:-}"
 # stops where the recorded run did.
 if [ -n "$IDLE_SPEC" ]; then
     export REPLAY_IDLE="$IDLE_SPEC" C66X_IDLE_ISR_FAST="${MODEL_DSP_ISR_FAST:-0}"
+    [ -z "${MODEL_DSP_RETURN_AT:-}" ] || export REPLAY_RETURN_AT="$MODEL_DSP_RETURN_AT"
 fi
 WORK="${WORK:-$CDJ_ROOT/extract/dsp-module${CURATED#curated}}"
 REC="$WORK/dsp.c6rec"

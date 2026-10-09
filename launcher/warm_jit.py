@@ -135,12 +135,12 @@ def record_deck(lay, m, tag, dry):
                 qemu.kill()
                 qemu.wait()
     text = " ".join(_lines(log))
-    ran = re.search(r"c6747: running, pc \S+, (\d+) cycles, .*?(\d+) cycles skipped idle", text)
+    ran = re.search(r"(c67[24]7): running, pc \S+, (\d+) cycles, .*?(\d+) cycles skipped idle", text)
     if not ran:
         chain.say("FAILED the deck wrote no DSP report (%s)" % log)
         return 1
-    cycles, skipped = int(ran.group(1)), int(ran.group(2))
-    hz = float(nonempty(env, "CDJ_C6747_MHZ", "300")) * 1e6
+    cycles, skipped = int(ran.group(2)), int(ran.group(3))
+    hz = float(nonempty(env, "CDJ_%s_MHZ" % ran.group(1).upper(), "300")) * 1e6
     rate = (cycles - skipped) / (cycles / hz) / 1e6
     chain.say("deck ran %.0f s of DSP time, %.0f M executed cycles per second" % (cycles / hz, rate))
     if rate < MIN_PLAYING_MCYCLES:

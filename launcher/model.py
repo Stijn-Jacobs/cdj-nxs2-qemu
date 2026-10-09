@@ -37,11 +37,6 @@ def models_dir():
     return os.path.join(Layout().emu, "models")
 
 
-def list_models():
-    d = models_dir()
-    return sorted(f[:-len(".conf")] for f in os.listdir(d) if f.endswith(".conf"))
-
-
 def _parse(text):
     # A checkout with core.autocrlf can give the profile CRLF endings; a value
     # ending in a carriage return would name no machine.
@@ -56,6 +51,17 @@ def _parse(text):
             v = v[1:-1]
         values[m.group(1)] = v
     return values
+
+
+def _released(model_id):
+    with open(os.path.join(models_dir(), model_id + ".conf"), encoding="utf-8") as f:
+        return float(_parse(f.read())["MODEL_RELEASED"])
+
+
+def list_models():
+    """The default player first, then the others newest first."""
+    ids = [f[:-len(".conf")] for f in os.listdir(models_dir()) if f.endswith(".conf")]
+    return sorted(ids, key=lambda m: (m != DEFAULT, -_released(m)))
 
 
 class Model:
@@ -76,6 +82,7 @@ class Model:
         self.display_flash = values.get("MODEL_DISPLAY_FLASH", "")
         self.launch = values.get("MODEL_LAUNCH") or "rig"
         self.dsp_idle = values.get("MODEL_DSP_IDLE", "")
+        self.dsp_idle_knob = values.get("MODEL_DSP_IDLE_KNOB") or "CDJ_C6747_IDLE"
         self.dsp_isr_fast = values.get("MODEL_DSP_ISR_FAST", "")
         self.dsp_gen_args = values.get("MODEL_DSP_GEN_ARGS", "")
         self.idle_s = values.get("MODEL_IDLE_S", "")
