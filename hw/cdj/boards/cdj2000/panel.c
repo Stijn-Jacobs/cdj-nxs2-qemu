@@ -48,18 +48,37 @@
 #define CDJ2000_PNL_FRAME 0x18
 #define CDJ2000_PNL_SYNC  0x8F
 
+/* The display whose processor shares this port, if it has a link_byte. */
+static const Cdj2000Display *cdj2000_panel_gui;
+
 static void cdj2000_panel_lever(CdjPnlLinkState *s, void *extra,
                                 uint8_t *rx, int64_t now)
 {
     rx[0x0F] ^= 0x02;
 }
 
-void cdj2000_panel_init(MemoryRegion *sysmem, hwaddr addr)
+static bool cdj2000_panel_link_selected(void *extra)
 {
-    static const CdjPnlLinkHooks hooks = {
+    return cdj2000_panel_gui->link_selected();
+}
+
+static uint8_t cdj2000_panel_link_byte(void *extra, uint8_t tx)
+{
+    return cdj2000_panel_gui->link_byte(tx);
+}
+
+void cdj2000_panel_init(MemoryRegion *sysmem, hwaddr addr,
+                        const Cdj2000Display *display)
+{
+    static CdjPnlLinkHooks hooks = {
         .build_last = cdj2000_panel_lever,
     };
 
+    if (display->link_byte) {
+        cdj2000_panel_gui = display;
+        hooks.link_selected = cdj2000_panel_link_selected;
+        hooks.link_byte = cdj2000_panel_link_byte;
+    }
     cdj_pnl_link_init(sysmem, addr, "sh7763.scif2-panel", CDJ2000_PNL_FRAME,
                       CDJ2000_PNL_SYNC, &hooks, 0);
 }

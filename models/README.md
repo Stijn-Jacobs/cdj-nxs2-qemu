@@ -35,6 +35,9 @@ DSP, SH7269 GUI processor).
 | `MODEL_EXPECTED` | each output image and its SHA-256 |
 | `MODEL_LAUNCH` | `rig` (default): the NXS2's two-board real-DSP rig, started by `rig.py`. `deck`: one MAIN emulator that draws the screen itself or runs its display board inside it, started by `deck.py`; the DSP warm-up, Pro DJ Link, mods, controller and virtual deck app are skipped for it |
 | `MODEL_DISPLAY_UPD` | the update file the display board loads (a `deck` model only); the install keeps a copy as `display.upd` beside the main images |
+| `MODEL_DSP_IDLE` | a `deck` model with a generated DSP module: the C6747's busy-wait loop as `<head>:<stack_lo>:<stack_hi>`. The machine skips it (`CDJ_C6747_IDLE`), and `build_dsp_module.sh` generates and replays the module against the same head |
+| `MODEL_DSP_ISR_FAST` | `1` keeps the DSP's interrupt handlers on the core's fast store paths while the skip is armed (`C66X_IDLE_ISR_FAST`) |
+| `MODEL_DSP_GEN_ARGS` | generator options that model's DSP program needs, added to the common set in `build_dsp_module.sh` |
 | `MODEL_IDLE_S`, `MODEL_LOAD_STEPS` | how a `deck` model reaches its snapshot points (`SNAPSHOT=idle\|loaded`): seconds from power-on to the settled screen, then the `;`-separated steps that load a track (`sendkey <key> <ms>`, `key <panel payload>`, `wait <s>`; see `scripts/run/snapshot_deck.py`) |
 
 ## Adding a model

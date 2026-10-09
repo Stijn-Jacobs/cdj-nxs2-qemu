@@ -156,9 +156,11 @@ On the XDJ-1000, XDJ-700 and CDJ-900NXS only `U` (USB), `Enter` (the select knob
 
 Setup stores the player in `cdj.conf`, so `./start.sh` alone starts it from
 then on. An older player gets the build, firmware and USB steps and opens one
-window with your stick; the DSP code, a second deck, Pro DJ Link, sound, MIDI
-controllers, mods and the virtual deck app are CDJ-2000NXS2 features and are
-skipped. Which players exist is whatever has a profile in `models/`.
+window with your stick; a second deck, Pro DJ Link, MIDI controllers, mods and
+the virtual deck app are CDJ-2000NXS2 features and are skipped. The
+CDJ-2000NXS and XDJ-1000 also get setup's step 5, which records one headless
+deck playing and builds their DSP module from it (about an hour); `./start.sh`
+loads it from `~/c14gen/curated-<player>/`. Which players exist is whatever has a profile in `models/`.
 
 **Updating:** `git pull`, then `./start.sh` as usual. The emulator is compiled,
 so when a pull changed its code `start.sh` notices and offers to rebuild
@@ -283,8 +285,8 @@ The CDJ-2000 and CDJ-2000NXS have a board model of their own
 processor, and a DSP behind a host port (a C6727 on the CDJ-2000, a C6747 on
 the CDJ-2000NXS). The XDJ-1000, XDJ-700 and CDJ-900NXS share the NXS2's
 SH7724 MAIN, which draws their screen itself, with a C6747 DSP
-(`hw/cdj/boards/xdj1000/`). The older players' DSPs are too slow to keep up, so
-their sound is chopped, and the
+(`hw/cdj/boards/xdj1000/`). The CDJ-2000NXS and XDJ-1000 keep up once setup has built their DSP
+module; the other older players' DSPs are too slow, so their sound is chopped, and the
 launcher starts each in one window (see Quick start, other players).
 
 None of the three knows it is emulated. MAIN talks to the display processor
@@ -458,6 +460,7 @@ listed in `mods/mods.conf`:
 | [`high_fps`](mods/high_fps/README.md) | Draw the zoomed-in waveform about twice as often (~70 fps instead of ~33). | on |
 | [`live_clock`](mods/live_clock/README.md) | Repaint the REMAIN clock every frame instead of about three times a second. | on |
 | [`three_band`](mods/three_band/README.md) | Draw the centre waveform and the overview as three bands (low blue, mid amber, high white), CDJ-3000 style, from the track's own 3-band data (.2EX). | off |
+| [`phrase`](mods/phrase/README.md) | Draw a coloured phrase band along the bottom of the overview strip, CDJ-3000 style, from the track's own phrase analysis in its `.EXT` file; tracks without it get no band. | off |
 | [`osc`](mods/osc/README.md) | Send the deck's beats, state and load/play/stop/cue/loop events as OSC messages on UDP broadcast port 50010, for lighting desks and scripts. | off |
 | [`usb_midi`](mods/usb_midi/README.md) | Send MIDI Start, Stop, Continue and Timing Clock over the rear USB-B port, so a DAW or drum machine follows the deck. | off |
 | [`ableton_link`](mods/ableton_link/README.md) | Join Ableton Link as a peer: Live or any Link app on the deck's network follows its tempo and beat. | off |
@@ -478,7 +481,7 @@ or override any of them for one run with the environment, e.g.
 [SERVICE MODE](#service-mode) is a separate boot option, not a mod: it changes
 what the deck boots into, not how it behaves once it is up.
 
-**Patching a real firmware update.** `three_band`, `osc`, `usb_midi` and
+**Patching a real firmware update.** `three_band`, `phrase`, `osc`, `usb_midi` and
 `ableton_link` are firmware code patches, not emulator knobs: the launcher
 applies the display ones to a copy of the display image at boot
 (`mods/patch_gui.py`) and the MAIN ones to a copy of the MAIN image

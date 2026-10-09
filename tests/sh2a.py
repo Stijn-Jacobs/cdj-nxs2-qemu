@@ -126,6 +126,8 @@ class Sh2a:
             self.t = int(r[0] & imm == 0)                       # tst #imm,R0
         elif op & 0xFF00 == 0xC900:
             r[0] &= imm                                         # and #imm,R0
+        elif op & 0xFF00 == 0xCB00:
+            r[0] |= imm                                         # or #imm,R0
         elif op & 0xFF00 == 0x8400:                             # mov.b @(disp,Rm),R0
             r[0] = self.load(r[m] + (op & 15), 1)
         elif op & 0xFF00 == 0x8500:                             # mov.w @(disp,Rm),R0

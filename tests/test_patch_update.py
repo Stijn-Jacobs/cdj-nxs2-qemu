@@ -264,7 +264,7 @@ def test_registry_only_lists_firmware_patchable_mods():
     knob_names = re.findall(r"^(\w+)\|", conf, re.M)
     assert "high_fps" not in reg and "live_clock" not in reg
     assert "three_band" not in reg          # that row's key, not the mod names
-    assert knob_names == ["high_fps", "live_clock", "three_band", "osc", "usb_midi", "ableton_link", "tcnet"]
+    assert knob_names == ["high_fps", "live_clock", "three_band", "phrase", "osc", "usb_midi", "ableton_link", "tcnet"]
 
 
 def test_list_cli_shows_target_and_versions():
@@ -370,8 +370,8 @@ def test_patch_update_combines_two_mods_on_one_target(tmp_path, monkeypatch):
 
 
 def test_patch_update_patches_two_targets_in_one_run(tmp_path, monkeypatch):
-    # The shape "phrase colours" needs later: one mod for the display image,
-    # one for MAIN, applied together -- each must only touch its own section.
+    # The shape the phrase mod has: one mod for the display image,
+    # others for MAIN, applied together -- each must only touch its own section.
     gui_profile, gui_image, gui_mods = build_two_mod_image()
     del gui_mods["mod_b"]                          # keep this target to one mod
     main_profile, main_image, main_mods = build_synthetic_image()
@@ -456,6 +456,7 @@ def test_a_mods_conf_row_names_every_patch_it_switches_on():
     rows = patch_update.conf_rows()
     assert rows["three_band"] == ["wave3", "wave3ov", "wave3data", "wave3detail",
                                   "wave3ovfetch", "wave3ovdata"]
+    assert rows["phrase"] == ["phrase", "phrasefetch", "phrasedata"]
     assert rows["osc"] == ["osc", "oscbeat"]
 
 

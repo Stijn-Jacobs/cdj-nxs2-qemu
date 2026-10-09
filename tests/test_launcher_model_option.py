@@ -124,7 +124,8 @@ def test_unknown_model_is_refused(tmp_path):
 @pytest.fixture
 def tree(tmp_path, monkeypatch):
     lay = SimpleNamespace(root=str(tmp_path), extract=str(tmp_path / "extract"), logs=str(tmp_path / "logs"),
-                          usb_image=str(tmp_path / "extract" / "usbmedia3.img"), packaged=False)
+                          usb_image=str(tmp_path / "extract" / "usbmedia3.img"), jit_cache=str(tmp_path / "c14gen"),
+                          packaged=False)
     monkeypatch.setattr(deck, "Layout", lambda: lay)
     (tmp_path / "extract" / "cdj2000").mkdir(parents=True)
     return lay
@@ -194,3 +195,15 @@ def test_deck_dry_run_says_what_is_skipped(tree, capsys):
 def test_start_model_needs_a_value(capsys):
     assert start.main(["--model"]) == 2
     assert "--model needs a player" in capsys.readouterr().err
+
+
+def test_deck_dsp_env_comes_from_the_profile(tree, tmp_path):
+    lay = tree
+    m = model.load("cdj2000nxs")
+    knobs = deck.dsp_env(lay, m, {})
+    assert knobs == {"CDJ_C6747_IDLE": "0xC004CB8C:0x11804AE0:0x11805C00", "C66X_IDLE_ISR_FAST": "1"}
+    (tmp_path / "c14gen" / m.module_dir).mkdir(parents=True)
+    (tmp_path / "c14gen" / m.module_dir / "m.so").write_bytes(b"")
+    assert deck.dsp_env(lay, m, {})["C66X_JIT"].endswith("curated-cdj2000nxs/m.so")
+    assert "C66X_JIT" not in deck.dsp_env(lay, m, {"MODULE": "none"})
+    assert deck.dsp_env(lay, m, {"C66X_IDLE_ISR_FAST": "0"})["C66X_IDLE_ISR_FAST"] == "0"

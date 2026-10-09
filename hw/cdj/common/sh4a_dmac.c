@@ -14,21 +14,22 @@
  */
 #define CDJ_DMAC_SIZE   0x2000
 #define DMAC_UNIT       16
+#define DMAC_CHANNELS   6
 
 typedef struct CdjDmacState {
     MemoryRegion iomem;
-    /* DEI lines for channels 0..3 (DMAC0A); NULL for the rest. */
-    qemu_irq dei[4];
-    QEMUBH *dei_bh[4];
-    QEMUTimer *dei_timer[4];
-    int64_t dei_deadline[4];        /* migrated: a pending timer's expiry, -1 none */
+    /* DEI lines per channel; NULL where the board connects none. */
+    qemu_irq dei[DMAC_CHANNELS];
+    QEMUBH *dei_bh[DMAC_CHANNELS];
+    QEMUTimer *dei_timer[DMAC_CHANNELS];
+    int64_t dei_deadline[DMAC_CHANNELS];    /* migrated: a pending timer's expiry, -1 none */
     /* Raises vs acknowledgements per channel; a big gap means a storm. */
-    unsigned dei_raised[4];
-    unsigned dei_acked[4];
+    unsigned dei_raised[DMAC_CHANNELS];
+    unsigned dei_acked[DMAC_CHANNELS];
     /* Cap on raises per channel, 0 = unlimited. A storming source is
      * silenced with one warning instead of starving the boot. */
-    unsigned dei_max[4];
-    bool dei_capped[4];
+    unsigned dei_max[DMAC_CHANNELS];
+    bool dei_capped[DMAC_CHANNELS];
     /* Channels armed against a peripheral FIFO and waiting for its DREQ,
      * one bit per register block. */
     uint32_t dreq_pending;
@@ -367,12 +368,31 @@ static const VMStateDescription vmstate_cdj_dmac = {
     .pre_save = cdj_dmac_pre_save,
     .post_load = cdj_dmac_post_load,
     .fields = (const VMStateField[]) {
-        VMSTATE_INT64_ARRAY(dei_deadline, CdjDmacState, 4),
+        VMSTATE_INT64_ARRAY(dei_deadline, CdjDmacState, DMAC_CHANNELS),
         CDJ_VMSTATE_SPAN(CdjDmacState, dei_raised, dreq_pending),
         CDJ_VMSTATE_SPAN(CdjDmacState, nread, reg),
         VMSTATE_END_OF_LIST()
     }
 };
+
+static void cdj_dmac_dei_attach(CdjDmacState *s, unsigned ch, qemu_irq irq,
+                                unsigned max)
+{
+    s->dei[ch] = irq;
+    s->dei_max[ch] = max;
+    if (irq) {
+        s->dei_bh[ch] = qemu_bh_new(cdj_dmac_dei_raise, &s->dei[ch]);
+        s->dei_timer[ch] = timer_new_ns(QEMU_CLOCK_VIRTUAL,
+                                        cdj_dmac_dei_raise, &s->dei[ch]);
+    }
+}
+
+/* DEI line of channel 4 or 5, which cdj_dmac_init() leaves out. */
+void cdj_dmac_dei_connect(unsigned ch, qemu_irq irq)
+{
+    assert(cdj_dmac && ch >= 4 && ch < DMAC_CHANNELS);
+    cdj_dmac_dei_attach(cdj_dmac, ch, irq, 0);
+}
 
 /* dei[] gives the first four channels' DEI lines, a NULL line leaving that
  * channel without an interrupt, and a raise cap per line (0 = unlimited).
@@ -385,14 +405,9 @@ void cdj_dmac_init(MemoryRegion *sysmem, const char *name, hwaddr base,
 
     s->dreq_base = dreq_base;
     s->dreq_size = dreq_size;
-    for (i = 0; i < ARRAY_SIZE(s->dei); i++) {
-        s->dei[i] = dei ? dei[i].irq : NULL;
-        s->dei_max[i] = dei ? dei[i].max : 0;
-        if (s->dei[i]) {
-            s->dei_bh[i] = qemu_bh_new(cdj_dmac_dei_raise, &s->dei[i]);
-            s->dei_timer[i] = timer_new_ns(QEMU_CLOCK_VIRTUAL,
-                                           cdj_dmac_dei_raise, &s->dei[i]);
-        }
+    for (i = 0; i < 4; i++) {
+        cdj_dmac_dei_attach(s, i, dei ? dei[i].irq : NULL,
+                            dei ? dei[i].max : 0);
     }
     vmstate_register_any(NULL, &vmstate_cdj_dmac, s);
     memory_region_init_io(&s->iomem, NULL, &cdj_dmac_ops, s,

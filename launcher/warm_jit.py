@@ -13,13 +13,20 @@ built.
 
 import glob
 import os
+import re
 import shlex
 import subprocess
 import sys
 
-from . import chain, host
+from . import chain, host, model
+from .boot_deck import _monsock
 from .chain import nonempty
+from .deck import command as deck_command
 from .layout import Layout
+
+# An idle deck executes about 29 M DSP cycles per virtual second, one that has
+# loaded and plays 55 to 70 M; a recording below this never got past the browse list.
+MIN_PLAYING_MCYCLES = 40
 
 
 def main(argv):
@@ -33,6 +40,9 @@ def main(argv):
         else:
             tag = a
     lay = Layout()
+    m = model.load()
+    if m.has_dsp_module:
+        return record_deck(lay, m, tag, dry)
     deck = tag + "1"
     play_s = int(nonempty(os.environ, "PLAY_S", "270"))
     # The sweep starts once the track is playing and ends before the deck does.
@@ -90,3 +100,46 @@ def _lines(path):
             return f.read().decode("utf-8", "replace").splitlines()
     except OSError:
         return []
+
+
+def record_deck(lay, m, tag, dry):
+    """The same run for a one-window model: power on, load the first track,
+    play it for PLAY_S wall seconds and quit, so a recording and a profile are
+    written (CDJ_C6X_RECORD, C66X_JIT_PROFILE). The core skips its idle loop as
+    it does in a session. Returns 1 unless the deck played."""
+    play_s = nonempty(os.environ, "PLAY_S", "270")
+    log = os.path.join(lay.tmp, "bridge-main-%s1.log" % tag)
+    mon = "%s/cdj-deck-%s-%s-mon.sock" % (lay.tmp, m.id, tag)
+    env = dict(os.environ, MODULE="none", AUDIODEV="none", GUI_DISPLAY="none", CDJ_REPORT="1",
+               MODEL_IDLE_S=m.idle_s, MODEL_LOAD_STEPS=m.load_steps)
+    env.pop("C66X_JIT", None)
+    argv, env = deck_command(lay, m, env)
+    argv += ["-monitor", _monsock(lay).spec(mon)]
+    driver = host.python_argv() + [os.path.join(lay.run, "play_deck.py"), mon, play_s]
+    if dry:
+        chain.say(" ".join(shlex.quote(a) for a in argv) + " > " + log + " &")
+        chain.say(" ".join(shlex.quote(a) for a in driver))
+        return 0
+    os.makedirs(lay.logs, exist_ok=True)
+    with open(log, "wb") as f:
+        qemu = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=f, stderr=subprocess.STDOUT, env=env)
+        try:
+            subprocess.run(driver, env=env)
+            qemu.wait(120)
+        finally:
+            if qemu.poll() is None:
+                qemu.kill()
+                qemu.wait()
+    text = " ".join(_lines(log))
+    ran = re.search(r"c6747: running, pc \S+, (\d+) cycles, .*?(\d+) cycles skipped idle", text)
+    if not ran:
+        chain.say("FAILED the deck wrote no DSP report (%s)" % log)
+        return 1
+    cycles, skipped = int(ran.group(1)), int(ran.group(2))
+    hz = float(nonempty(env, "CDJ_C6747_MHZ", "300")) * 1e6
+    rate = (cycles - skipped) / (cycles / hz) / 1e6
+    chain.say("deck ran %.0f s of DSP time, %.0f M executed cycles per second" % (cycles / hz, rate))
+    if rate < MIN_PLAYING_MCYCLES:
+        chain.say("FAILED the deck never played the track (see %s)" % log)
+        return 1
+    return 0

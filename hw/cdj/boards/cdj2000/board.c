@@ -112,11 +112,10 @@ static const CdjAuthAnswer nxs_auth_answers[] = {
     { 0x01, 0x01 },
 };
 
-static void sh7763_board_init(MachineState *machine, const CdjBoardDesc *desc,
-                              const CdjDspWires *(*dsp_init)(MemoryRegion *,
-                                                             hwaddr),
-                              const Cdj2000Display *display_desc,
-                              bool auth_chip)
+void sh7763_board_init(MachineState *machine, const CdjBoardDesc *desc,
+                       const CdjDspWires *(*dsp_init)(MemoryRegion *, hwaddr),
+                       const Cdj2000Display *display_desc,
+                       bool auth_chip)
 {
     MemoryRegion *sysmem = get_system_memory();
     SuperHCPU *cpu = cdj_board_init(machine, desc);
@@ -162,6 +161,9 @@ static void sh7763_board_init(MachineState *machine, const CdjBoardDesc *desc,
 
         cdj_dmac_init(sysmem, "sh7763.dmac", 0xFF608000,
                       A7ADDR(CDJ2000_USBH_BASE), CDJ_USB_SIZE, dei);
+        /* The CDJ-900's MAIN moves each sector block into the DSP window on
+         * channel 4 (the CDJ-2000's uses channel 3) and waits for its end. */
+        cdj_dmac_dei_connect(4, cdj_count_irq(irq[S63_DMTE4], "DMAC DMTE4"));
     }
 
     /* The flash is 4 MB by its own sector table (71 sectors at 0x04075FF8,
@@ -181,8 +183,9 @@ static void sh7763_board_init(MachineState *machine, const CdjBoardDesc *desc,
              serial_hd(0) ?: qemu_chr_new("scif0-null", "null", NULL));
     cdj_scif(sysmem, "scif1", 0xFFE10000,
              serial_hd(1) ?: qemu_chr_new("scif1-null", "null", NULL));
-    /* The DMA-fed port to the front-panel microcontroller (M16C). */
-    cdj2000_panel_init(sysmem, 0xFFE20000);
+    /* The DMA-fed port to the front-panel microcontroller (M16C); a display
+     * with a link_byte shares it. */
+    cdj2000_panel_init(sysmem, 0xFFE20000, display_desc);
     /* The BF531 display processor, its own window; off unless asked for. */
     display = cdj2000_display_init(display_desc);
 

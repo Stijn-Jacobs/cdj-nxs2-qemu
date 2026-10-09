@@ -228,8 +228,12 @@ static int byte_ops(bfin_core *c, unsigned aopcde, unsigned aop, unsigned hl,
         if (aop) {
             return 0;
         }
-        s0 = pair_bytes(c, src0, s, 0);
-        s1 = pair_bytes(c, src1, s, 1);
+        /* Unlike the other byte ops, no I0/I1 byte alignment: the JPEG IDCT
+         * stage runs this with I1 odd and the +128 bias only in R3 (R2 is
+         * stale), and with the alignment applied every 8th and 9th pixel of
+         * each block is biased wrong. */
+        s0 = c->r[src0 + s];
+        s1 = c->r[src1 + 1];
         {
             int lo = (int16_t)s0 + (int)byte_at(s1, hl ? 0 : 1);
             int hi = (int16_t)(s0 >> 16) + (int)byte_at(s1, hl ? 2 : 3);

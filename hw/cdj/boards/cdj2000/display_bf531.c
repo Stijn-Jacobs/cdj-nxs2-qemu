@@ -277,6 +277,10 @@ bool cdj2000_display_init(const Cdj2000Display *desc)
     uint8_t *img;
     gsize len;
 
+    if (desc->init) {
+        desc->init();
+        return false;
+    }
     if (!img_path) {
         return false;
     }

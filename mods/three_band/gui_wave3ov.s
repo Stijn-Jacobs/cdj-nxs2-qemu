@@ -12,7 +12,8 @@
 !     +3 0x3B         +4..+5 0xFFFF
 !
 ! A stock record is never taken for one of these: 0xFFFF at +4 would read as a
-! 63-row bar, past the 40 rows the renderer clamps to.
+! 63-row bar, past the 40 rows the renderer clamps to. The low four bits of
+! that halfword are the phrase mod's, so they are ignored in the test.
 !
 ! A 3-band record is painted here, bottom-aligned like the stock fill: the low
 ! rows blue (0055E1), the mid rows amber (FFA600) and the rest white, all as
@@ -31,6 +32,7 @@
         .global wave3ov
 wave3ov:
         mov.w   @(4,r5),r0
+        or      #0x0f,r0
         cmp/eq  #-1,r0
         bf      stock
         mov.b   @(3,r5),r0

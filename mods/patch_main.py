@@ -226,6 +226,28 @@ MODS = {
         hook=True,
         **PREVIEW_READ,
     ),
+    # Hooks PREVIEW_READ: reads the track's PSSI and beat grid and reduces them
+    # to the 600-column phrase table phrasedata writes.
+    'phrasefetch': Mod(
+        what='phrase analysis (PSSI) read and reduced to overview columns',
+        target='main',
+        fw_versions=('1.87',),
+        args=[],
+        literal=False,
+        hook=True,
+        **PREVIEW_READ,
+    ),
+    # Hooks OVERVIEW_PUBLISH: writes the phrase table phrasefetch kept into the
+    # overview records' spare bits (see main_phrasedata.s).
+    'phrasedata': Mod(
+        what='phrase colours in the overview payload',
+        target='main',
+        fw_versions=('1.87',),
+        args=[],
+        literal=False,
+        hook=True,
+        **OVERVIEW_PUBLISH,
+    ),
     'abletonlink': Mod(
         what='Ableton Link announcements (UDP 20808)',
         target='main',

@@ -256,6 +256,7 @@ class Deck:
         # the flash the -drive below attaches, since that is where the
         # bootloader reads it from.
         main_kernel = model_extract_n + "/main_unpacked.bin"
+        main_base = main_kernel
         main_mods = [m for m in self._main_mod_names() if env.get("CDJ_MAIN_" + m.upper()) == "1"]
         if main_mods:
             if env.get("MAIN_BOOT") == "flash":
@@ -278,6 +279,7 @@ class Deck:
         # Display firmware mods are patched into a copy of the image, per run:
         # each patch_gui.py mod <name> is on when CDJ_GUI_<NAME>=1.
         gui_image = model_extract_n + "/gui_unpacked.bin"
+        gui_base = gui_image
         gui_mods = [m for m in self._gui_mod_names() if env.get("CDJ_GUI_" + m.upper()) == "1"]
         if gui_mods:
             patched = host.native("%s/cdj-%s-gui.bin" % (nonempty(env, "LOGDIR", tmp), tag))
@@ -289,9 +291,9 @@ class Deck:
         self.gui_argv = [self.gui_qemu, "-M", profile.gui_machine, "-kernel", gui_image,
                          "-chardev", "socket,id=spilink,path=%s" % self.sock,
                          "-display", display, "-serial", "null", "-monitor", mon.spec(self.gui_mon)]
-        self._plan_snapshot(main_kernel, gui_image, media_src)
+        self._plan_snapshot([main_base, gui_base], main_mods + gui_mods, media_src)
 
-    def _plan_snapshot(self, main_kernel, gui_image, media_src):
+    def _plan_snapshot(self, images, mods, media_src):
         """SNAPSHOT=<point> (idle or loaded): start both boards from that saved
         point; when it is not saved yet, boot as usual and let the driver save
         it on the way. SNAPSHOT_SAVE=<point,...> saves without restoring."""
@@ -305,7 +307,16 @@ class Deck:
                 raise SystemExit("[%s] SNAPSHOT point %r: known points are %s" % (tag, p, ", ".join(snapshot.POINTS)))
         if not media_src:
             raise SystemExit("[%s] snapshots need MEDIA_MODE=img: a fat: medium cannot be saved" % tag)
-        root = snapshot.root(self.lay.tmp, [self.main_qemu, self.gui_qemu, main_kernel, gui_image, media_src])
+        # The patched images do not exist yet: the key is the images they are
+        # made from, the mods applied to them and the mods' own source, so an
+        # edited mod does not restore a point saved with the old one.
+        sources = []
+        if mods:
+            for d, dirs, names in os.walk(os.path.join(self.lay.emu, "mods")):
+                dirs[:] = sorted(n for n in dirs if n != "__pycache__")
+                sources += [os.path.join(d, n) for n in sorted(names)]
+        root = snapshot.root(self.lay.tmp, [self.main_qemu, self.gui_qemu, media_src] + images + sources,
+                             ",".join(mods))
         env["SNAPSHOT_ROOT"] = host.native(root)
         point_dir = os.path.join(root, point) if point else ""
         if point and snapshot.saved(point_dir):
@@ -359,7 +370,6 @@ class Deck:
         a headless batch; vnc is the virtual deck app's screen."""
         env, tag = self.env, self.tag
         d = nonempty(env, "GUI_DISPLAY", "gtk")
-        k = host.kind()
         if d == "vnc":
             # The virtual deck app: this deck's screen on a loopback VNC server
             # at CDJ_APP_VNC_BASE + its number (5921 for show1), and on a frame
@@ -389,27 +399,7 @@ class Deck:
             self.notes.append((2, "[%s] screen on VNC 127.0.0.1:%d (or the next free port to %d) and %s "
                                "for the virtual deck app" % (tag, port, last, self.gui_env["CDJ_GUI_FRAME_FILE"])))
             return "vnc=127.0.0.1:%d,to=%d" % (port - 5900, last - 5900)
-        # Fall back to headless when there is no X or Wayland socket (WSLg can
-        # lose its X server mid-session, and -display gtk then kills the GUI
-        # QEMU). macOS has no GTK build: its window is Cocoa, and it needs the
-        # logged-in desktop session (Aqua), which ssh does not have.
-        if k == host.MACOS:
-            if d == "gtk":
-                d = "cocoa"
-            if d in ("cocoa", "sdl") and _launchctl_manager() != "Aqua":
-                self.notes.append((2, "[%s] no desktop session (ssh?) -- falling back to GUI_DISPLAY=none" % tag))
-                d = "none"
-        elif k != host.WINDOWS and d in ("gtk", "sdl"):
-            wayland = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/nonexistent"),
-                                   os.environ.get("WAYLAND_DISPLAY", "wayland-0"))
-            if not (os.path.isdir("/tmp/.X11-unix") and os.listdir("/tmp/.X11-unix")) and not _is_socket(wayland):
-                self.notes.append((2, "[%s] no X or Wayland socket -- falling back to GUI_DISPLAY=none" % tag))
-                d = "none"
-        # The touch screen makes the window an absolute pointer, and QEMU then
-        # hides the host cursor for a guest that never draws one.
-        if d != "none" and not d.startswith("vnc") and "show-cursor=" not in d:
-            d += ",show-cursor=on"
-        return d
+        return window_display(d, tag, self.notes)
 
     # ------------------------------------------------------------ running --
 
@@ -600,6 +590,33 @@ def _same_filesystem(src, tmp_dir):
         return os.stat(src).st_dev == os.stat(tmp_dir).st_dev
     except OSError:
         return False
+
+
+def window_display(d, tag, notes):
+    """The -display for a window: GUI_DISPLAY d made to fit this host, with
+    the cursor shown."""
+    k = host.kind()
+    # Fall back to headless when there is no X or Wayland socket (WSLg can
+    # lose its X server mid-session, and -display gtk then kills the GUI
+    # QEMU). macOS has no GTK build: its window is Cocoa, and it needs the
+    # logged-in desktop session (Aqua), which ssh does not have.
+    if k == host.MACOS:
+        if d == "gtk":
+            d = "cocoa"
+        if d in ("cocoa", "sdl") and _launchctl_manager() != "Aqua":
+            notes.append((2, "[%s] no desktop session (ssh?) -- falling back to GUI_DISPLAY=none" % tag))
+            d = "none"
+    elif k != host.WINDOWS and d in ("gtk", "sdl"):
+        wayland = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/nonexistent"),
+                               os.environ.get("WAYLAND_DISPLAY", "wayland-0"))
+        if not (os.path.isdir("/tmp/.X11-unix") and os.listdir("/tmp/.X11-unix")) and not _is_socket(wayland):
+            notes.append((2, "[%s] no X or Wayland socket -- falling back to GUI_DISPLAY=none" % tag))
+            d = "none"
+    # The touch screen makes the window an absolute pointer, and QEMU then
+    # hides the host cursor for a guest that never draws one.
+    if d != "none" and not d.startswith("vnc") and "show-cursor=" not in d:
+        d += ",show-cursor=on"
+    return d
 
 
 def _launchctl_manager():

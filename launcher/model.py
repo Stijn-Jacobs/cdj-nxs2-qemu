@@ -74,6 +74,9 @@ class Model:
         self.fw_steps = values["MODEL_FW_STEPS"].split()
         self.display_upd = values.get("MODEL_DISPLAY_UPD", "")
         self.launch = values.get("MODEL_LAUNCH") or "rig"
+        self.dsp_idle = values.get("MODEL_DSP_IDLE", "")
+        self.dsp_isr_fast = values.get("MODEL_DSP_ISR_FAST", "")
+        self.dsp_gen_args = values.get("MODEL_DSP_GEN_ARGS", "")
         self.idle_s = values.get("MODEL_IDLE_S", "")
         self.load_steps = values.get("MODEL_LOAD_STEPS", "")
         self.expected = tuple(tuple(line.split(None, 1))
@@ -84,6 +87,17 @@ class Model:
         """The two-board real-DSP rig (rig.py); any other model starts as one
         MAIN emulator (deck.py)."""
         return self.launch == "rig"
+
+    @property
+    def has_dsp_module(self):
+        """A one-window model whose DSP runs through a generated module."""
+        return not self.is_rig and bool(self.dsp_idle)
+
+    @property
+    def module_dir(self):
+        """The folder of the jit cache that holds this model's built module;
+        the default model's is the one build_dsp_module.sh calls curated."""
+        return "curated" if self.id == DEFAULT else "curated-" + self.id
 
     @property
     def images(self):

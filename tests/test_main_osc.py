@@ -16,8 +16,8 @@ WRAPPER = 0x085113EC
 PORT = 50010
 MASK = 0xFFE7FFFF
 STATUS_OFF, BEAT_OFF = 0x100, 0x300
-CAVE = (0x400, 0x2E00)
-SERIALISER = 0x2F00
+CAVE = (0x400, 0x4E00)
+SERIALISER = 0x4F00
 FRAME = 0xF000
 # MAIN's fixed addresses the routines read, moved into the interpreter's memory
 FIXED = {0x0AB84CFA: 0xE000, 0x0A35F39C: 0xE010, 0x0B0C5258: 0xE020}
@@ -230,7 +230,7 @@ def build_image():
     """A synthetic MAIN image at address 0: both real signatures, the literals
     their spans load (the serialiser's and the send wrapper's address) and an
     erased cave for every registered routine."""
-    d = bytearray(0x3000)
+    d = bytearray(0x5000)
     for off, site in ((STATUS_OFF, patch_main.STATUS_SEND), (BEAT_OFF, patch_main.BEAT_SEND)):
         for k, op in enumerate(site['sig']):
             struct.pack_into('<H', d, off + 2 * k, op)

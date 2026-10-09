@@ -40,7 +40,8 @@ options:
   --reconfigure          ask the step 6 and 7 questions again
   --model <id>           the player: cdj2000nxs2 (default) or an older one in models/;
                          asked when not given. An older player gets steps 1-4
-                         and a one-window start: no DSP code, mods or deck setup
+                         and a one-window start: no mods or deck setup, and a
+                         DSP module (step 5) for the CDJ-2000NXS and XDJ-1000
   --firmware <file>      your update file for that player (re-installs the images);
                          C2KNXS2.UPD for the CDJ-2000NXS2
   --music <folder>       the rekordbox USB export to image (re-makes the stick)
@@ -235,7 +236,8 @@ class Setup:
         if self.model.id != stored and not o.dry and os.path.isfile(self.lay.conf):
             conf.save(self.lay.conf, dict(self.values, CDJ_MODEL=self.model.id))
         if not self.model.is_rig:
-            con.info("player: %s (one window; no DSP code, mods or deck setup)" % self.model.title)
+            con.info("player: %s (one window; no mods or deck setup%s)"
+                     % (self.model.title, "" if self.model.has_dsp_module else ", no DSP code"))
 
     @property
     def fw_dir(self):
@@ -642,6 +644,9 @@ class Setup:
         shown = "~/c14gen" if not lay.packaged else cache
         curated_so = os.path.join(cache, "curated", "m.so")
         con.step(5, "DSP code (the JIT's cache)")
+        if self.model.has_dsp_module:
+            self._deck_module(shown)
+            return
         if not self.model.is_rig:
             con.dim("not needed for the %s: its DSP is not emulated" % self.model.title)
             return
@@ -695,36 +700,61 @@ class Setup:
                 else:
                     con.warn("the JIT compiled nothing new; the end of %s says why" % os.path.relpath(log, lay.emu))
 
+    def _deck_module(self, shown):
+        """Step 5 for a one-window model with a generated DSP module: the module
+        is built from a recording or not at all (there is no warm-up cache)."""
+        con, o, lay, m = self.con, self.o, self.lay, self.model
+        module = os.path.join(lay.jit_cache, m.module_dir, "m.so")
+        con.info("The %s's DSP program runs through a native module generated from a" % m.title)
+        con.info("recording of it playing, installed in %s/%s. Without it the sound gaps." % (shown, m.module_dir))
+        if o.warm == "off":
+            con.dim("skipped (--no-warm): ./setup.sh --warm builds it later")
+        elif os.path.isfile(module) and o.warm != "force" and not o.curated:
+            con.good("DSP module: %s/%s/m.so (--warm builds it again)" % (shown, m.module_dir))
+        elif lay.packaged:
+            con.warn("the DSP module is a maintainer build; the packaged program has none for the %s yet" % m.title)
+        elif not o.dry and not (os.path.exists(self.binaries()[0]) and self.firmware_ready()
+                                and os.path.isfile(lay.usb_image)):
+            con.warn("the DSP module needs the emulator, the firmware and the USB stick first;")
+            con.warn("run ./setup.sh --warm once they are there")
+        elif o.warm == "auto" and not o.curated and not con.ask_yn(
+                "build it now? (about an hour, ~16 GB free disk while it runs)", "y"):
+            con.dim("skipped; ./setup.sh --warm does it later")
+        else:
+            self._curated(module)
+
     def _curated(self, curated_so):
         con, o, lay = self.con, self.o, self.lay
         bash = host.find_bash() or "bash"
         cmd = [bash, host.posix(os.path.join(lay.scripts, "build", "build_dsp_module.sh"))]
+        env = dict(os.environ, CDJ_MODEL=self.model.id)
         if o.keep_recording:
             cmd.append("--keep-recording")
         log = os.path.join(lay.logs, "dsp-module-%s.log" % self.ts)
         if o.dry:
             con.would("%s > logs/dsp-module-%s.log, which runs:" % (" ".join(cmd), self.ts))
-            r = subprocess.run(cmd + ["--dry-run"], capture_output=True, text=True)
+            r = subprocess.run(cmd + ["--dry-run"], capture_output=True, text=True, env=env)
             for line in (r.stdout + r.stderr).splitlines():
                 con._p("      " + line)
             return True
         if not self.deck_ready():
             con.warn("the curated module needs the emulators, the firmware and the USB stick first")
             return False
-        r = subprocess.run(cmd + ["--preflight"], capture_output=True, text=True)
+        r = subprocess.run(cmd + ["--preflight"], capture_output=True, text=True, env=env)
         if r.returncode != 0:
             con.warn("no curated module: %s" % "; ".join((r.stdout + r.stderr).strip().splitlines()))
             return False
         try:
             ok = con.run_phase("curated DSP module: record, generate, profile-guided build (about an hour)", log,
                                "the deck's own log is %s; a module that does not replay EXACT is not installed"
-                               % os.path.join(lay.tmp, "bridge-main-rec1.log"), cmd, rel=lay.emu)
+                               % os.path.join(lay.tmp, "bridge-main-rec1.log"), cmd, rel=lay.emu, env=env)
         except KeyboardInterrupt:
             self._stop_background()
         if ok:
-            con.good("installed ~/c14gen/curated/m.so: ./start.sh loads it from now on")
+            con.good("installed ~/c14gen/%s/m.so: ./start.sh loads it from now on" % self.model.module_dir)
             return True
-        con.warn("no curated module; falling back to the quick warm-up")
+        if self.model.is_rig:
+            con.warn("no curated module; falling back to the quick warm-up")
         return False
 
     def step_config(self):
@@ -901,6 +931,9 @@ class Setup:
         run = "CDJ-Emulator" if lay.packaged else "./start.sh"
         if not self.model.is_rig:
             con.info("player       %s" % self.model.title)
+            if self.model.has_dsp_module:
+                built = os.path.isfile(os.path.join(lay.jit_cache, self.model.module_dir, "m.so"))
+                con.info("DSP module   %s" % ("built" if built else "none yet: the sound will gap (./setup.sh --warm)"))
             con.info("start it:    %s%s%s      stop: Ctrl-C (or close the window)" % (con.B, run, con.N))
             return self.offer_start()
         decks = c["CDJ_DECKS"] or "1"

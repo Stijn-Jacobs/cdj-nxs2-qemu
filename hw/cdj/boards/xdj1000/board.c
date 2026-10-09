@@ -5,6 +5,7 @@
 #include "cdj_ether.h"
 #include "usb_r8a66597.h"
 #include "cdj_pnl_link.h"
+#include "cdj_pnl_touch.h"
 #include "cdj_gui_keys.h"
 #include "hw/char/serial.h"
 /*
@@ -25,6 +26,11 @@
  */
 #define SH7724_PNL_SYNC  0x8F
 
+typedef struct Sh7724PanelExtra {
+    bool lever_fwd;
+    CdjPnlTouch touch;
+} Sh7724PanelExtra;
+
 /*
  * The XDJ-1000MK2 decodes report byte 0x0F bit 0x02 as its DIRECTION lever
  * (0x0949CB0A in 1.45: DirectionRev = the bit read as clear). MAIN latches the
@@ -33,10 +39,36 @@
  * would run backwards from its first frame and look frozen. The lever sits at
  * FWD, where the bit reads 1.
  */
-static void sh7724_panel_lever_fwd(CdjPnlLinkState *s, void *extra,
-                                   uint8_t *rx)
+static void sh7724_panel_defaults(CdjPnlLinkState *s, void *extra, uint8_t *rx)
 {
-    rx[0x0F] |= 0x02;
+    Sh7724PanelExtra *e = extra;
+
+    if (e->lever_fwd) {
+        rx[0x0F] |= 0x02;
+    }
+}
+
+static void sh7724_panel_last(CdjPnlLinkState *s, void *extra, uint8_t *rx,
+                              int64_t now)
+{
+    Sh7724PanelExtra *e = extra;
+
+    cdj_pnl_touch_apply(&e->touch, rx, now);
+}
+
+static bool sh7724_panel_drain(CdjPnlLinkState *s, void *extra, const char *msg,
+                               int64_t now)
+{
+    Sh7724PanelExtra *e = extra;
+
+    return cdj_pnl_touch_drain(&e->touch, msg, now);
+}
+
+static void sh7724_panel_summary(CdjPnlLinkState *s, void *extra)
+{
+    Sh7724PanelExtra *e = extra;
+
+    cdj_pnl_touch_summary(&e->touch);
 }
 
 /*
@@ -150,6 +182,7 @@ typedef struct Sh7724Deck {
     unsigned pnl_frame;
     bool pwm_ram;
     bool lever_fwd;             /* idle frame reports the direction lever at FWD */
+    bool touch_screen;          /* resistive panel digitised by the panel MCU */
     int auth_iic;               /* IIC channel of the auth chip, or -1 */
 } Sh7724Deck;
 
@@ -256,16 +289,27 @@ static void sh7724_deck_init(MachineState *machine, const Sh7724Deck *deck)
                            DEVICE_LITTLE_ENDIAN);
         }
     }
-    static const CdjPnlLinkHooks lever_fwd_hooks = {
-        .build_defaults = sh7724_panel_lever_fwd,
+    static const CdjPnlLinkHooks panel_hooks = {
+        .build_defaults = sh7724_panel_defaults,
+        .build_last = sh7724_panel_last,
+        .drain_extra = sh7724_panel_drain,
+        .summary = sh7724_panel_summary,
     };
+    Sh7724PanelExtra *panel = cdj_pnl_link_init(sysmem, CDJ_SCIF2_ADDR,
+                                                "sh7724.scif2-panel",
+                                                deck->pnl_frame,
+                                                SH7724_PNL_SYNC, &panel_hooks,
+                                                sizeof(*panel));
 
-    cdj_pnl_link_init(sysmem, CDJ_SCIF2_ADDR, "sh7724.scif2-panel",
-                      deck->pnl_frame, SH7724_PNL_SYNC,
-                      deck->lever_fwd ? &lever_fwd_hooks : NULL, 0);
+    panel->lever_fwd = deck->lever_fwd;
     cdj_gui_keys_init(sh7724_deck_keys, ARRAY_SIZE(sh7724_deck_keys),
                       deck->name);
-    cdj_gui_pointer_init();
+    if (deck->touch_screen) {
+        cdj_pnl_touch_init(&panel->touch);
+        cdj_pnl_touch_pointer_init(&panel->touch);
+    } else {
+        cdj_gui_pointer_init();
+    }
 
     cdj_board_load(machine);
     cdj_pcring_exit.notify = cdj_pcring_dump;
@@ -279,6 +323,7 @@ static const Sh7724Deck xdj1000_deck = {
     .usb_base = XDJ1000_USB_BASE,
     .usb_irq = CDJ_USB1,
     .pnl_frame = 32,
+    .touch_screen = true,
     .auth_iic = -1,
 };
 
@@ -297,6 +342,7 @@ static const Sh7724Deck xdj700_deck = {
     .usb_base = CDJ_USB_BASE,
     .usb_irq = CDJ_USB0,
     .pnl_frame = 32,
+    .touch_screen = true,
     .auth_iic = 0,
 };
 
@@ -310,6 +356,7 @@ static const Sh7724Deck xdj1000mk2_deck = {
     .pnl_frame = 32,
     .pwm_ram = true,
     .lever_fwd = true,
+    .touch_screen = true,
     .auth_iic = 0,
 };
 

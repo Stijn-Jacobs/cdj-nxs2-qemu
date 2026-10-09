@@ -15,7 +15,9 @@
 ! here. Each record becomes, as the display reads it: +0 ABC, +1 AB, +2 A
 ! (1..40 rows), +3 0x3B, +4 and +5 0xFF. In a stock record the +4 halfword
 ! starts with a height field, and 0xFFFF there would be 63 rows, past the
-! strip renderer's own 40-row clamp, so the display takes it as the mark.
+! strip renderer's own 40-row clamp, so the display takes it as the mark. The
+! low nibble of the last byte is left as it was: the phrase mod keeps its
+! colour there, and the display ignores it in the test for the mark.
 
 	.text
 wave3ov:
@@ -35,8 +37,10 @@ column:
 	mov	#0x3B,r0
 	mov.b	r0,@(2,r4)
 	mov	#-1,r0
-	mov.b	r0,@(4,r4)
 	mov.b	r0,@(5,r4)
+	mov.b	@(4,r4),r0		! the low nibble is the phrase mod's
+	or	#0xF0,r0
+	mov.b	r0,@(4,r4)
 	add	#6,r4
 	dt	r6
 	bf	column

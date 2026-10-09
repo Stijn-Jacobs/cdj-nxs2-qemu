@@ -42,6 +42,10 @@ typedef struct CdjLatch {
     bool display;
 } CdjLatch;
 
+static void (*latch_watch_hook)(unsigned off);
+static bool (*answer_pin_level)(void);
+static uint16_t answer_pin_mask;
+
 static uint64_t latch_read(void *opaque, hwaddr off, unsigned size)
 {
     CdjLatch *s = opaque;
@@ -59,8 +63,17 @@ static uint64_t latch_read(void *opaque, hwaddr off, unsigned size)
             val |= DISPLAY_PF1;
         }
     }
+    if (off == REG_DISPLAY && answer_pin_level) {
+        val &= ~answer_pin_mask;
+        if (answer_pin_level()) {
+            val |= answer_pin_mask;
+        }
+    }
     if (off == REG_PANEL) {
         val |= PANEL_USB_OC_N;
+        if (answer_pin_level) {
+            val |= PANEL_DISPLAY_UP;
+        }
     }
     return val;
 }
@@ -69,6 +82,9 @@ static void latch_write(void *opaque, hwaddr off, uint64_t val, unsigned size)
 {
     CdjLatch *s = opaque;
 
+    if (latch_watch_hook) {
+        latch_watch_hook(off);
+    }
     s->reg[off / 2] = val;
     if (off == REG_DSP_CMD && s->dsp) {
         s->dsp->command(s->dsp->opaque, val & DSP_CMD_MASK);
@@ -81,6 +97,24 @@ static const MemoryRegionOps latch_ops = {
     .endianness = DEVICE_LITTLE_ENDIAN,
     .valid = { .min_access_size = 2, .max_access_size = 2 },
 };
+
+static CdjLatch *cdj_latch;
+
+void cdj2000_latch_watch(void (*fn)(unsigned off))
+{
+    latch_watch_hook = fn;
+}
+
+void cdj2000_latch_answer_pin(bool (*level)(void), uint16_t mask)
+{
+    answer_pin_level = level;
+    answer_pin_mask = mask;
+}
+
+uint16_t cdj2000_latch_get(unsigned off)
+{
+    return cdj_latch->reg[off / 2];
+}
 
 static const VMStateDescription vmstate_latch = {
     .name = "cdj2000-latch",
@@ -97,6 +131,8 @@ void cdj2000_latch_init(MemoryRegion *sysmem, const CdjDspWires *dsp,
                         bool display)
 {
     CdjLatch *s = g_new0(CdjLatch, 1);
+
+    cdj_latch = s;
 
     s->dsp = dsp;
     s->display = display;

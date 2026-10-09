@@ -5,6 +5,8 @@
 #include "qemu/timer.h"
 
 #define CDJ_PNL_LINK_SIZE 0x1000
+/* Reply bytes a second device can have queued at once. */
+#define CDJ_PNL_LINK_FIFO 128
 
 #define CDJ_PNL_LINK_SCSMR       0x00
 #define CDJ_PNL_LINK_SCBRR       0x04
@@ -349,6 +351,14 @@ static void cdj_pnl_link_write(void *opaque, hwaddr off, uint64_t val,
     }
     switch (off & 0xFFC) {
     case CDJ_PNL_LINK_SCFTDR:
+        if (s->hooks && s->hooks->link_selected &&
+            s->hooks->link_selected(s->extra)) {
+            if (!s->rxlen) {
+                s->rxhead = 0;
+            }
+            s->rx[s->rxhead + s->rxlen++] = s->hooks->link_byte(s->extra, val);
+            return;
+        }
         s->tx[s->txlen++] = (uint8_t)val;
         if (s->txlen == s->frame_len) {
             s->txlen = 0;
@@ -503,7 +513,7 @@ void *cdj_pnl_link_init(MemoryRegion *sysmem, hwaddr addr, const char *name,
     s->sync = sync;
     s->hooks = hooks;
     s->extra = extra_size ? g_malloc0(extra_size) : NULL;
-    s->rx = g_new0(uint8_t, frame_len);
+    s->rx = g_new0(uint8_t, MAX(frame_len, CDJ_PNL_LINK_FIFO));
     s->tx = g_new0(uint8_t, frame_len);
     s->lvl_val = g_new0(uint8_t, s->payload_len);
     s->lvl_live = g_new0(bool, s->payload_len);

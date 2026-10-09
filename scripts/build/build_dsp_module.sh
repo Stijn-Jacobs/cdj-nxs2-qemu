@@ -17,7 +17,11 @@
 #               replay (every write and state hash as recorded) installs it
 #
 #   usage: scripts/build/build_dsp_module.sh [--keep-recording] [--dry-run] [--preflight]
-#   env:   WORK=<dir>   recording, profile, generated C (default extract/dsp-module)
+#   env:   CDJ_MODEL=<id>  the player (default cdj2000nxs2). An older one whose profile
+#                  names its DSP's idle loop (MODEL_DSP_IDLE) records one headless deck that
+#                  loads and plays a track, with the core skipping that loop as in a session,
+#                  and installs ~/c14gen/curated-<id>/m.so
+#          WORK=<dir>   recording, profile, generated C (default extract/dsp-module)
 #          JOBS=<n>     parallel generator/gcc jobs (min(14, threads); ~0.8 GB RAM each)
 #          PLAY_S=270   virtual seconds the recorded deck plays
 #          TRAIN_CYCLES=30000000000   the training slice, in DSP cycles
@@ -28,14 +32,25 @@
 set -uo pipefail
 E="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 . "$E/scripts/cdj_paths.sh"
+. "$E/scripts/cdj_model.sh"
+cdj_model_load || exit 2
 C6X="$E/hw/cdj/c6x"
 LIBDIR="${C66X_JIT_LIBDIR:-$HOME/build/c6x}"
-WORK="${WORK:-$CDJ_ROOT/extract/dsp-module}"
+# The default model's module is "curated"; launcher/model.py names the others alike.
+CURATED=curated; [ "$MODEL_ID" = cdj2000nxs2 ] || CURATED="curated-$MODEL_ID"
+export CDJ_MODEL="$MODEL_ID"
+IDLE_SPEC="${MODEL_DSP_IDLE:-}"
+# The older decks record with the core skipping its idle loop, so every replay
+# stops where the recorded run did.
+if [ -n "$IDLE_SPEC" ]; then
+    export REPLAY_IDLE="$IDLE_SPEC" C66X_IDLE_ISR_FAST="${MODEL_DSP_ISR_FAST:-0}"
+fi
+WORK="${WORK:-$CDJ_ROOT/extract/dsp-module${CURATED#curated}}"
 REC="$WORK/dsp.c6rec"
 PROF="$WORK/profile"
 GEN="$WORK/gen"
 OBJ="$WORK/pgo"
-DEST="$HOME/c14gen/curated"
+DEST="$HOME/c14gen/$CURATED"
 PLAY_S="${PLAY_S:-270}"
 TRAIN_CYCLES="${TRAIN_CYCLES:-30000000000}"
 NEED_MB=16000
@@ -92,8 +107,14 @@ preflight() {
         echo "gcc here is clang, and its profile-guided build needs llvm-profdata (Xcode's, via xcrun)"
         ok=1
     fi
-    for t in main_unpacked.bin gui_unpacked.bin flash.bin usbmedia3.img; do
-        [ -f "$CDJ_ROOT/extract/$t" ] || { echo "needs extract/$t (./setup.sh makes it)"; ok=1; }
+    if [ -n "$IDLE_SPEC" ]; then
+        needs=("$MODEL_EXTRACT/main_unpacked.bin" extract/usbmedia3.img)
+        [ -z "${MODEL_DISPLAY_UPD:-}" ] || needs+=("$MODEL_EXTRACT/display.upd")
+    else
+        needs=(extract/main_unpacked.bin extract/gui_unpacked.bin extract/flash.bin extract/usbmedia3.img)
+    fi
+    for t in "${needs[@]}"; do
+        [ -f "$CDJ_ROOT/$t" ] || { echo "needs $t (./setup.sh makes it)"; ok=1; }
     done
     return "$ok"
 }
@@ -119,28 +140,47 @@ stage "2/5 recording one deck with no module ($PLAY_S s of play; slower than rea
 run env MODULE=none AUTOJIT=0 PLAY_S="$PLAY_S" \
     CDJ_C6X_RECORD="$(native "$REC")" C66X_JIT_PROFILE="$(native "$PROF")" \
     bash "$E/scripts/run/warm_jit.sh" rec
+rec_rc=$?
 if [ "$DRY" = 0 ]; then
     [ -s "$REC" ] || die "no recording at $REC (the deck log is /tmp/bridge-main-rec1.log)"
-    [ -s "$PROF/profile.txt" ] || die "no profile in $PROF: the deck did not shut down cleanly"
     # A deck whose auto-load missed sits on the browse list: the recording is
     # then the idle DSP, and a module built from it leaves all of playback to
     # the interpreter -- it replays EXACT and runs no faster than no module.
-    pcm="$(grep -a 'nonzero PCM words' /tmp/bridge-main-rec1.log 2>/dev/null | tail -1 |
-           sed -n 's/.*nonzero PCM words \([0-9]*\).*/\1/p')"
-    [ "${pcm:-0}" -gt 0 ] ||
-        die "the deck never played the track (no PCM in /tmp/bridge-main-rec1.log; see /tmp/run-rec1.txt); run it again"
+    if [ -n "$IDLE_SPEC" ]; then
+        [ "$rec_rc" = 0 ] || die "the deck never played the track (see /tmp/bridge-main-rec1.log); run it again"
+    else
+        pcm="$(grep -a 'nonzero PCM words' /tmp/bridge-main-rec1.log 2>/dev/null | tail -1 |
+               sed -n 's/.*nonzero PCM words \([0-9]*\).*/\1/p')"
+        [ "${pcm:-0}" -gt 0 ] ||
+            die "the deck never played the track (no PCM in /tmp/bridge-main-rec1.log; see /tmp/run-rec1.txt); run it again"
+    fi
     echo "recorded $(( $(wc -c < "$REC") >> 20 )) MB"
+fi
+if [ -n "$IDLE_SPEC" ]; then
+    # Only the NXS2's machine writes the profile as it runs; for the others
+    # the interpreter replays the recording, which is exact, to make it.
+    echo "+ C66X_JIT_PROFILE=$PROF $REPLAY $REC  > $WORK/profile.log"
+    [ "$DRY" = 1 ] || env -u C66X_JIT -u C66X_JIT_AUTO C66X_JIT_PROFILE="$(native "$PROF")" \
+        "$REPLAY" "$(native "$REC")" > "$WORK/profile.log" 2>&1
+fi
+if [ "$DRY" = 0 ]; then
+    [ -s "$PROF/profile.txt" ] || die "no profile in $PROF: the deck did not shut down cleanly (see $WORK/profile.log)"
 fi
 
 stage "3/5 generating C from the profile"
 [ "$DRY" = 1 ] || { rm -rf "$GEN" && mkdir -p "$GEN"; }
 # The maintainers' recipe, with this run's profile as every input. --lib is
 # explicit: the generator's ~ default does not expand under MSYS2's Python.
+GEN_ARGS=(--roots 1300 --min 20000 --kernels 48 --loops 24 --lmin 0 --qroots 80 --qmin 30000 --cold 2000)
+if [ -n "$IDLE_SPEC" ]; then
+    # shellcheck disable=SC2206  # the profile's options are words
+    GEN_ARGS+=(--idle-head "${IDLE_SPEC%%:*}" $MODEL_DSP_GEN_ARGS)
+else
+    GEN_ARGS+=(--idle-head 0x80076F00 --clean-prof "$(native "$PROF")" --clean-roots 2000
+               --qprof "$(native "$PROF")")
+fi
 run python3 "$C6X/tools/c14_jitgen.py" "$(native "$PROF")" "$(native "$GEN")/m" \
-    --lib "$(native "$LIBDIR/libc66x.so")" --no-cc \
-    --roots 1300 --min 20000 --kernels 48 --idle-head 0x80076F00 \
-    --loops 24 --lmin 0 --qroots 80 --qmin 30000 --cold 2000 \
-    --clean-prof "$(native "$PROF")" --clean-roots 2000 --qprof "$(native "$PROF")" \
+    --lib "$(native "$LIBDIR/libc66x.so")" --no-cc "${GEN_ARGS[@]}" \
     --jobs "$JOBS" || die "the generator failed"
 if [ "$DRY" = 0 ]; then
     ls "$GEN"/m.*.c > /dev/null 2>&1 || die "the generator wrote no C into $GEN"

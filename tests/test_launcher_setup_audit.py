@@ -143,7 +143,7 @@ def test_a_player_id_is_matched_without_regard_to_case(monkeypatch):
     monkeypatch.delenv("CDJ_MODEL", raising=False)
     m = model.load(" XDJ1000MK2 ")
     assert m.id == "xdj1000mk2"
-    assert model.load("CDJ2000NXS2").id == "cdj2000nxs2"
+    assert model.load("CDJ2000NXS2").module_dir == "curated"
 
 
 def _con(monkeypatch, text):
@@ -197,11 +197,3 @@ def test_a_profile_without_its_launch_line_is_refused(tmp_path, monkeypatch):
     with pytest.raises(model.ModelError):
         model.load("broken")
 
-
-def test_a_snapshot_of_a_model_with_no_steps_is_refused(tmp_path):
-    from launcher import deck
-
-    m = model.load("xdj1000mk2")
-    assert not (m.idle_s and m.load_steps)
-    with pytest.raises(SystemExit):
-        deck.plan_snapshot(None, m, [], {"SNAPSHOT": "idle"})

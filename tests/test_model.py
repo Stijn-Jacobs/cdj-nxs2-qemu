@@ -99,3 +99,16 @@ def test_extract_dir_is_the_layout_extract_for_the_default_model():
     other = model.load("cdj2000")
     assert model.extract_dir(Lay(), default) == "/repo/extract"
     assert model.extract_dir(Lay(), other) == os.path.join("/repo", "extract/cdj2000")
+
+
+def test_dsp_module_models_name_their_idle_loop():
+    for mid, head in (("cdj2000nxs", "0xC004CB8C"), ("xdj1000", "0xC004CD0C")):
+        m = model.load(mid)
+        assert m.has_dsp_module
+        assert m.dsp_idle == head + ":0x11804AE0:0x11805C00"
+        assert m.dsp_isr_fast == "1"
+        assert m.dsp_gen_args.split() == ["--wide-mem", "--ret-predict", "16"]
+        assert m.module_dir == "curated-" + mid
+    for mid in ("cdj2000nxs2", "cdj2000", "xdj700"):
+        assert not model.load(mid).has_dsp_module
+    assert model.load().module_dir == "curated"

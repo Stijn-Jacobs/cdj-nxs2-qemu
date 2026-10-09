@@ -16,7 +16,7 @@ import shlex
 import subprocess
 
 from . import chain, host, model, snapshot
-from .boot_deck import _monsock
+from .boot_deck import _monsock, window_display
 from .chain import nonempty, say
 from .layout import Layout
 from .rig import default_audiodev
@@ -42,12 +42,32 @@ def missing_images(lay, m):
     return [m.extract + "/" + n for n in m.images if not os.path.isfile(os.path.join(folder, n))]
 
 
+def dsp_env(lay, m, env):
+    """The DSP knobs a model's profile sets: the busy-wait loop the core skips,
+    the interrupt fast path, and the module built by build_dsp_module.sh unless
+    MODULE=none or C66X_JIT names one by hand."""
+    knobs = {"CDJ_C6747_IDLE": nonempty(env, "CDJ_C6747_IDLE", m.dsp_idle)}
+    if m.dsp_isr_fast:
+        knobs["C66X_IDLE_ISR_FAST"] = nonempty(env, "C66X_IDLE_ISR_FAST", m.dsp_isr_fast)
+    module = os.path.join(lay.jit_cache, m.module_dir, "m.so")
+    if env.get("C66X_JIT") or env.get("MODULE") == "none":
+        return knobs
+    if os.path.isfile(module):
+        knobs["C66X_JIT"] = host.native(module)
+    else:
+        say("no DSP module for the %s yet: its DSP runs interpreted and the sound will gap "
+            "(./setup.sh --model %s builds it)" % (m.title, m.id))
+    return knobs
+
+
 def command(lay, m, env):
     """(argv, env) of the player's QEMU. The stick is a snapshot, so the
     firmware's writes to it never reach the image."""
     folder = model.extract_dir(lay, m)
     env = dict(env)
     env["CDJ_ATA"] = "1"
+    if m.has_dsp_module:
+        env.update(dsp_env(lay, m, env))
     if m.display_upd:
         env["CDJ_BF531_UPD"] = host.native(os.path.join(folder, model.DISPLAY_UPD_IMAGE))
     env["CDJ_PANEL_KEYSOCK"] = nonempty(env, "CDJ_PANEL_KEYSOCK", str(host.pick_udp_port(PANEL_KEY_PORT)))
@@ -56,13 +76,13 @@ def command(lay, m, env):
             "-serial", "file:" + os.path.join(lay.logs, m.id + ".log"),
             "-drive", "if=none,id=usbstk,file=%s,format=raw,snapshot=on" % host.native(lay.usb_image),
             "-device", "usb-storage,drive=usbstk,port=1"]
-    display = env.get("GUI_DISPLAY")
-    if display:
-        # The window has an absolute pointer (so the host never grabs the
-        # mouse), and QEMU then hides the host cursor over it.
-        if display != "none" and not display.startswith("vnc") and "show-cursor=" not in display:
-            display += ",show-cursor=on"
-        argv += ["-display", display]
+    notes = []
+    display = window_display(nonempty(env, "GUI_DISPLAY", "gtk"), m.id, notes)
+    for _level, text in notes:
+        say(text)
+    # The window has an absolute pointer (so the host never grabs the mouse),
+    # and QEMU then hides the host cursor over it unless show-cursor is on.
+    argv += ["-display", display]
     if nonempty(env, "NOSOUND", "0") != "1":
         # The same ring, prefill and latency cap (ms) as the NXS2's rig.
         env["CDJ_DSP_AUDIO"] = nonempty(env, "CDJ_DSP_AUDIO", "1:3000:150:450")
@@ -112,7 +132,8 @@ def start(m, env, dry):
     say("%s: one window with the USB stick. Pro DJ Link, a second deck, MIDI controllers, mods and "
         "the virtual deck app are CDJ-2000NXS2 features and are skipped." % m.title)
     if dry:
-        knobs = ["CDJ_ATA", "CDJ_BF531_UPD", "CDJ_PANEL_KEYSOCK", "CDJ_DSP_AUDIO"]
+        knobs = ["CDJ_ATA", "CDJ_BF531_UPD", "CDJ_PANEL_KEYSOCK", "CDJ_DSP_AUDIO", "CDJ_C6747_IDLE",
+                 "C66X_IDLE_ISR_FAST", "C66X_JIT"]
         say("would run:  %s %s" % (" ".join("%s=%s" % (k, env[k]) for k in knobs if k in env),
                                    " ".join(shlex.quote(a) for a in argv)))
         return 0

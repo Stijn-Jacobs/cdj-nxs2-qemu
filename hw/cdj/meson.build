@@ -18,6 +18,8 @@ sh4_ss.add(declare_dependency(include_directories: include_directories('.', 'com
 subdir('c6x')
 subdir('common')
 subdir('bfin')
+subdir('m16c')
 subdir('boards/nxs2')
 subdir('boards/cdj2000')
+subdir('boards/cdj900')
 subdir('boards/xdj1000')

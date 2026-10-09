@@ -20,7 +20,7 @@ from test_main_usbmidi import UsbMidiCpu
 BASE = 0
 BEAT_OFF = 0x300
 RECV_OFF = 0x100
-CAVE = (0x400, 0x3000)
+CAVE = (0x400, 0x5000)
 FRAME = 0xF000
 MASK = 0xFFE7FFFF
 
@@ -44,7 +44,7 @@ def build_image():
     """A synthetic MAIN image at address 0: the beat-send signature (with the
     wrapper literal its span loads), the Link receive signature (with the two
     literals its span loads) and an erased cave for every registered routine."""
-    d = bytearray(0x3000)
+    d = bytearray(0x5000)
     for off, site in ((BEAT_OFF, patch_main.BEAT_SEND), (RECV_OFF, patch_main.LINK_RECEIVE)):
         for k, op in enumerate(site['sig']):
             struct.pack_into('<H', d, off + 2 * k, op)

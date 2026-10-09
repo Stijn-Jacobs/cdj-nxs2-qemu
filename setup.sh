@@ -38,7 +38,8 @@
 #   --reconfigure          ask the step 6 questions again
 #   --model <id>           the player: cdj2000nxs2 (default) or an older one in models/;
 #                          asked when not given. An older player gets steps 1-4
-#                          and a one-window start
+#                          and a one-window start; the CDJ-2000NXS and XDJ-1000 also
+#                          get step 5, a DSP module built from a recording
 #   --firmware <file>      your update file for it (C2KNXS2.UPD for the CDJ-2000NXS2)
 #   --music <folder>       the rekordbox USB export to image (re-makes the stick)
 #   --tracks <folder>      a plain folder of music to image instead, analysed by baken

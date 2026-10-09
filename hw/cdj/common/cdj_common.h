@@ -148,6 +148,7 @@ typedef struct CdjDmacDei {
 } CdjDmacDei;
 void cdj_dmac_init(MemoryRegion *sysmem, const char *name, hwaddr base,
                    hwaddr dreq_base, hwaddr dreq_size, const CdjDmacDei *dei);
+void cdj_dmac_dei_connect(unsigned ch, qemu_irq irq);
 void cdj_dmac_dreq(void);
 
 const char *cdj_getenv(const char *name);
