@@ -36,12 +36,13 @@ These are the CDJ-2000NXS2's; the older players are covered under
 
 | | |
 |---|---|
-| **The real firmware** | All three processors of the player run its own code: MAIN, the display board and the audio DSP. |
-| **The DSP's own sound** | A C66x emulator with a JIT runs the DSP program MAIN uploads at boot; the audio you hear is its output. |
-| **Load and play** | A track from the stick loads and plays; the waveform and playhead move, the time counts down. |
-| **Pro DJ Link** | Two decks take their own addresses from a small DHCP server, announce themselves, and MASTER and SYNC work between them. |
-| **Any MIDI controller** | A profile of what the controller sends plus a mapping to CDJ keys. A Roland DJ-202 mapping is included, with its LEDs mirroring the player's lamps. |
-| **Jog and touch** | The jog bends the DSP's playback speed through the firmware's own jog engine; a click in the window is a touch on the screen. |
+| 🎛️ **The real firmware** | All three processors of the player run its own code: MAIN, the display board and the audio DSP. |
+| 🔊 **The DSP's own sound** | A C66x emulator with a JIT runs the DSP program MAIN uploads at boot; the audio you hear is its output. |
+| 📈 **Load and play** | A track from the stick loads and plays; the waveform and playhead move, the time counts down. |
+| 🔗 **Pro DJ Link** | Two decks take their own addresses from a small DHCP server, announce themselves, and MASTER and SYNC work between them. |
+| 🎚️ **Any MIDI controller** | A profile of what the controller sends plus a mapping to CDJ keys. A Roland DJ-202 mapping is included, with its LEDs mirroring the player's lamps. |
+| 🌀 **Jog and touch** | The jog bends the DSP's playback speed through the firmware's own jog engine; a click in the window is a touch on the screen. |
+| 🧪 **Built for modding** | Trace any firmware address, watch memory, change it while it runs, call firmware functions, script every input. |
 
 <a id="screenshots"></a>
 
@@ -693,8 +694,8 @@ flowchart LR
         direction LR
         MAIN1["MAIN<br/>SH7724 (SH-4A)"] <-- "SPI link" --> GUI1["Display<br/>SH7269 (SH-2A)"]
         MAIN1 <-- "host port / McBSP" --> DSP1["DSP<br/>C66x"]
-        DSP1 --> AUDIO1(["audio"])
-        GUI1 --> WIN1(["window"])
+        DSP1 --> AUDIO1(["🔊 audio"])
+        GUI1 --> WIN1(["🖥️ window"])
     end
     subgraph deck2["Deck 2"]
         direction LR
@@ -702,7 +703,7 @@ flowchart LR
         MAIN2 <-- "host port / McBSP" --> DSP2["DSP<br/>C66x"]
     end
     MAIN1 <-- "Pro DJ Link (emulated Ethernet)" --> MAIN2
-    CTRL(["MIDI controller"]) --> BRIDGE["midi/bridge.py"] -- TCP --> RELAY["midi_relay.py"] -- "panel report" --> MAIN1
+    CTRL(["🎛️ MIDI controller"]) --> BRIDGE["midi/bridge.py"] -- TCP --> RELAY["midi_relay.py"] -- "panel report" --> MAIN1
     RELAY -- "panel report" --> MAIN2
 ```
 
@@ -745,10 +746,10 @@ observable and every part of it adjustable, without touching a real deck:
 
 | | |
 |---|---|
-| **Watch it think** | `CDJ_FWLOG` prints the firmware's own internal log; `CDJ_FWTRACE=<address>,...` prints the registers each time execution passes an address; `CDJ_MWATCH=<address>` reports which instruction changed a memory word; QEMU's monitor dumps memory and the screen while it runs. |
-| **Change it while it runs** | `CDJ_MPOKE` holds memory at a value, `CDJ_PPOKE` writes one when a chosen instruction executes, and `CDJ_PCALL2` calls any firmware function from inside a running task. |
-| **Drive it from outside** | Every front-panel key, the jog, the pots and the touch screen are one datagram away (`scripts/run/panel_key.py`, `midi/bridge.py`), so input can be scripted, remapped or generated. |
-| **Replay the DSP** | The DSP core can record its execution and replay it deterministically, so a change to the audio path can be tested against a recording. |
+| 🔍 **Watch it think** | `CDJ_FWLOG` prints the firmware's own internal log; `CDJ_FWTRACE=<address>,...` prints the registers each time execution passes an address; `CDJ_MWATCH=<address>` reports which instruction changed a memory word; QEMU's monitor dumps memory and the screen while it runs. |
+| ✏️ **Change it while it runs** | `CDJ_MPOKE` holds memory at a value, `CDJ_PPOKE` writes one when a chosen instruction executes, and `CDJ_PCALL2` calls any firmware function from inside a running task. |
+| 🕹️ **Drive it from outside** | Every front-panel key, the jog, the pots and the touch screen are one datagram away (`scripts/run/panel_key.py`, `midi/bridge.py`), so input can be scripted, remapped or generated. |
+| 🔁 **Replay the DSP** | The DSP core can record its execution and replay it deterministically, so a change to the audio path can be tested against a recording. |
 
 From here, new behaviour is a question of finding the right code and writing
 the right change: remapping controls, adding features to the deck, studying the
@@ -803,7 +804,7 @@ playhead moves (`deck_smoke.py --snapshot`). The first run saves the points,
 so it takes as long as `decks2`; after that a deck takes a minute and a half.
 
 <details>
-<summary><b>Repository layout</b></summary>
+<summary><b>📁 Repository layout</b></summary>
 
 | path | what it is |
 |---|---|
