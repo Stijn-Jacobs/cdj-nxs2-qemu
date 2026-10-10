@@ -9,6 +9,8 @@ built.
   usage: bash scripts/run/warm_jit.sh [tag=warm] [--dry-run]
   env:   PLAY_S=270 (virtual seconds of play after the load), plus any rig.sh
          knob: MODULE=none, AUTOJIT=0|1, CDJ_C6X_RECORD, C66X_JIT_PROFILE, ...
+         DSP_TRAIN_MODULE=<m.so>: run with that module (an instrumented build
+         collecting its profile-guided counts) instead of none
 """
 
 import glob
@@ -25,8 +27,9 @@ from .deck import command as deck_command
 from .layout import Layout
 
 # An idle deck executes about 29 M DSP cycles per virtual second, one that has
-# loaded and plays 55 to 70 M; a recording below this never got past the browse list.
-MIN_PLAYING_MCYCLES = 40
+# loaded and plays 39 (the CDJ-2000NXS) to 70 M; a recording below this never got
+# past the browse list.
+MIN_PLAYING_MCYCLES = 35
 
 
 def main(argv):
@@ -75,7 +78,7 @@ def main(argv):
     chain.remove(vclock)
     drv = subprocess.Popen(driver)
     env = dict(os.environ, **rig_env)
-    env.pop("C66X_JIT", None)
+    _train_module(env)
     try:
         rc = chain.run_script("rig", [tag, 1], env)
     finally:
@@ -98,6 +101,13 @@ def main(argv):
     return rc
 
 
+def _train_module(env):
+    """The run's own module is DSP_TRAIN_MODULE or none, never a leftover C66X_JIT."""
+    env.pop("C66X_JIT", None)
+    if env.get("DSP_TRAIN_MODULE"):
+        env["C66X_JIT"] = host.native(env["DSP_TRAIN_MODULE"])
+
+
 def _lines(path):
     try:
         with open(path, "rb") as f:
@@ -116,7 +126,7 @@ def record_deck(lay, m, tag, dry):
     mon = "%s/cdj-deck-%s-%s-mon.sock" % (lay.tmp, m.id, tag)
     env = dict(os.environ, MODULE="none", AUDIODEV="none", GUI_DISPLAY="none", CDJ_REPORT="1",
                MODEL_IDLE_S=m.idle_s, MODEL_LOAD_STEPS=m.load_steps)
-    env.pop("C66X_JIT", None)
+    _train_module(env)
     argv, env = deck_command(lay, m, env)
     argv += ["-monitor", _monsock(lay).spec(mon)]
     driver = host.python_argv() + [os.path.join(lay.run, "play_deck.py"), mon, play_s]

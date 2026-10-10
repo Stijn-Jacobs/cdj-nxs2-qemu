@@ -572,6 +572,7 @@ extern CdjC6x cdj_c6x;
 extern CdjDma1State *cdj_dma1_singleton;
 bool cdj_c6x_on(void);
 void cdj_dspau_arm(void);
+bool cdj_c6x_deck_held(void);
 void cdj_c6x_mcbsp_tx(void *opaque, unsigned port, uint32_t word,
                              unsigned bits);
 void cdj_c6x_i2c_byte(uint8_t v);

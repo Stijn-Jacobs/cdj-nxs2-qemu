@@ -98,6 +98,7 @@ typedef struct CdjDspHost {
     void (*after_chunk)(void *chip, int64_t dsp_ns);
     void *chip;
     CdjDspWires wires;
+    Notifier profile_exit;      /* C66X_JIT_PROFILE: free the core at exit */
 
     DspAddrTable busr, busw;
 } CdjDspHost;

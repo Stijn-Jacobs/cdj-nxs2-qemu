@@ -102,6 +102,10 @@ static void *host_thread(void *opaque)
             continue;
         }
         qemu_mutex_lock(&h->lock);
+        if (!qatomic_read(&h->running)) {
+            qemu_mutex_unlock(&h->lock);
+            break;
+        }
         if (qatomic_read(&h->paused)) {
             qemu_mutex_unlock(&h->lock);
             g_usleep(1000);
@@ -412,6 +416,27 @@ const VMStateDescription vmstate_cdj_dsp_host = {
     }
 };
 
+/*
+ * C66X_JIT_PROFILE is written when the core is freed, which otherwise never
+ * happens: stop the thread and free it at exit, so a live run profiles the
+ * DSP for tools/c14_jitgen.py without a recording.
+ */
+static void host_write_profile(Notifier *n, void *data)
+{
+    CdjDspHost *h = container_of(n, CdjDspHost, profile_exit);
+
+    if (!h->core) {
+        return;
+    }
+    cdj_dsp_host_lock(h);
+    qatomic_set(&h->running, false);
+    c66x_free(h->core);
+    h->core = NULL;
+    cdj_dsp_host_unlock(h);
+    info_report("%s: JIT profile written to %s", h->name,
+                getenv("C66X_JIT_PROFILE"));
+}
+
 void cdj_dsp_host_init(CdjDspHost *h, const char *name, const char *env_prefix,
                        unsigned default_mhz,
                        void (*set_pins)(void *chip, unsigned bits), void *chip)
@@ -442,6 +467,11 @@ void cdj_dsp_host_init(CdjDspHost *h, const char *name, const char *env_prefix,
     h->wires = (CdjDspWires){ h, host_command, host_busy };
     h->snap = g_byte_array_new();
     qemu_add_vm_change_state_handler(host_vm_state, h);
+    /* Registered before the chip's exit report, so it runs after it. */
+    if (getenv("C66X_JIT_PROFILE")) {
+        h->profile_exit.notify = host_write_profile;
+        qemu_add_exit_notifier(&h->profile_exit);
+    }
 }
 
 c66x_core *cdj_dsp_host_core(CdjDspHost *h, const c66x_bus *bus)

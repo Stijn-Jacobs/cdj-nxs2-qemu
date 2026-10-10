@@ -30,6 +30,7 @@ void cdj_dspau_arm(void)
         .source = "IC301's McBSP0 PCM",
         .loop = { .period = 7644, .replay = 8820,
                   .lag_min = 7000, .lag_max = 20000 },
+        .held = cdj_c6x_deck_held,
     };
 
     cdj_dspau = cdj_host_audio_open(&cfg);

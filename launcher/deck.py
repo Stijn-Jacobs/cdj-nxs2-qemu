@@ -17,7 +17,7 @@ import subprocess
 
 from . import chain, host, model, snapshot
 from .boot_deck import _monsock, window_display
-from .chain import nonempty, say
+from .chain import nonempty, say, warn_banner
 from .layout import Layout
 from .rig import default_audiodev
 
@@ -55,8 +55,8 @@ def dsp_env(lay, m, env):
     if os.path.isfile(module):
         knobs["C66X_JIT"] = host.native(module)
     else:
-        say("no DSP module for the %s yet: its DSP runs interpreted and the sound will gap "
-            "(./setup.sh --model %s builds it)" % (m.title, m.id))
+        warn_banner("No DSP module for the %s yet: its DSP runs far below real time" % m.title,
+                    "and the sound will gap. ./setup.sh --model %s builds it." % m.id)
     return knobs
 
 

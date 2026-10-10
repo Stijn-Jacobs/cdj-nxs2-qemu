@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "cdj_host_audio.h"
+#include "cdj_common.h"
 #include "audio/audio.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
@@ -27,7 +28,12 @@ struct CdjHostAudio {
     int16_t asrc_prev[2];       /* the frame the position has just passed */
     int64_t last_report_ms;
     CdjLoopMute *loop;          /* NULL when the board has no pause loop */
+    uint32_t held_poll;         /* frames since cfg.held was asked */
+    bool held;
 };
+
+/* 10 ms of frames between two cfg.held() polls. */
+#define HELD_POLL_FRAMES 441u
 
 /* Trim target floor above prefill (10 ms), to stay clear of the underrun edge. */
 #define TRIM_FLOOR 441u
@@ -226,7 +232,24 @@ CdjHostAudio *cdj_host_audio_open(const CdjHostAudioCfg *cfg)
 
 void cdj_host_audio_put(CdjHostAudio *a, int16_t left, int16_t right)
 {
+    if (a->cfg.held && ++a->held_poll >= HELD_POLL_FRAMES) {
+        bool held = a->cfg.held();
+
+        a->held_poll = 0;
+        if (held != a->held) {
+            a->held = held;
+            if (cdj_report_enabled()) {
+                info_report("%s audio: deck %s at %" PRId64 " ms, %s",
+                            a->cfg.label, held ? "paused" : "playing",
+                            qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL),
+                            held ? "muting" : "unmuted");
+            }
+        }
+    }
     if (a->loop && cdj_loop_mute_frame(a->loop, left, right)) {
+        left = right = 0;
+    }
+    if (a->held) {
         left = right = 0;
     }
     qemu_mutex_lock(&a->lock);

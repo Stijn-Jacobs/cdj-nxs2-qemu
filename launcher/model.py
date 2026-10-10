@@ -87,6 +87,7 @@ class Model:
         self.dsp_gen_args = values.get("MODEL_DSP_GEN_ARGS", "")
         self.idle_s = values.get("MODEL_IDLE_S", "")
         self.load_steps = values.get("MODEL_LOAD_STEPS", "")
+        self.tablet_peer = values.get("MODEL_TABLET_PEER") == "1"
         self.rig_env = dict(w.split("=", 1) for w in values.get("MODEL_RIG_ENV", "").split())
         self.expected = tuple(tuple(line.split(None, 1))
                               for line in values.get("MODEL_EXPECTED", "").splitlines() if line.strip())
@@ -101,6 +102,12 @@ class Model:
     def has_dsp_module(self):
         """A one-window model whose DSP runs through a generated module."""
         return not self.is_rig and bool(self.dsp_idle)
+
+    @property
+    def builds_dsp_module(self):
+        """Setup builds this player's DSP module from a recording of it: a
+        one-window model, or a rig player whose DSP program is not the NXS2's."""
+        return bool(self.dsp_idle)
 
     @property
     def module_dir(self):

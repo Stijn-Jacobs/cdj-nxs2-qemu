@@ -56,11 +56,80 @@ experimental. Sound is on by default (`NOSOUND=1` turns it off). Screenshots sho
 | **CDJ-2000NXS2** | ✅ Fully supported | Plays tracks from USB in real time with sound. Pro DJ Link, MIDI controllers and [mods](#mods). |
 | **XDJ-1000MK2** | 🧪 Experimental | Loads and plays from USB, below real time (chopped sound). PLAY, CUE and touch work. |
 | **XDJ-700** | 🧪 Experimental | Loads and plays from USB, below real time (chopped sound). Touch works. |
-| **XDJ-1000** | 🧪 Experimental | Loads and plays from USB in real time with the DSP module setup builds. Touch works. |
+| **XDJ-1000** | 🧪 Experimental | Loads and plays from USB in real time with the DSP module setup builds. PLAY, CUE, tempo, jog and touch work. |
 | **CDJ-900NXS** | 🧪 Experimental | Loads and plays from USB, below real time (chopped sound). |
-| **CDJ-2000NXS** | 🧪 Experimental | Loads and plays from USB in real time with the DSP module setup builds. |
+| **CDJ-2000NXS** | 🧪 Experimental | Loads and plays from USB in real time with the DSP module setup builds. PLAY, tempo and jog work; after a CUE the playhead stops moving. |
 | **CDJ-900** | 🧪 Experimental | Loads and plays from USB; its display shows the overview, playhead and time. |
-| **CDJ-2000** | 🧪 Experimental | Loads and plays from USB in real time with the DSP module setup builds. PLAY pauses and resumes. |
+| **CDJ-2000** | 🧪 Experimental | Loads and plays from USB in real time with the DSP module setup builds. PLAY, CUE, tempo and jog work. |
+
+<!-- feature-matrix:start -->
+<details>
+<summary>Feature matrix per player</summary>
+
+✅ works, measured &nbsp; ⚠️ partly, see the note &nbsp; ❌ does not work &nbsp; ➖ the player does not have it &nbsp; · not tested yet
+
+| | CDJ-2000NXS2 | XDJ-1000MK2 | XDJ-700 | XDJ-1000 | CDJ-900NXS | CDJ-2000NXS | CDJ-900 | CDJ-2000 |
+|---|---|---|---|---|---|---|---|---|
+| **Boot & media** | | | | | | | | |
+| Boots to the player screen | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Loads a track from USB | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| rekordbox-exported stick | ✅ | · | · | · | · | · | · | · |
+| Plain music-folder stick | ✅ | · | · | · | · | · | · | · |
+| SD card | · | ➖ | ➖ | ➖ | · | · | · | · |
+| Disc | ➖ | ➖ | ➖ | ➖ | · | · | · | · |
+| **Playback** | | | | | | | | |
+| Sound | ✅ | ⚠️<sup>1</sup> | ⚠️<sup>1</sup> | ✅ | ⚠️<sup>1</sup> | ✅ | ❌ | ✅ |
+| Real time with the setup DSP module | ✅ | ❌ | ❌ | ✅ | ❌ | ✅ | · | ✅ |
+| Waveform / overview | ✅ | ✅ | · | ✅ | · | · | ✅ | · |
+| Playhead moves | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Time counts down | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Tempo and BPM readout | ✅ | · | · | ✅ | · | ✅ | · | ✅ |
+| **Transport** | | | | | | | | |
+| PLAY / pause | ✅ | ✅ | · | ✅ | · | ✅ | ✅ | ✅ |
+| CUE | · | ⚠️<sup>2</sup> | · | ✅<sup>3</sup> | · | ❌<sup>4</sup> | · | ✅<sup>3</sup> |
+| AUTO CUE | · | ⚠️<sup>2</sup> | · | ✅ | · | · | · | ✅ |
+| Silent while paused | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ |
+| Tempo fader | ✅ | · | · | ✅ | · | ✅ | · | ✅<sup>5</sup> |
+| Tempo range | · | · | · | · | · | · | · | · |
+| MASTER TEMPO | ⚠️<sup>6</sup> | · | · | · | · | · | · | · |
+| Jog bend | ✅ | · | · | ✅ | · | ✅ | · | ✅ |
+| Jog scratch / vinyl | ⚠️<sup>7</sup> | · | · | · | · | · | · | · |
+| Direction lever (reverse) | · | · | · | · | · | · | · | · |
+| Needle search | ✅ | · | · | · | · | · | · | · |
+| Hot cues | · | · | · | · | · | · | · | · |
+| Loops | · | · | · | · | · | · | · | · |
+| Beat jump | · | · | · | · | · | · | · | · |
+| Slip | ⚠️<sup>8</sup> | · | · | · | · | · | · | · |
+| **Interface** | | | | | | | | |
+| Touch screen | ✅ | ✅ | ✅ | ✅ | ➖ | ➖ | ➖ | ➖ |
+| Browse | ✅ | · | · | · | · | · | · | · |
+| Host keyboard | ✅ | · | · | · | · | · | · | · |
+| MIDI controller | ✅ | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> |
+| Lamps | ⚠️<sup>10</sup> | · | · | · | · | · | · | · |
+| **Network** | | | | | | | | |
+| Pro DJ Link | ✅ | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> |
+| Two decks | ✅ | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> |
+| MASTER / SYNC | ⚠️<sup>11</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> |
+| **Emulator** | | | | | | | | |
+| Snapshots (fast restore) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ |
+| Mods | ✅ | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> |
+
+Firmware: CDJ-2000NXS2 1.87, XDJ-1000MK2 1.45, XDJ-700 1.15, XDJ-1000 1.13, CDJ-900NXS 1.31, CDJ-2000NXS 1.44, CDJ-900 4.32, CDJ-2000 4.33.
+
+1. Plays below real time, so the sound is chopped.
+2. Only with AUTO CUE switched on before the load; CUE is inert otherwise.
+3. While playing with no cue set, CUE is ignored; it returns once a cue exists.
+4. After CUE the playhead stays frozen and the time readout goes blank, although the audio plays.
+5. Tempo down measured, tempo up not shown.
+6. MASTER TEMPO runs, but its time-stretch at a tempo other than centre is still slower than real time.
+7. Turning the jog while paused searches the track (measured once); VINYL scratching is untested.
+8. SLIP with the beat-loop pads runs without halting the DSP; the slipped playback itself was not checked.
+9. Not started for this player: it runs as a single deck without Pro DJ Link, mods, controller or the virtual deck app.
+10. PLAY, CUE, SLIP and MASTER TEMPO lamps follow the player; the SYNC and USB source lamps are not wired.
+11. SYNC follows the master's tempo, but the follower's speed hunts around it instead of settling.
+
+</details>
+<!-- feature-matrix:end -->
 
 Everything below, from the quick start on, describes the CDJ-2000NXS2 unless it
 says otherwise.
@@ -729,12 +798,17 @@ so it takes as long as `decks2`; after that a deck takes a minute and a half.
   module is installed only if it replays the recording exactly. With it,
   playback holds real time from the first seconds after a load, so it is the
   recommended setup when you can spare the hour.
+  Mods do not affect it: they patch the MAIN and display firmware, never the
+  DSP program the module is built from, so turning a mod on or off later
+  needs no rebuild. To compare without the module, start with
+  `MODULE=none ./start.sh` (the DSP's hot code is then compiled as it plays).
 - **MASTER TEMPO is heavy.** It makes the DSP program do far more work per
   sample, and it is currently the most demanding thing you can ask of the
   emulator.
 - **Only firmware v1.87** is supported for the CDJ-2000NXS2.
 - **Work in progress.** The older players are experimental: they load and
-  play, with chopped sound and far slower than real time (see
+  play, the CDJ-2000, CDJ-2000NXS and XDJ-1000 in real time with the DSP
+  module setup builds, the others below real time with chopped sound (see
   [Supported players](#supported-players)). On the NXS2 the USB stick is the only medium so far. Some panel
   keys are decoded by the firmware but have not been tried here; the
   controller tools say so when you bind one.

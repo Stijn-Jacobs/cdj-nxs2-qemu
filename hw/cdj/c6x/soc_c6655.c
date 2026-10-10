@@ -468,6 +468,8 @@ uint64_t c6655_soc_next_event_ns(const c6655_soc *s)
         if (tt < t)
             t = tt;
     }
+    if (s->cic0.relatch_due && s->cic0.relatch_due < t)
+        t = s->cic0.relatch_due;
     ((c6655_soc *)s)->next_cache = t;
     ((c6655_soc *)s)->cache_valid = 1;
     return t;
@@ -505,6 +507,8 @@ void c6655_soc_advance(c6655_soc *s, uint64_t ns)
                 timer_fire(s, &s->timer[i]);
         if (s->spi.done_ns <= s->now_ns)
             spi_fire(s);
+        if (s->cic0.relatch_due && s->cic0.relatch_due <= s->now_ns)
+            cic_relatch(s);
         s->cache_valid = 0;
     }
     s->now_ns = target;

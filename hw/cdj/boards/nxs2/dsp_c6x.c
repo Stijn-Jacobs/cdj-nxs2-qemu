@@ -298,6 +298,39 @@ static void cdj_c6x_sample(CdjC6x *c)
     g_string_free(g, true);
 }
 
+/* A paused DSP keeps sending its last buffers: an exact loop at deck speed
+ * 1.0, an inexact one at any other speed or with MASTER TEMPO, which no
+ * repeat detector is sure to find. What it does report is its play flag (the
+ * word its INT8 publisher decodes from the play bit of the id block MAIN
+ * ships, 1 to 0 at every PLAY press) and its play position in 1/75 s, which
+ * stops. A cue preview or a jog moves the position, so they stay audible.
+ * Both words are only trusted once the position has been seen moving with the
+ * flag set, so a DSP image that keeps them elsewhere never mutes. */
+#define C6X_PLAY_FLAG       0x008A738Cu
+#define C6X_PLAY_POS        0x008A7802u
+#define C6X_HELD_POLLS      20u         /* 10 ms polls, so a stopped position for 200 ms */
+
+bool cdj_c6x_deck_held(void)
+{
+    static uint16_t last_pos;
+    static unsigned still;
+    static bool seen_playing;
+    uint8_t *flag = cdj_c6x_ram(C6X_PLAY_FLAG, 4);
+    uint8_t *pos = cdj_c6x_ram(C6X_PLAY_POS, 2);
+    bool play;
+    uint16_t now;
+
+    if (!flag || !pos) {
+        return false;
+    }
+    play = flag[0] | flag[1] | flag[2] | flag[3];
+    now = pos[0] | pos[1] << 8;
+    still = now == last_pos ? still + 1 : 0;
+    seen_playing |= play && still == 0;
+    last_pos = now;
+    return seen_playing && !play && still >= C6X_HELD_POLLS;
+}
+
 static void cdj_c6x_watch_store(c66x_core *core, void *opaque, uint32_t addr,
                                 uint32_t val, unsigned size)
 {

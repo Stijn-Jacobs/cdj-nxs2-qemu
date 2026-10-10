@@ -17,7 +17,7 @@ import subprocess
 
 from . import chain, host, mods
 from . import model as cdj_model
-from .chain import export_default, ifset, nonempty
+from .chain import export_default, ifset, nonempty, warn_banner
 from .layout import Layout
 
 DEFAULT_GROUP = "239.77.77.1:45000"
@@ -37,18 +37,20 @@ def default_audiodev():
     return "pa,server=unix:/mnt/wslg/PulseServer,out.buffer-length=200000,timer-period=5000"
 
 
-def jit_module(env):
+def jit_module(env, m):
     """The DSP JIT module: the first that exists of C66X_JIT (named by hand),
-    ~/c14gen/$MODULE/m.so (MODULE=none: no module), ~/c14gen/curated/m.so
-    (built by ./setup.sh --curated-jit), then the maintainers' g23n (compiles
-    MASTER TEMPO at a non-zero tempo too), g20u800 (g18u plus MASTER TEMPO's
-    code) and g18u."""
+    ~/c14gen/$MODULE/m.so (MODULE=none: no module), the model's own module
+    (built by ./setup.sh --curated-jit) and, for the default player only, the
+    maintainers' g23n (compiles MASTER TEMPO at a non-zero tempo too), g20u800
+    (g18u plus MASTER TEMPO's code) and g18u. Another player runs a different
+    DSP program, which those modules do not fit."""
     if env.get("C66X_JIT") or env.get("MODULE") == "none":
         return env.get("C66X_JIT", "")
     cache = Layout().jit_cache
-    names = ([env["MODULE"]] if env.get("MODULE") else []) + ["curated", "g23n", "g20u800", "g18u"]
+    names = [env["MODULE"]] if env.get("MODULE") else []
+    names += [m.module_dir] + (["g23n", "g20u800", "g18u"] if m.id == cdj_model.DEFAULT else [])
     cands = [os.path.join(cache, d, "m.so") for d in names]
-    if not host.is_windows():
+    if not host.is_windows() and m.id == cdj_model.DEFAULT:
         cands.append("/tmp/c14gen/g18u/m.so")
     for c in cands:
         if os.path.isfile(c):
@@ -80,8 +82,11 @@ def rig_env(env, tag, ndecks, frames):
     DHCP server (the Pro DJ Link group, or tap:<host ip>) when the rig should
     run one."""
     say, warn = chain.say, chain.err
-    for name, value in cdj_model.load().rig_env.items():
+    m = cdj_model.load()
+    for name, value in m.rig_env.items():
         export_default(env, name, value)
+    if m.dsp_idle:
+        export_default(env, m.dsp_idle_knob, m.dsp_idle)
     if env.get("NOSOUND", "0") != "1":
         # Ring/prefill/cap 3000/150/450 ms; a narrower band ping-pongs between
         # underruns and trims. The larger buffer rides over a host sink that
@@ -112,13 +117,15 @@ def rig_env(env, tag, ndecks, frames):
         export_default(env, "QEMU_EB_BUILD", "/c/qemu-build-mingw-eb")
     # With a module the run-time auto-JIT is off, so no compiler runs
     # mid-session. AUTOJIT=1 keeps it on beside a module, AUTOJIT=0 turns it off.
-    env["C66X_JIT"] = jit_module(env)
+    env["C66X_JIT"] = jit_module(env, m)
     export_default(env, "C66X_JIT_AUTO", host.native(Layout().jit_cache))
     autojit = env.get("AUTOJIT", "")
     if autojit == "0" or (autojit != "1" and env["C66X_JIT"]):
         chain.unset(env, "C66X_JIT_AUTO")
     if not env["C66X_JIT"] and env.get("C66X_JIT_AUTO"):
-        say("[%s] no curated JIT module: the auto-JIT compiles the DSP's hot code as it plays" % tag)
+        warn_banner("No curated DSP module: playback can stutter, most of all in the first",
+                    "seconds after a load. Build it once with ./setup.sh --curated-jit (about",
+                    "an hour); mods do not affect it.")
     export_default(env, "CDJ_NATIVE_LIBC", "1")
 
     # Pro DJ Link, on by default. DJLINK=0 turns it off; DJLINK=tap:<adapter>
@@ -240,6 +247,13 @@ def main(argv):
                               os.path.join(lay.run, "raise_priority.ps1"), "-Seconds", "0", "-Class", prio],
                              stdout=log, stderr=subprocess.STDOUT)
         chain.say("[%s] QEMU priority %s (PRIO=Normal to disable; log /tmp/%s-prio.txt)" % (tag, prio, tag))
+    if cdj_model.load().tablet_peer:
+        if group and not group.startswith("tap:"):
+            with open(os.path.join(lay.tmp, "cdj-%s-tablet.log" % tag), "wb") as log:
+                helpers.append(subprocess.Popen(host.python_argv() + [
+                    os.path.join(lay.scripts, "net", "tablet_peer.py"), group], stdout=log, stderr=subprocess.STDOUT))
+        else:
+            chain.err("[%s] this player's browse keys go to its tablet, which needs DJLINK=1 (not tap:)" % tag)
     try:
         return chain.run_script("play_real_dsp", [tag, ndecks], env)
     finally:

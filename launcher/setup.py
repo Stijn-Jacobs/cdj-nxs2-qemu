@@ -645,9 +645,9 @@ class Setup:
         con, o, lay = self.con, self.o, self.lay
         cache = lay.jit_cache
         shown = "~/c14gen" if not lay.packaged else cache
-        curated_so = os.path.join(cache, "curated", "m.so")
+        curated_so = os.path.join(cache, self.model.module_dir, "m.so")
         con.step(5, "DSP code (the JIT's cache)")
-        if self.model.has_dsp_module:
+        if self.model.builds_dsp_module:
             self._deck_module(shown)
             return
         if not self.model.is_rig:
@@ -674,7 +674,7 @@ class Setup:
         if o.warm == "off":
             con.dim("warm-up skipped (--no-warm): the first minutes of your first sessions will be slow")
         elif os.path.isfile(curated_so) and o.warm != "force":
-            con.good("curated module in %s/curated: nothing to warm" % shown)
+            con.good("curated module in %s/%s: nothing to warm" % (shown, self.model.module_dir))
         elif n > 0 and o.warm != "force":
             con.good("already warm: %d compiled modules in %s (--warm adds more)" % (n, shown))
         elif not o.dry and not self.deck_ready():
@@ -949,8 +949,8 @@ class Setup:
         con.info("controller   %s%s" % (ctl, " (relay on 127.0.0.1:%s)" % c["CDJ_RELAY_PORT"] if ctl != "none" else ""))
         cache = lay.jit_cache
         shown = "~/c14gen" if not lay.packaged else cache
-        if os.path.isfile(os.path.join(cache, "curated", "m.so")):
-            con.info("DSP JIT      curated module (%s/curated)" % shown)
+        if os.path.isfile(os.path.join(cache, self.model.module_dir, "m.so")):
+            con.info("DSP JIT      curated module (%s/%s)" % (shown, self.model.module_dir))
         elif _modules(cache) > 0:
             con.info("DSP JIT      %d cached modules (%s)" % (_modules(cache), shown))
         else:

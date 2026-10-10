@@ -28,6 +28,7 @@ typedef struct CdjHostAudioCfg {
     const char *label;      /* log prefix, e.g. "c6x" */
     const char *source;     /* what feeds it, for the start-up line */
     CdjLoopMuteCfg loop;    /* the DSP's paused-buffer loop, see cdj_loop_mute.h */
+    bool (*held)(void);     /* optional: the DSP reports the deck paused; polled every 10 ms */
 } CdjHostAudioCfg;
 
 /* At machine init, for the reason cdj_audio_live_arm() gives: a voice opened

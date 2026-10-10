@@ -527,6 +527,25 @@ static void test_mcbsp_pingpong(void)
     CHECK((r32(0x0274226C) >> 5) & 1, "region 1 IPRH bit 5 = TCC 37");
 }
 
+/* The program clears an EDMA3 input's CIC status (0x0080C1A8) before the ISR
+ * clears IPR. If that ISR then never runs, IPR stays set and the input stays
+ * high, so the status must latch again once the clear is a millisecond old. */
+static void test_edma_status_relatches(void)
+{
+    mcbsp_pingpong_setup();
+    c6655_soc_advance(S, c6655_soc_next_irq_ns(S) - c6655_soc_now_ns(S));
+    CHECK(irq_pulses[6] == 1, "first buffer completion: INT6 %u", irq_pulses[6]);
+    c6655_soc_advance(S, 2000000);
+    CHECK(irq_pulses[6] == 1, "IPR held and status latched: no second INT6 (%u)", irq_pulses[6]);
+    w32(0x02600280, 1u << 25);                   /* ENA_STATUS clear of EDMA3_CC_INT1 */
+    c6655_soc_advance(S, 500000);
+    CHECK(irq_pulses[6] == 1 && !(r32(0x02600200) >> 25 & 1), "0.5 ms after the clear: still clear (INT6 %u)",
+          irq_pulses[6]);
+    c6655_soc_advance(S, 600000);
+    CHECK(irq_pulses[6] == 2 && (r32(0x02600200) >> 25 & 1), "1.1 ms after the clear: latched again (INT6 %u)",
+          irq_pulses[6]);
+}
+
 /* Batched word clocking must emit exactly what word-by-word clocking does:
  * the same words in the same order, and the same completion interrupts. */
 static void test_mcbsp_batch_is_exact(void)
@@ -632,6 +651,7 @@ int main(void)
     test_spi_edma_link();
     test_spi_edma_repeated_exchanges();
     test_mcbsp_pingpong();
+    test_edma_status_relatches();
     test_mcbsp_batch_is_exact();
     test_link_survives_random_advance();
     test_qdma_link_retriggers();
