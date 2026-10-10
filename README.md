@@ -87,7 +87,7 @@ show the firmware interface, not a claim of feature parity.
 | **XDJ-700** | 🧪 Experimental | Loads and plays from USB, below real time (chopped sound). Touch works. |
 | **XDJ-1000** | 🧪 Experimental | Loads and plays from USB in real time with the DSP module setup builds. PLAY, CUE, tempo, jog and touch work. |
 | **CDJ-900NXS** | 🧪 Experimental | Loads and plays from USB, below real time (chopped sound). |
-| **CDJ-2000NXS** | 🧪 Experimental | Loads and plays from USB in real time with the DSP module setup builds. PLAY, tempo and jog work; after a CUE the playhead stops moving. |
+| **CDJ-2000NXS** | 🧪 Experimental | Loads and plays from USB in real time with the DSP module setup builds. PLAY, CUE, tempo and jog work. |
 | **CDJ-900** | 🧪 Experimental | Loads and plays from USB; its display shows the overview, playhead and time. |
 | **CDJ-2000** | 🧪 Experimental | Loads and plays from USB in real time with the DSP module setup builds. PLAY, CUE, tempo and jog work. |
 
@@ -109,33 +109,32 @@ show the firmware interface, not a claim of feature parity.
 | Tempo and BPM readout | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Transport** | | | | | | | | |
 | PLAY / pause | ✅ | ✅ | ⚠️<sup>2</sup> | ✅ | ⚠️<sup>2</sup> | ✅ | ✅ | ✅ |
-| CUE | ✅ | ✅ | · | ✅ | · | ❌<sup>3</sup> | · | ✅ |
+| CUE | ✅ | ✅ | · | ✅ | · | ✅ | · | ✅ |
 | **Tempo** | | | | | | | | |
 | Tempo fader | ✅ | · | · | ✅ | · | ✅ | · | ✅ |
-| MASTER TEMPO | ⚠️<sup>4</sup> | · | · | · | · | · | · | · |
+| MASTER TEMPO | ⚠️<sup>3</sup> | · | · | · | · | · | · | · |
 | **Jog** | | | | | | | | |
 | Pitch bend | ✅ | · | · | ✅ | · | ✅ | · | ✅ |
-| Vinyl / scratch | ⚠️<sup>5</sup> | · | · | · | · | · | · | · |
+| Vinyl / scratch | ⚠️<sup>4</sup> | · | · | · | · | · | · | · |
 | Needle search | ✅ | · | · | · | ➖ | · | ➖ | · |
 | **Performance** | | | | | | | | |
 | Hot cues | · | · | · | · | ➖ | · | ➖ | · |
 | Loops | · | · | · | · | · | · | · | · |
 | Beat jump | · | · | · | · | ➖ | ➖ | ➖ | ➖ |
-| Slip | ⚠️<sup>6</sup> | · | · | · | · | · | · | ➖ |
+| Slip | ⚠️<sup>5</sup> | · | · | · | · | · | · | ➖ |
 | **Interface** | | | | | | | | |
 | Touch screen | ✅ | ✅ | ✅ | ✅ | ➖ | ➖ | ➖ | ➖ |
 | **Pro DJ Link** | | | | | | | | |
-| Link with other players | ✅ | ❌<sup>7</sup> | ❌<sup>7</sup> | ❌<sup>7</sup> | ❌<sup>7</sup> | ❌<sup>7</sup> | ❌<sup>7</sup> | ❌<sup>7</sup> |
+| Link with other players | ✅ | ❌<sup>6</sup> | ❌<sup>6</sup> | ❌<sup>6</sup> | ❌<sup>6</sup> | ❌<sup>6</sup> | ❌<sup>6</sup> | ❌<sup>6</sup> |
 
 Firmware: CDJ-2000NXS2 1.87, XDJ-1000MK2 1.45, XDJ-700 1.15, XDJ-1000 1.13, CDJ-900NXS 1.31, CDJ-2000NXS 1.44, CDJ-900 4.32, CDJ-2000 4.33.
 
 1. Below real time, so the sound is chopped.
 2. Only one run so far.
-3. The playhead freezes after CUE.
-4. Sound can drop out after switching it on.
-5. VINYL scratching not tested yet.
-6. The slipped playback is not checked yet.
-7. Only one deck can be started so far.
+3. Sound can drop out after switching it on.
+4. VINYL scratching not tested yet.
+5. The slipped playback is not checked yet.
+6. Only one deck can be started so far.
 
 </details>
 <!-- feature-matrix:end -->
