@@ -379,6 +379,16 @@ void bfin_dsp32alu(bfin_core *c, uint16_t iw0, uint16_t iw1)
         }
         set_half(&c->r[dst0], 0, (int8_t)(c->a[aop] >> 32));
         return;
+    case 11:                                    /* A0 += A1 [(W32)] */
+        if (aop != 2) {
+            break;
+        }
+        c->a[0] = s ? clamp(c->a[0] + c->a[1], INT32_MIN, INT32_MAX, &ov)
+                    : clamp(c->a[0] + c->a[1], ACC_MIN, ACC_MAX, &ov);
+        if (ov) {
+            c->astat |= AS_AV0 | AS_AV0S;
+        }
+        return;
     case 14:                                    /* A1 = -A0 ... */
         if (s) {
             break;

@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
- * The byte-oriented DSP32 ALU ops (aopcde 18 and 20-24), run one at a time on
+ * The byte-oriented DSP32 ALU ops (aopcde 18 and 20-24) and A0 += A1, run one at a time on
  * a scratch core against results worked out by hand from the Programming
  * Reference.
  */
@@ -218,6 +218,18 @@ int main(void)
         expect("bundle r0", c, 0, 0x00020001);
         expect("bundle r1", c, 1, 0x00040003);
     }
+
+    /* A0 += A1, plain and (W32); the instruction the display firmware stops on while drawing a cue */
+    insn(c, 0xC40B, 0x803F);
+    bfin_set_reg(c, 4, 1, 100);
+    bfin_set_reg(c, 4, 3, 23);
+    run(c);
+    expect_acc("A0 += A1", c, 0, 123);
+    insn(c, 0xC40B, 0xA03F);
+    bfin_set_reg(c, 4, 1, 0x7FFFFFF0);
+    bfin_set_reg(c, 4, 3, 0x100);
+    run(c);
+    expect_acc("A0 += A1 (W32)", c, 0, 0x7FFFFFFF);
 
     bfin_free(c);
     if (!failures) {
