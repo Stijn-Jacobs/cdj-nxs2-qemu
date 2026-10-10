@@ -70,49 +70,38 @@ experimental. Sound is on by default (`NOSOUND=1` turns it off). Screenshots sho
 
 | | CDJ-2000NXS2 | XDJ-1000MK2 | XDJ-700 | XDJ-1000 | CDJ-900NXS | CDJ-2000NXS | CDJ-900 | CDJ-2000 |
 |---|---|---|---|---|---|---|---|---|
-| **Boot & media** | | | | | | | | |
-| Boots to the player screen | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Loads a track from USB | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| rekordbox-exported stick | ✅ | · | · | · | · | · | · | · |
-| Plain music-folder stick | ✅ | · | · | · | · | · | · | · |
-| SD card | · | ➖ | ➖ | ➖ | · | · | · | · |
+| **Media** | | | | | | | | |
+| USB | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| SD card | · | ➖ | ➖ | ➖ | ➖ | · | ➖ | · |
 | Disc | ➖ | ➖ | ➖ | ➖ | · | · | · | · |
 | **Playback** | | | | | | | | |
 | Sound | ✅ | ⚠️<sup>1</sup> | ⚠️<sup>1</sup> | ✅ | ⚠️<sup>1</sup> | ✅ | ❌ | ✅ |
 | Real time with the setup DSP module | ✅ | ❌ | ❌ | ✅ | ❌ | ✅ | · | ✅ |
-| Waveform / overview | ✅ | ✅ | · | ✅ | · | · | ✅ | · |
-| Playhead moves | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Time counts down | ✅ | ✅ | · | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Tempo and BPM readout | ✅ | · | · | ✅ | · | ✅ | · | ✅ |
+| **Display** | | | | | | | | |
+| Waveform / overview | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Tempo and BPM readout | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Transport** | | | | | | | | |
 | PLAY / pause | ✅ | ✅ | · | ✅ | · | ✅ | ✅ | ✅ |
 | CUE | · | ⚠️<sup>2</sup> | · | ✅<sup>3</sup> | · | ❌<sup>4</sup> | · | ✅<sup>3</sup> |
 | AUTO CUE | · | ⚠️<sup>2</sup> | · | ✅ | · | · | · | ✅ |
-| Silent while paused | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ |
+| **Tempo** | | | | | | | | |
 | Tempo fader | ✅ | · | · | ✅ | · | ✅ | · | ✅<sup>5</sup> |
 | Tempo range | · | · | · | · | · | · | · | · |
 | MASTER TEMPO | ⚠️<sup>6</sup> | · | · | · | · | · | · | · |
-| Jog bend | ✅ | · | · | ✅ | · | ✅ | · | ✅ |
-| Jog scratch / vinyl | ⚠️<sup>7</sup> | · | · | · | · | · | · | · |
-| Direction lever (reverse) | · | · | · | · | · | · | · | · |
+| **Jog** | | | | | | | | |
+| Pitch bend | ✅ | · | · | ✅ | · | ✅ | · | ✅ |
+| Vinyl / scratch | ⚠️<sup>7</sup> | · | · | · | · | · | · | · |
 | Needle search | ✅ | · | · | · | · | · | · | · |
+| **Performance** | | | | | | | | |
 | Hot cues | · | · | · | · | · | · | · | · |
 | Loops | · | · | · | · | · | · | · | · |
 | Beat jump | · | · | · | · | · | · | · | · |
 | Slip | ⚠️<sup>8</sup> | · | · | · | · | · | · | · |
 | **Interface** | | | | | | | | |
 | Touch screen | ✅ | ✅ | ✅ | ✅ | ➖ | ➖ | ➖ | ➖ |
-| Browse | ✅ | · | · | · | · | · | · | · |
-| Host keyboard | ✅ | · | · | · | · | · | · | · |
-| MIDI controller | ✅ | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> |
-| Lamps | ⚠️<sup>10</sup> | · | · | · | · | · | · | · |
-| **Network** | | | | | | | | |
-| Pro DJ Link | ✅ | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> |
-| Two decks | ✅ | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> |
-| MASTER / SYNC | ⚠️<sup>11</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> |
-| **Emulator** | | | | | | | | |
-| Snapshots (fast restore) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ |
-| Mods | ✅ | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> |
+| **Pro DJ Link** | | | | | | | | |
+| Link with other players | ✅ | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> |
+| MASTER / SYNC | ⚠️<sup>10</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> |
 
 Firmware: CDJ-2000NXS2 1.87, XDJ-1000MK2 1.45, XDJ-700 1.15, XDJ-1000 1.13, CDJ-900NXS 1.31, CDJ-2000NXS 1.44, CDJ-900 4.32, CDJ-2000 4.33.
 
@@ -125,8 +114,7 @@ Firmware: CDJ-2000NXS2 1.87, XDJ-1000MK2 1.45, XDJ-700 1.15, XDJ-1000 1.13, CDJ-
 7. Turning the jog while paused searches the track (measured once); VINYL scratching is untested.
 8. SLIP with the beat-loop pads runs without halting the DSP; the slipped playback itself was not checked.
 9. Not started for this player: it runs as a single deck without Pro DJ Link, mods, controller or the virtual deck app.
-10. PLAY, CUE, SLIP and MASTER TEMPO lamps follow the player; the SYNC and USB source lamps are not wired.
-11. SYNC follows the master's tempo, but the follower's speed hunts around it instead of settling.
+10. SYNC follows the master's tempo, but the follower's speed hunts around it instead of settling.
 
 </details>
 <!-- feature-matrix:end -->
