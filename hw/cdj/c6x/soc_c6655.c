@@ -4,6 +4,7 @@
  * RAM-like configuration blocks.
  */
 #include <stdarg.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -467,6 +468,8 @@ uint64_t c6655_soc_next_event_ns(const c6655_soc *s)
         if (tt < t)
             t = tt;
     }
+    if (s->cic0.relatch_due && s->cic0.relatch_due < t)
+        t = s->cic0.relatch_due;
     ((c6655_soc *)s)->next_cache = t;
     ((c6655_soc *)s)->cache_valid = 1;
     return t;
@@ -504,6 +507,8 @@ void c6655_soc_advance(c6655_soc *s, uint64_t ns)
                 timer_fire(s, &s->timer[i]);
         if (s->spi.done_ns <= s->now_ns)
             spi_fire(s);
+        if (s->cic0.relatch_due && s->cic0.relatch_due <= s->now_ns)
+            cic_relatch(s);
         s->cache_valid = 0;
     }
     s->now_ns = target;
@@ -535,6 +540,67 @@ c6655_soc *c6655_soc_new(const c6655_soc_config *cfg)
     s->gpio.ext = 0xFFFFFFFF;             /* undriven inputs read high */
     c6655_soc_reset(s);
     return s;
+}
+
+/* ---- snapshots ------------------------------------------------------------ */
+static size_t snap_put(uint8_t *buf, size_t at, const void *p, size_t n)
+{
+    if (buf)
+        memcpy(buf + at, p, n);
+    return at + n;
+}
+
+size_t c6655_soc_save(const c6655_soc *s, uint8_t *buf)
+{
+    const soc_upp *u = &s->upp;
+    uint64_t qlen = u->qlen;
+    size_t at = 0;
+
+    at = snap_put(buf, at, &s->now_ns, offsetof(c6655_soc, upp) - offsetof(c6655_soc, now_ns));
+    at = snap_put(buf, at, u, offsetof(soc_upp, q));
+    at = snap_put(buf, at, &u->dropped, sizeof *u - offsetof(soc_upp, dropped));
+    at = snap_put(buf, at, &qlen, sizeof qlen);
+    for (size_t i = 0; i < u->qlen; i++)
+        at = snap_put(buf, at, &u->q[(u->qhead + i) % u->qcap], 1);
+    at = snap_put(buf, at, &s->spi, offsetof(c6655_soc, ram) - offsetof(c6655_soc, spi));
+    for (unsigned i = 0; i < s->nram; i++)
+        at = snap_put(buf, at, s->ram[i].mem, s->ram[i].size);
+    return at;
+}
+
+void c6655_soc_load(c6655_soc *s, const uint8_t *buf)
+{
+    soc_upp *u = &s->upp;
+    uint64_t qlen;
+    size_t n;
+
+    n = offsetof(c6655_soc, upp) - offsetof(c6655_soc, now_ns);
+    memcpy(&s->now_ns, buf, n);
+    buf += n;
+    memcpy(u, buf, offsetof(soc_upp, q));
+    buf += offsetof(soc_upp, q);
+    n = sizeof *u - offsetof(soc_upp, dropped);
+    memcpy(&u->dropped, buf, n);
+    buf += n;
+    memcpy(&qlen, buf, sizeof qlen);
+    buf += sizeof qlen;
+    if (qlen > u->qcap) {
+        free(u->q);
+        u->q = malloc(qlen);
+        u->qcap = qlen;
+    }
+    memcpy(u->q, buf, qlen);
+    u->qhead = 0;
+    u->qlen = qlen;
+    buf += qlen;
+    n = offsetof(c6655_soc, ram) - offsetof(c6655_soc, spi);
+    memcpy(&s->spi, buf, n);
+    buf += n;
+    for (unsigned i = 0; i < s->nram; i++) {
+        memcpy(s->ram[i].mem, buf, s->ram[i].size);
+        buf += s->ram[i].size;
+    }
+    s->cache_valid = 0;
 }
 
 void c6655_soc_free(c6655_soc *s)

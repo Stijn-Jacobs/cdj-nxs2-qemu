@@ -26,7 +26,9 @@
 #include "chardev/char-fe.h"
 #include "ui/console.h"
 #include "ui/input.h"
+#include "migration/vmstate.h"
 #include "cdj_panelkeys.h"
+#include "cdj_gui_keys.h"
 
 
 /*
@@ -58,6 +60,11 @@ typedef struct {
      * guest from a stalled process. */
     int64_t rx_wall[60];             /* host ms at first arrival that second */
     int64_t poll_wall[60];           /* host ms at first poll that second    */
+    /* migrated: rx and rx_hash as flat buffers */
+    uint8_t *mig_rx;
+    uint32_t mig_rx_len;
+    uint32_t *mig_hash;
+    uint32_t mig_hash_len;
 } SpiLink;
 
 static SpiLink spilink;
@@ -510,6 +517,58 @@ static void spilink_receive(void *opaque, const uint8_t *buf, int size)
     }
 }
 
+static int spilink_pre_save(void *opaque)
+{
+    spilink.mig_rx = spilink.rx->data;
+    spilink.mig_rx_len = spilink.rx->len;
+    spilink.mig_hash = (uint32_t *)spilink.rx_hash->data;
+    spilink.mig_hash_len = spilink.rx_hash->len;
+    return 0;
+}
+
+static int spilink_post_save(void *opaque)
+{
+    spilink.mig_rx = NULL;
+    spilink.mig_hash = NULL;
+    return 0;
+}
+
+static int spilink_post_load(void *opaque, int version_id)
+{
+    g_byte_array_set_size(spilink.rx, 0);
+    g_byte_array_append(spilink.rx, spilink.mig_rx, spilink.mig_rx_len);
+    g_array_set_size(spilink.rx_hash, 0);
+    g_hash_table_remove_all(spilink.rx_count);
+    for (uint32_t i = 0; i < spilink.mig_hash_len; i++) {
+        g_array_append_val(spilink.rx_hash, spilink.mig_hash[i]);
+        spilink_count_add(spilink.mig_hash[i], 1);
+    }
+    g_free(spilink.mig_rx);
+    g_free(spilink.mig_hash);
+    spilink.mig_rx = NULL;
+    spilink.mig_hash = NULL;
+    return 0;
+}
+
+static const VMStateDescription vmstate_spilink = {
+    .name = "sh7269-spilink",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .pre_save = spilink_pre_save,
+    .post_save = spilink_post_save,
+    .post_load = spilink_post_load,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT32(mig_rx_len, SpiLink),
+        VMSTATE_UINT32(mig_hash_len, SpiLink),
+        VMSTATE_VBUFFER_ALLOC_UINT32(mig_rx, SpiLink, 0, NULL, mig_rx_len),
+        VMSTATE_VARRAY_UINT32_ALLOC(mig_hash, SpiLink, mig_hash_len, 0,
+                                    vmstate_info_uint32, uint32_t),
+        VMSTATE_UINT8_ARRAY(last_hb, SpiLink, 4096),
+        VMSTATE_BOOL(have_hb, SpiLink),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static void spilink_init(void)
 {
     Chardev *c = qemu_chr_find("spilink");
@@ -517,6 +576,7 @@ static void spilink_init(void)
     spilink.rx = g_byte_array_new();
     spilink.rx_hash = g_array_new(FALSE, FALSE, sizeof(uint32_t));
     spilink.rx_count = g_hash_table_new(g_direct_hash, g_direct_equal);
+    vmstate_register_any(NULL, &vmstate_spilink, &spilink);
     if (!c) {
         return;
     }
@@ -541,7 +601,7 @@ typedef struct {
     bool used;
 } Sh2aIrq;
 
-static struct {
+static struct Sh2aIrqQueue {
     Sh2aIrq q[SH2A_IRQ_QUEUE_LEN];
     unsigned head, tail;
     QEMUTimer *pump;
@@ -743,6 +803,35 @@ static void sh2a_irq_pump(void *opaque)
                   qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 10000);
     }
 }
+
+/* The queue is created on the first interrupt; a restored one is pumped at once. */
+static int sh2a_irq_post_load(void *opaque, int version_id)
+{
+    sh2a_irq.cpu = SUPERH_CPU(first_cpu);
+    if (!sh2a_irq.pump) {
+        sh2a_irq.pump = timer_new_ns(QEMU_CLOCK_VIRTUAL, sh2a_irq_pump, NULL);
+    }
+    if (sh2a_irq.head != sh2a_irq.tail || sh2a_irq.cur_valid) {
+        timer_mod(sh2a_irq.pump, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL));
+    }
+    return 0;
+}
+
+static const VMStateDescription vmstate_sh2a_irq = {
+    .name = "sh2a-irq",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .post_load = sh2a_irq_post_load,
+    .fields = (const VMStateField[]) {
+        VMSTATE_BUFFER_UNSAFE(q, struct Sh2aIrqQueue, 0, sizeof(sh2a_irq.q)),
+        VMSTATE_UINT32(head, struct Sh2aIrqQueue),
+        VMSTATE_UINT32(tail, struct Sh2aIrqQueue),
+        VMSTATE_UINT16(cur_vec, struct Sh2aIrqQueue),
+        VMSTATE_UINT8(cur_level, struct Sh2aIrqQueue),
+        VMSTATE_BOOL(cur_valid, struct Sh2aIrqQueue),
+        VMSTATE_END_OF_LIST()
+    }
+};
 
 static void sh2a_raise(SuperHCPU *cpu, uint16_t vec, uint8_t level)
 {
@@ -1127,6 +1216,16 @@ static void portf_dump(Notifier *n, void *unused)
     }
 }
 
+static const VMStateDescription vmstate_portf = {
+    .name = "sh7269-portf",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT16_ARRAY(reg, Sh7269PortF, PORTF_SLOTS),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static void portf_init(MemoryRegion *sysmem, SuperHCPU *cpu)
 {
     Sh7269PortF *s;
@@ -1137,6 +1236,7 @@ static void portf_init(MemoryRegion *sysmem, SuperHCPU *cpu)
     s = g_new0(Sh7269PortF, 1);
     s->cpu = cpu;
     portf = s;
+    vmstate_register_any(NULL, &vmstate_portf, s);
     memory_region_init_io(&s->iomem, NULL, &portf_ops, s, "sh7269.portf",
                           SH7269_PORTF_SIZE);
     /* priority 1: the sh7269.cpg unimplemented region covers this range */
@@ -1145,6 +1245,22 @@ static void portf_init(MemoryRegion *sysmem, SuperHCPU *cpu)
     s->exit.notify = portf_dump;
     qemu_add_exit_notifier(&s->exit);
 }
+
+static const VMStateDescription vmstate_cmt = {
+    .name = "sh7269-cmt",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_TIMER_PTR(timer, Sh7269Cmt),
+        VMSTATE_UINT16(cmstr, Sh7269Cmt),
+        VMSTATE_UINT16(cmcsr, Sh7269Cmt),
+        VMSTATE_UINT16(cmcnt, Sh7269Cmt),
+        VMSTATE_UINT16(cmcor, Sh7269Cmt),
+        VMSTATE_UINT64(period_ns, Sh7269Cmt),
+        VMSTATE_UINT64(next_ns, Sh7269Cmt),
+        VMSTATE_END_OF_LIST()
+    }
+};
 
 static void cmt_init(MemoryRegion *sysmem, SuperHCPU *cpu)
 {
@@ -1160,6 +1276,7 @@ static void cmt_init(MemoryRegion *sysmem, SuperHCPU *cpu)
 
     s->cpu = cpu;
     s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, cmt_fire, s);
+    vmstate_register_any(NULL, &vmstate_cmt, s);
     memory_region_init_io(&s->iomem, NULL, &cmt_ops, s, "sh7269.cmt", 0x10);
     memory_region_add_subregion(sysmem, SH7269_CMT_BASE, &s->iomem);
 }
@@ -2023,12 +2140,37 @@ static void dmac_dump(Notifier *n, void *unused)
     }
 }
 
+static const VMStateDescription vmstate_dmac = {
+    .name = "sh7269-dmac",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT32_ARRAY(sar, Sh7269Dmac, SH7269_DMAC_CHANS),
+        VMSTATE_UINT32_ARRAY(dar, Sh7269Dmac, SH7269_DMAC_CHANS),
+        VMSTATE_UINT32_ARRAY(tcr, Sh7269Dmac, SH7269_DMAC_CHANS),
+        VMSTATE_UINT32_ARRAY(chcr, Sh7269Dmac, SH7269_DMAC_CHANS),
+        VMSTATE_UINT32_ARRAY(rsar, Sh7269Dmac, SH7269_DMAC_CHANS),
+        VMSTATE_UINT32_ARRAY(rdar, Sh7269Dmac, SH7269_DMAC_CHANS),
+        VMSTATE_UINT32_ARRAY(rtcr, Sh7269Dmac, SH7269_DMAC_CHANS),
+        VMSTATE_UINT16(dmaor, Sh7269Dmac),
+        VMSTATE_UINT16_ARRAY(dmars, Sh7269Dmac, 8),
+        VMSTATE_BOOL_ARRAY(pending, Sh7269Dmac, SH7269_DMAC_CHANS),
+        VMSTATE_TIMER_PTR(retry, Sh7269Dmac),
+        VMSTATE_UINT32(defer_have, Sh7269Dmac),
+        VMSTATE_UINT32(defer_need, Sh7269Dmac),
+        VMSTATE_INT64(defer_start_ms, Sh7269Dmac),
+        VMSTATE_UINT32_ARRAY(arm_chcr, Sh7269Dmac, SH7269_DMAC_CHANS),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static void dmac_init(MemoryRegion *sysmem, SuperHCPU *cpu)
 {
     Sh7269Dmac *s = g_new0(Sh7269Dmac, 1);
 
     s->cpu = cpu;
     s->retry = timer_new_ns(QEMU_CLOCK_VIRTUAL, dmac_retry, s);
+    vmstate_register_any(NULL, &vmstate_dmac, s);
     s->exit.notify = dmac_dump;
     qemu_add_exit_notifier(&s->exit);
     memory_region_init_io(&s->iomem, NULL, &dmac_ops, s, "sh7269.dmac",
@@ -2542,10 +2684,9 @@ static void band_fps_init(void)
 }
 
 /*
- * Host keyboard to front panel. This board owns the window, but the panel is
- * on MAIN, so keys are forwarded over the socket in cdj_panelkeys.h. Each
- * window drives its own deck. The report bits are the ones midi/cdj_actions.py
- * lists as confirmed unless marked otherwise; keep the two tables in step.
+ * Host keyboard to front panel (cdj_gui_keys.c). The report bits are the ones
+ * midi/cdj_actions.py lists as confirmed unless marked otherwise; keep the two
+ * tables in step.
  *
  *   Space play/pause    C cue           Q/W/E loop in/out/reloop
  *   Up/Down browse      PgUp/PgDn x10   Enter/Right load/enter  Left/Esc/Bksp back
@@ -2557,13 +2698,6 @@ static void band_fps_init(void)
  * CDJ_PANEL_SWEEP=1 adds a probe for unnamed bits: F9/F10 pick a report
  * byte, F1-F8 press its bits.
  */
-typedef struct {
-    int qcode;
-    unsigned off, mask;
-    const char *name;
-    bool confirmed;
-} CdjGuiKey;
-
 static const CdjGuiKey cdj_gui_keys[] = {
     { Q_KEY_CODE_SPC,           0x10, 0x01, "PLAY/PAUSE",   true  },
     { Q_KEY_CODE_C,             0x10, 0x02, "CUE",          true  },
@@ -2596,180 +2730,6 @@ static const CdjGuiKey cdj_gui_keys[] = {
     { Q_KEY_CODE_P,             0x15, 0x08, "TEMPO RANGE",  true  },
     { Q_KEY_CODE_K,             0x15, 0x10, "MASTER TEMPO", true  },
 };
-
-#define CDJ_GUI_ROTARY      0x0E        /* select knob counter byte          */
-
-/*
- * Nudge: a platter turned by hand. The firmware's jog engine takes motion
- * from the rolling position counter in report bytes 8-9 and speed from the
- * pulse period in bytes 10-11 (27778 / P = platter speed %), so while the key
- * is held the counter is stepped and the period held. The counter has to move
- * at least 42 per 30 firmware passes before the bend engages; 2000 pulses/s
- * clears that. Measured on the real DSP, P 278 bent the deck to 1.06x and
- * P 139 to 1.18x.
- */
-#define CDJ_NUDGE_TICK_MS   40
-#define CDJ_NUDGE_STEP      80
-#define CDJ_NUDGE_PERIOD    278
-#define CDJ_NUDGE_HARD      139
-
-static struct {
-    QEMUTimer *timer;
-    const char *sock;
-    int dir;                    /* -1 slower, +1 faster, 0 idle */
-    bool hard;
-    uint16_t count;
-} cdj_nudge;
-
-static void cdj_nudge_send(void)
-{
-    unsigned period = cdj_nudge.dir ? (cdj_nudge.hard ? CDJ_NUDGE_HARD
-                                                      : CDJ_NUDGE_PERIOD) : 0;
-    unsigned bits = 0x80 | (cdj_nudge.dir > 0 ? 0x40 : 0);
-
-    if (cdj_nudge.dir) {
-        cdj_nudge.count += cdj_nudge.dir * CDJ_NUDGE_STEP;
-        cdj_panelkey_send_op(cdj_nudge.sock, 0x08, cdj_nudge.count >> 8, 0, "lvl");
-        cdj_panelkey_send_op(cdj_nudge.sock, 0x09, cdj_nudge.count & 0xff, 0,
-                             "lvl");
-    }
-    cdj_panelkey_send_op(cdj_nudge.sock, 0x0A, period >> 8, 0, "lvl");
-    cdj_panelkey_send_op(cdj_nudge.sock, 0x0B, period & 0xff, 0, "lvl");
-    if (cdj_nudge.dir) {
-        cdj_panelkey_send_op(cdj_nudge.sock, 0x0F, bits, CDJ_NUDGE_TICK_MS * 3,
-                             "or");
-    }
-}
-
-static void cdj_nudge_tick(void *opaque)
-{
-    if (!cdj_nudge.dir) {
-        return;
-    }
-    cdj_nudge_send();
-    timer_mod(cdj_nudge.timer, qemu_clock_get_ms(QEMU_CLOCK_REALTIME)
-                               + CDJ_NUDGE_TICK_MS);
-}
-
-static void cdj_nudge_set(const char *sock, int dir, bool hard)
-{
-    if (dir == cdj_nudge.dir && hard == cdj_nudge.hard) {
-        return;
-    }
-    if (!cdj_nudge.timer) {
-        cdj_nudge.timer = timer_new_ms(QEMU_CLOCK_REALTIME, cdj_nudge_tick, NULL);
-    }
-    cdj_nudge.sock = sock;
-    cdj_nudge.dir = dir;
-    cdj_nudge.hard = hard;
-    if (dir) {
-        cdj_nudge_tick(NULL);
-    } else {
-        timer_del(cdj_nudge.timer);
-        cdj_nudge_send();       /* period 0: the platter has stopped */
-    }
-}
-
-static unsigned cdj_gui_sweep_off = 0x15;   /* byte under F1-F8 */
-
-static void cdj_gui_key_event(DeviceState *dev, QemuConsole *src,
-                              InputEvent *evt)
-{
-    static bool shift, nudge_down[2];
-    const char *sock = getenv(CDJ_PANELKEY_ENV);
-    InputKeyEvent *k = evt->u.key.data;
-    int qcode = qemu_input_key_value_to_qcode(k->key);
-    unsigned i;
-
-    if (!sock) {
-        return;
-    }
-    if (qcode == Q_KEY_CODE_SHIFT || qcode == Q_KEY_CODE_SHIFT_R) {
-        shift = k->down;
-        if (cdj_nudge.dir) {
-            cdj_nudge_set(sock, cdj_nudge.dir, shift);
-        }
-        return;
-    }
-    if (qcode == Q_KEY_CODE_MINUS || qcode == Q_KEY_CODE_EQUAL) {
-        nudge_down[qcode == Q_KEY_CODE_EQUAL] = k->down;
-        cdj_nudge_set(sock, nudge_down[1] - nudge_down[0], shift);
-        return;
-    }
-    /*
-     * Held keys send hold on key-down and rel on key-up, so a key is down as
-     * long as the finger is; host auto-repeat is swallowed.
-     */
-    for (i = 0; i < ARRAY_SIZE(cdj_gui_keys); i++) {
-        static bool held[ARRAY_SIZE(cdj_gui_keys)];
-
-        if (cdj_gui_keys[i].qcode != qcode) {
-            continue;
-        }
-        if (k->down == held[i]) {
-            return;                     /* auto-repeat, or a stray release */
-        }
-        held[i] = k->down;
-        cdj_panelkey_send_op(sock, cdj_gui_keys[i].off, cdj_gui_keys[i].mask,
-                             0, k->down ? "hold" : "rel");
-        if (k->down) {
-            info_report("panel key: %s (report[0x%02x] 0x%02x)%s",
-                        cdj_gui_keys[i].name, cdj_gui_keys[i].off,
-                        cdj_gui_keys[i].mask,
-                        cdj_gui_keys[i].confirmed ? "" : "   [unverified]");
-        }
-        return;
-    }
-    if (!k->down) {
-        return;                         /* the rest are taps, not held keys */
-    }
-    /* The select knob repeats with the host's auto-repeat, like a turn. */
-    if (qcode == Q_KEY_CODE_UP || qcode == Q_KEY_CODE_DOWN ||
-        qcode == Q_KEY_CODE_PGUP || qcode == Q_KEY_CODE_PGDN) {
-        int step = (qcode == Q_KEY_CODE_PGUP || qcode == Q_KEY_CODE_PGDN)
-                   ? 10 : 1;
-
-        if (qcode == Q_KEY_CODE_UP || qcode == Q_KEY_CODE_PGUP) {
-            step = -step;
-        }
-        cdj_panelkey_send_op(sock, CDJ_GUI_ROTARY, step, 0, "rot");
-        return;
-    }
-    if (!getenv("CDJ_PANEL_SWEEP")) {
-        return;
-    }
-    if (qcode == Q_KEY_CODE_F9 || qcode == Q_KEY_CODE_F10) {
-        cdj_gui_sweep_off += (qcode == Q_KEY_CODE_F10) ? 1 : -1;
-        cdj_gui_sweep_off &= 0x1F;
-        info_report("panel sweep: byte is now 0x%02x (F1-F8 press its bits)",
-                    cdj_gui_sweep_off);
-        return;
-    }
-    if (qcode >= Q_KEY_CODE_F1 && qcode <= Q_KEY_CODE_F8) {
-        unsigned mask = 1u << (qcode - Q_KEY_CODE_F1);
-
-        cdj_panelkey_send(sock, cdj_gui_sweep_off, mask, 150);
-        info_report("panel sweep: report[0x%02x] |= 0x%02x",
-                    cdj_gui_sweep_off, mask);
-    }
-}
-
-static QemuInputHandler cdj_gui_kbd = {
-    .name  = "CDJ front panel",
-    .mask  = INPUT_EVENT_MASK_KEY,
-    .event = cdj_gui_key_event,
-};
-
-static void cdj_gui_keys_init(void)
-{
-    if (!getenv(CDJ_PANELKEY_ENV)) {
-        return;
-    }
-    qemu_input_handler_register(NULL, &cdj_gui_kbd);
-    info_report("sh7269gui: keyboard live -- Space play/pause, C cue, "
-                "Up/Down browse, Enter load, Esc back, - = nudge "
-                "(emulator/README.md lists every key)");
-}
 
 /*
  * Touch screen from the host mouse (CDJ_TOUCH=1): left button is the finger.
@@ -2929,7 +2889,7 @@ static void lcd_init(MemoryRegion *sysmem, MemoryRegion *sdram)
     gui_refresh_timer_init(s);
     present_fps_init();
     band_fps_init();
-    cdj_gui_keys_init();
+    cdj_gui_keys_init(cdj_gui_keys, ARRAY_SIZE(cdj_gui_keys), "sh7269gui");
     gui_touch_init();
     gui_frame_init(s);
 }
@@ -2992,10 +2952,21 @@ static const MemoryRegionOps rspi_ops = {
     .valid = { .min_access_size = 1, .max_access_size = 4 },
 };
 
+static const VMStateDescription vmstate_rspi = {
+    .name = "sh7269-rspi",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT8_ARRAY(reg, Sh7269Rspi, 0x100),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static void rspi_init(MemoryRegion *sysmem)
 {
     Sh7269Rspi *s = g_new0(Sh7269Rspi, 1);
 
+    vmstate_register_any(NULL, &vmstate_rspi, s);
     memory_region_init_io(&s->iomem, NULL, &rspi_ops, s, "sh7269.rspi", 0x100);
     memory_region_add_subregion(sysmem, SH7269_RSPI_BASE, &s->iomem);
 }
@@ -3043,10 +3014,21 @@ static const MemoryRegionOps intc_ops = {
     .valid = { .min_access_size = 1, .max_access_size = 4 },
 };
 
+static const VMStateDescription vmstate_intc = {
+    .name = "sh7269-intc",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT8_ARRAY(reg, Sh7269Intc, SH7269_INTC_SIZE),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static void intc_init(MemoryRegion *sysmem)
 {
     Sh7269Intc *s = g_new0(Sh7269Intc, 1);
 
+    vmstate_register_any(NULL, &vmstate_intc, s);
     memory_region_init_io(&s->iomem, NULL, &intc_ops, s, "sh7269.intc",
                           SH7269_INTC_SIZE);
     /* priority 1: the CPG stub (0xFFFE0000 + 0x8000) covers this range */
@@ -3110,10 +3092,21 @@ static const MemoryRegionOps vdc_ops = {
     .valid = { .min_access_size = 1, .max_access_size = 4 },
 };
 
+static const VMStateDescription vmstate_vdc4 = {
+    .name = "sh7269-vdc4",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT8_ARRAY(reg, Sh7269Vdc, SH7269_VDC4_SIZE),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static void vdc_init(MemoryRegion *sysmem)
 {
     Sh7269Vdc *s = g_new0(Sh7269Vdc, 1);
 
+    vmstate_register_any(NULL, &vmstate_vdc4, s);
     memory_region_init_io(&s->iomem, NULL, &vdc_ops, s, "sh7269.vdc4",
                           SH7269_VDC4_SIZE);
     /* priority 1: must win over sh7269.onchip-hi, which covers this range */
@@ -3262,6 +3255,23 @@ static const MemoryRegionOps vdcsys_ops = {
     .valid = { .min_access_size = 1, .max_access_size = 4 },
 };
 
+static const VMStateDescription vmstate_vdcsys = {
+    .name = "sh7269-vdcsys",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_TIMER_PTR(timer, Sh7269VdcSys),
+        VMSTATE_UINT32(int1, Sh7269VdcSys),
+        VMSTATE_UINT32(int2, Sh7269VdcSys),
+        VMSTATE_UINT32(int3, Sh7269VdcSys),
+        VMSTATE_UINT32(int4, Sh7269VdcSys),
+        VMSTATE_UINT16(panel_clk, Sh7269VdcSys),
+        VMSTATE_UINT16(clut, Sh7269VdcSys),
+        VMSTATE_UINT64(period_ns, Sh7269VdcSys),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static void vdcsys_init(MemoryRegion *sysmem, SuperHCPU *cpu)
 {
     Sh7269VdcSys *s = g_new0(Sh7269VdcSys, 1);
@@ -3275,6 +3285,7 @@ static void vdcsys_init(MemoryRegion *sysmem, SuperHCPU *cpu)
     s->panel_clk = 0x0001;                  /* manual: initial value */
     s->period_ns = 1000000000ULL / rate;
     s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, vdcsys_fire, s);
+    vmstate_register_any(NULL, &vmstate_vdcsys, s);
 
     memory_region_init_io(&s->iomem, NULL, &vdcsys_ops, s, "sh7269.vdc4-syscnt",
                           SH7269_VDCSYS_SIZE);
@@ -3723,6 +3734,7 @@ static void sh7269gui_init(MachineState *machine)
     uint32_t entry;
 
     cpu = SUPERH_CPU(cpu_create(machine->cpu_type));
+    vmstate_register_any(NULL, &vmstate_sh2a_irq, &sh2a_irq);
 
     gui_mpoke_init();
 

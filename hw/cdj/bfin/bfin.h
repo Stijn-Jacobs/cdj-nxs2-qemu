@@ -79,6 +79,13 @@ uint32_t bfin_get_mmr(bfin_core *c, uint32_t addr);
 uint32_t bfin_trap_pc(const bfin_core *c);
 uint64_t bfin_trap_insn(const bfin_core *c);
 
+/* Snapshots: the registers, the event controller, the core timer and the
+ * core MMRs as one image, taken between two bfin_step calls; decoded code is
+ * rebuilt after a load. bfin_snap_save(c, NULL) returns the image size. Only
+ * the build that wrote an image can read it. */
+size_t bfin_snap_save(const bfin_core *c, uint8_t *buf);
+void   bfin_snap_load(bfin_core *c, const uint8_t *buf);
+
 /* Per-instruction trace: one line per executed instruction or bundle (the PC
  * and its 16-bit words, in objdump's order) to f, while the cycle count lies
  * in [from, to). NULL stops it. */

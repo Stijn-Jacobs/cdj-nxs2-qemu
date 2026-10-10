@@ -58,6 +58,7 @@ STEPS = {
     "srec_coverage": lambda m: ("srec_coverage.py", ["extract/section%s.bin" % m.main_section]),
     "lzss_decode": lambda m: ("lzss_decode.py", ["extract/section%s.sparse.bin" % m.main_section, m.main_lzss]),
     "gui_decode": lambda m: ("gui_decode.py", ["extract/section%s.bin" % m.gui_section, "extract/gui_unpacked.bin"]),
+    "srec_flat": lambda m: ("srec_flat.py", ["extract/section%s.bin" % m.gui_section, "extract/" + m.display_flash]),
     "gui_resources": lambda m: ("gui_resources.py", ["extract/resblob.bin"]),
     "gui_artwork": lambda m: ("gui_artwork.py", ["extract/artblob.bin"]),
     "make_settings": lambda m: ("make_settings.py", ["extract/settings.bin"]),
@@ -79,9 +80,9 @@ def sha256(path):
 
 
 def installed(extract, model_id=None):
-    images = IMAGES if model_id is None else tuple(
-        os.path.basename(rel) for rel, _ in _model.load(model_id).expected)
-    return all(os.path.isfile(os.path.join(extract, f)) for f in images)
+    # A profile with no MODEL_EXPECTED names no images; that is not "installed".
+    images = _model.load(model_id).images
+    return bool(images) and all(os.path.isfile(os.path.join(extract, f)) for f in images)
 
 
 def _python():
@@ -217,15 +218,18 @@ def prepare(upd, out=None, install_to=None, force=False, root=None, model=None, 
     # Check every destination before copying anything, so a refusal leaves
     # the repository exactly as it was.
     if not force:
-        clash = [rel for rel, _ in m.expected
-                 if os.path.exists(os.path.join(install_to, os.path.basename(rel)))]
+        clash = [name for name in m.images if os.path.exists(os.path.join(install_to, name))]
         if clash:
             raise FirmwareError("refusing to overwrite: %s (add --force to replace them)"
-                                % " ".join(m.extract + "/" + rel[len("extract/"):] for rel in clash))
+                                % " ".join(m.extract + "/" + name for name in clash))
     os.makedirs(install_to, exist_ok=True)
     for rel, _ in m.expected:
         shutil.copyfile(os.path.join(out, rel), os.path.join(install_to, os.path.basename(rel)))
         say("installed %s/%s" % (m.extract, rel[len("extract/"):]))
+    if m.display_upd:
+        shutil.copyfile(next(f for f in upd_files if os.path.basename(f) == m.display_upd),
+                        os.path.join(install_to, _model.DISPLAY_UPD_IMAGE))
+        say("installed %s/%s" % (m.extract, _model.DISPLAY_UPD_IMAGE))
     return out
 
 

@@ -163,11 +163,22 @@ static void cdj_spilink_receive(void *opaque, const uint8_t *buf, int size)
     }
 }
 
+static const VMStateDescription vmstate_cdj_spilink = {
+    .name = "cdj-spilink",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        CDJ_VMSTATE_BYTES(rx, CdjSpiLink),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 void cdj_spilink_init(void)
 {
     Chardev *c = qemu_chr_find("spilink");
 
     cdj_spilink.rx = g_byte_array_new();
+    vmstate_register_any(NULL, &vmstate_cdj_spilink, &cdj_spilink);
     if (!c) {
         return;
     }
@@ -1040,6 +1051,23 @@ static void cdj_dma1_dump(Notifier *n, void *unused)
 
 /* dei carries CDJ_DMA1_CHANS lines -- DMAC1A DEI0..3 then DMAC1B DEI4/DEI5 --
  * with NULL entries for channels that should raise nothing. */
+static const VMStateDescription vmstate_cdj_dma1 = {
+    .name = "cdj-dma1",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT32_ARRAY(reg, CdjDma1State, CDJ_DMA1_SIZE / 4),
+        VMSTATE_BOOL_ARRAY(pending, CdjDma1State, CDJ_DMA1_CHANS),
+        VMSTATE_TIMER_PTR(retry, CdjDma1State),
+        CDJ_VMSTATE_BYTES(txhold, CdjDma1State),
+        VMSTATE_BOOL(txdefer, CdjDma1State),
+        VMSTATE_UINT32(txdefer_ch, CdjDma1State),
+        VMSTATE_UINT32(txdefer_sar, CdjDma1State),
+        VMSTATE_INT64(pace_next, CdjDma1State),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 void cdj_dma1_init(MemoryRegion *sysmem, qemu_irq *dei)
 {
     CdjDma1State *s = g_new0(CdjDma1State, 1);
@@ -1053,6 +1081,7 @@ void cdj_dma1_init(MemoryRegion *sysmem, qemu_irq *dei)
     qemu_add_exit_notifier(&s->exit);
     s->retry = timer_new_ns(QEMU_CLOCK_VIRTUAL, cdj_dma1_retry, s);
     cdj_dma1_singleton = s;
+    vmstate_register_any(NULL, &vmstate_cdj_dma1, s);
     memory_region_init_io(&s->iomem, NULL, &cdj_dma1_ops, s,
                           "sh7724.dma1", CDJ_DMA1_SIZE);
     memory_region_add_subregion(sysmem, CDJ_DMA1_BASE, &s->iomem);

@@ -49,6 +49,22 @@ void bfin_free(bfin_core *c)
     free(c);
 }
 
+#define SNAP_LEN     (offsetof(bfin_core, load) + sizeof(((bfin_core *)0)->load)      - offsetof(bfin_core, pc))
+
+size_t bfin_snap_save(const bfin_core *c, uint8_t *buf)
+{
+    if (buf) {
+        memcpy(buf, &c->pc, SNAP_LEN);
+    }
+    return SNAP_LEN;
+}
+
+void bfin_snap_load(bfin_core *c, const uint8_t *buf)
+{
+    memcpy(&c->pc, buf, SNAP_LEN);
+    c->code_gen++;
+}
+
 void bfin_map_ram(bfin_core *c, uint32_t base, uint32_t size, uint8_t *host)
 {
     if (c->nram < BFIN_MAX_RAM) {

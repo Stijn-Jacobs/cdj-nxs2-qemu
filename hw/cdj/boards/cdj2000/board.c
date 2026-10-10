@@ -33,7 +33,7 @@ static const CdjBoardDesc cdj2000nxs_board = {
      * the bootloader's memory test covers 0xA4000000..0xABFFEF00. */
     .dram_phys = 0x04000000,
     .dram_size = 128 * MiB,
-    /* Sector tables at 0x04075D94 (addresses) and 0x04075EB0 (sizes). The
+    /* Sector tables at 0x04075FF8 (addresses) and 0x04076114 (sizes). The
      * firmware never sends an ID or CFI query, so the NXS2's IDs do. */
     .flash_phys = 0x00000000,
     .flash_size = 4 * MiB,
@@ -42,13 +42,13 @@ static const CdjBoardDesc cdj2000nxs_board = {
     .fw_entry = 0xA4000800,
     .init_sp = 0xAC000000,
     /* The bootloader enters the image in register bank 0. From the reset
-     * value's bank 1, the interrupt-disable at 0x04367E5C saves the old SR in
+     * value's bank 1, the interrupt-disable at 0x043688B0 saves the old SR in
      * bank 1's r0 and returns bank 0's (zero), and the matching restore drops
      * to user mode: an illegal-instruction fault on the next stc sr. */
     .init_sr = 0x500000F0,              /* MD=1, BL=1, IMASK=0xF, RB=0 */
     /* The NXS2's RTOS quirk, byte for byte: SR is restored from this global
-     * (0x04367E34, 0x04367E40) before 0x04367E24 first writes it. */
-    .sr_seed_slot = 0x04D1368C,
+     * (0x04368888, 0x04368894) before 0x04368878 first writes it. */
+    .sr_seed_slot = 0x04D13694,
     .sr_seed = 0x400000F0,
     .periph_hz = SH7763_PERIPH_HZ,
     .ccn_trace_lo = 0x640,              /* DMAC DMTE0..DMTE3 */
@@ -106,8 +106,16 @@ static void *sh7763_kick_main_loop(void *opaque)
 }
 #endif
 
-static void sh7763_board_init(MachineState *machine, const CdjBoardDesc *desc,
-                              const CdjDspWires *dsp)
+/* What the check at 0x0410FF00 needs from the auth chip. */
+static const CdjAuthAnswer nxs_auth_answers[] = {
+    { 0x00, 0x05 },
+    { 0x01, 0x01 },
+};
+
+void sh7763_board_init(MachineState *machine, const CdjBoardDesc *desc,
+                       const CdjDspWires *(*dsp_init)(MemoryRegion *, hwaddr),
+                       const Cdj2000Display *display_desc,
+                       bool auth_chip)
 {
     MemoryRegion *sysmem = get_system_memory();
     SuperHCPU *cpu = cdj_board_init(machine, desc);
@@ -137,7 +145,7 @@ static void sh7763_board_init(MachineState *machine, const CdjBoardDesc *desc,
                  cdj_count_irq(irq[S63_TMU4], "TMU4 tick"),
                  cdj_count_irq(irq[S63_TMU5], "TMU5"));
     cdj_irqcount_exit.notify = cdj_irqcount_dump;
-    qemu_add_exit_notifier(&cdj_irqcount_exit);
+    cdj_add_exit_report(&cdj_irqcount_exit);
 
     /* The same SH-4A DMAC as the NXS2's, at another base, with its resource
      * selectors (DMARS) at +0x1000. The USB host's FIFO window is its DREQ
@@ -153,9 +161,12 @@ static void sh7763_board_init(MachineState *machine, const CdjBoardDesc *desc,
 
         cdj_dmac_init(sysmem, "sh7763.dmac", 0xFF608000,
                       A7ADDR(CDJ2000_USBH_BASE), CDJ_USB_SIZE, dei);
+        /* The CDJ-900's MAIN moves each sector block into the DSP window on
+         * channel 4 (the CDJ-2000's uses channel 3) and waits for its end. */
+        cdj_dmac_dei_connect(4, cdj_count_irq(irq[S63_DMTE4], "DMAC DMTE4"));
     }
 
-    /* The flash is 4 MB by its own sector table (71 sectors at 0x04075D94,
+    /* The flash is 4 MB by its own sector table (71 sectors at 0x04075FF8,
      * the last ending at 0x400000), yet the boot scans 16-bit words from
      * 0x400000 up. Nothing is fitted there: the bus reads all ones, which
      * is what ends that scan on the real board. */
@@ -172,10 +183,11 @@ static void sh7763_board_init(MachineState *machine, const CdjBoardDesc *desc,
              serial_hd(0) ?: qemu_chr_new("scif0-null", "null", NULL));
     cdj_scif(sysmem, "scif1", 0xFFE10000,
              serial_hd(1) ?: qemu_chr_new("scif1-null", "null", NULL));
-    /* The DMA-fed port to the front-panel microcontroller (M16C). */
-    cdj2000_panel_init(sysmem, 0xFFE20000);
+    /* The DMA-fed port to the front-panel microcontroller (M16C); a display
+     * with a link_byte shares it. */
+    cdj2000_panel_init(sysmem, 0xFFE20000, display_desc);
     /* The BF531 display processor, its own window; off unless asked for. */
-    display = cdj2000_display_init();
+    display = cdj2000_display_init(display_desc);
 
     /* Same SH7724 fast-EtherC/E-DMAC layout as the NXS2's, at this SoC's own
      * base; its MDIO read routine needs one extra turnaround lead-in bit
@@ -183,6 +195,10 @@ static void sh7763_board_init(MachineState *machine, const CdjBoardDesc *desc,
     cdj_ether_init(sysmem, "sh7763.ether", 0xFEF00000,
                   cdj_count_irq(irq[S63_GETHER0], "GETHER0"), 1);
     cdj2000_sdhi_init(sysmem);
+    if (auth_chip) {
+        cdj2000_iic_init(sysmem, nxs_auth_answers,
+                         ARRAY_SIZE(nxs_auth_answers));
+    }
     /* The ATAPI (CD drive) task file and control block, not GPIO: the
      * IDENTIFY sequence (0x042971EC) programs this range with the SH7724
      * ATAPI_CONTROL* layout, offset for offset. GPIO/PFC is the next 64 KiB.
@@ -191,7 +207,10 @@ static void sh7763_board_init(MachineState *machine, const CdjBoardDesc *desc,
     cdj_ata_init(sysmem, "sh7763.atapi", 0xFFF00000,
                  cdj_count_irq(irq[S63_ATAPI], "ATAPI"));
     cdj_unimp("sh7763.gpio",  0xFFF10000, 0x10000);
-    cdj2000_latch_init(sysmem, dsp, display);
+    /* Created after the board's RAM so that the largest RAM block sits at
+     * offset 0: a migration's dirty-bitmap sync clears each block's range
+     * from 0, and QEMU asserts when that range spans two blocks. */
+    cdj2000_latch_init(sysmem, dsp_init(sysmem, 0x0C000000), display);
     /* On-chip USB host (the front stick port): the NXS2's R8A66597 host
      * controller at its own base. usbh_load()'s boot pass is read-modify-write
      * at that chip's SYSCFG0, FIFOSEL, INTENB, BRDYENB/NRDYENB/BEMPENB and
@@ -228,18 +247,25 @@ static void sh7763_board_init(MachineState *machine, const CdjBoardDesc *desc,
 
 static void cdj2000nxs_init(MachineState *machine)
 {
-    /* The NXS's DSP is a C674x behind its host port, addressed through HPIA. */
+    /* The NXS's DSP is a C674x behind its host port, addressed through HPIA.
+     * fw 1.44's DSP application polls in a main loop at 0xC004CB8C, its
+     * stack at B15 0x11805AE0 on entry. */
+    cdj_c6747_set_idle_loop(0xC004CB8C, 0x11804AE0, 0x11805C00);
     sh7763_board_init(machine, &cdj2000nxs_board,
-                      cdj_c6747_init(get_system_memory(), 0x0C000000));
+                      cdj_c6747_init,
+                      &cdj2000nxs_display, true);
 }
 
 static void cdj2000_init(MachineState *machine)
 {
     /* The CDJ-2000's is a C6727 behind a full-address host port: its
      * uncached area-3 window at 0x0C0C0000 (454 references in the image) is
-     * DSP memory. */
+     * DSP memory. fw 4.33's DSP application polls in a main loop at
+     * 0x80047B80, its stack at B15 0x100064B0 on entry. */
+    cdj_c6727_set_idle_loop(0x80047B80, 0x10005000, 0x10006600);
     sh7763_board_init(machine, &cdj2000_board,
-                      cdj_c6727_init(get_system_memory(), 0x0C000000));
+                      cdj_c6727_init,
+                      &cdj2000_display, false);
 }
 
 /* The SH7763 is SH-4A; QEMU only accepts icbi/synco on a CPU with

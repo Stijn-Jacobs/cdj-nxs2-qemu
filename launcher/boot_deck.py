@@ -17,7 +17,7 @@ import subprocess
 import sys
 import time
 
-from . import chain, host
+from . import chain, host, snapshot
 from . import model as cdj_model
 from .chain import export_default, ifset, nonempty
 from .layout import Layout
@@ -63,11 +63,10 @@ class Deck:
     def _plan(self):
         env, lay, tag, profile = self.env, self.lay, self.tag, self.profile
         tmp = lay.tmp
-        extract_n = host.native(lay.extract)
-        # Only the two kernel images live under the model's own folder; the
-        # flash image, the USB medium and the GUI archives are the
-        # CDJ-2000NXS2's own, which is the only model this launcher runs (a
-        # model still in bring-up boots MAIN alone, with boot_main.sh).
+        # The kernel images and the flash image live under the model's own
+        # folder; the USB medium and the GUI archives are shared by the models
+        # on the CDJ-2000NXS2 platform, which are the ones this launcher runs
+        # (a model still in bring-up boots MAIN alone, with boot_main.sh).
         model_extract_n = host.native(cdj_model.extract_dir(lay, profile))
         sfx = host.exe_suffix()
         home = host.home()
@@ -133,7 +132,7 @@ class Deck:
         # PDJ0000001XX).
         playerno = env.get("PLAYERNO", "").replace("%N%", n)
         serial = env.get("SERIAL", "").replace("%N%", n)
-        flash = extract_n + "/flash.bin"
+        flash = model_extract_n + "/flash.bin"
         snap = "snapshot=on"
         if nonempty(env, "PERSIST", "0") == "1":
             fl = os.path.join(lay.extract, "flash-%s.bin" % tag)
@@ -141,7 +140,7 @@ class Deck:
                 if playerno:
                     self.mint = self._mint_argv(playerno, serial, fl)
                 else:
-                    self.flash_copy = (os.path.join(lay.extract, "flash.bin"), fl)
+                    self.flash_copy = (os.path.join(cdj_model.extract_dir(lay, profile), "flash.bin"), fl)
                 self.persist_new = fl
             flash = host.native(fl)
             snap = "snapshot=off"
@@ -156,6 +155,7 @@ class Deck:
         #   img           a real FAT16 image (extract/usbmedia3.img) with a
         #                 throwaway overlay; vvfat commits the tree on every write
         self.media_img = None
+        media_src = None
         mode = nonempty(env, "MEDIA_MODE", "rw")
         if mode == "ro":
             drive = "format=raw,file=fat:%s,readonly=on" % mediadir
@@ -179,6 +179,7 @@ class Deck:
                 mfile = host.native(src) + ",snapshot=on"
             # MEDIA_CACHE: unsafe ignores the guest's flushes, writeback honours them.
             drive = "format=raw,file=%s,cache=%s" % (mfile, nonempty(env, "MEDIA_CACHE", "writeback"))
+            media_src = src
         else:
             drive = "format=raw,file=fat:rw:%s" % mediadir
         self.mediadir = mediadir
@@ -200,7 +201,7 @@ class Deck:
         env.update({"CDJ_AREA4": "1", "CDJ_DSP_LINK": "1", "CDJ_DSP_READY": "1", "CDJ_DMA1_IEACK": "1",
                     # Subsystem 5 (E-7206 AUTH CHIP ERROR) needs IIC0 to answer 0x10.
                     "CDJ_IIC_SLAVE": "1", "CDJ_USB_OC": "1"})
-        export_default(env, "CDJ_IIC_ADDR", "0x30,0x2c")
+        export_default(env, "CDJ_IIC_ADDR", "0x30,0x2c,0x49")
         export_default(env, "CDJ_IIC_CH", "1")
         env["CDJ_GUI_VDC_SCANOUT"] = "1"
         env["USB_MEDIA"] = "1"
@@ -254,6 +255,7 @@ class Deck:
         # the flash the -drive below attaches, since that is where the
         # bootloader reads it from.
         main_kernel = model_extract_n + "/main_unpacked.bin"
+        main_base = main_kernel
         main_mods = [m for m in self._main_mod_names() if env.get("CDJ_MAIN_" + m.upper()) == "1"]
         if main_mods:
             if env.get("MAIN_BOOT") == "flash":
@@ -276,6 +278,7 @@ class Deck:
         # Display firmware mods are patched into a copy of the image, per run:
         # each patch_gui.py mod <name> is on when CDJ_GUI_<NAME>=1.
         gui_image = model_extract_n + "/gui_unpacked.bin"
+        gui_base = gui_image
         gui_mods = [m for m in self._gui_mod_names() if env.get("CDJ_GUI_" + m.upper()) == "1"]
         if gui_mods:
             patched = host.native("%s/cdj-%s-gui.bin" % (nonempty(env, "LOGDIR", tmp), tag))
@@ -287,6 +290,60 @@ class Deck:
         self.gui_argv = [self.gui_qemu, "-M", profile.gui_machine, "-kernel", gui_image,
                          "-chardev", "socket,id=spilink,path=%s" % self.sock,
                          "-display", display, "-serial", "null", "-monitor", mon.spec(self.gui_mon)]
+        self._plan_snapshot([main_base, gui_base], main_mods + gui_mods, media_src)
+
+    def _plan_snapshot(self, images, mods, media_src):
+        """SNAPSHOT=<point> (idle or loaded): start both boards from that saved
+        point; when it is not saved yet, boot as usual and let the driver save
+        it on the way. SNAPSHOT_SAVE=<point,...> saves without restoring."""
+        env, tag = self.env, self.tag
+        point = env.get("SNAPSHOT", "")
+        points = [p for p in env.get("SNAPSHOT_SAVE", "").split(",") if p]
+        if not point and not points:
+            return
+        for p in [point] + points:
+            if p and p not in snapshot.POINTS:
+                raise SystemExit("[%s] SNAPSHOT point %r: known points are %s" % (tag, p, ", ".join(snapshot.POINTS)))
+        if not media_src:
+            raise SystemExit("[%s] snapshots need MEDIA_MODE=img: a fat: medium cannot be saved" % tag)
+        # The patched images do not exist yet: the key is the images they are
+        # made from, the mods applied to them and the mods' own source, so an
+        # edited mod does not restore a point saved with the old one.
+        sources = []
+        if mods:
+            for d, dirs, names in os.walk(os.path.join(self.lay.emu, "mods")):
+                dirs[:] = sorted(n for n in dirs if n != "__pycache__")
+                sources += [os.path.join(d, n) for n in sorted(names)]
+        # A different audio device or DSP module is a different machine too.
+        module = [env["C66X_JIT"]] if os.path.isfile(env.get("C66X_JIT", "")) else []
+        root = snapshot.root(self.lay.tmp, [self.main_qemu, self.gui_qemu, media_src] + images + sources + module,
+                             ",".join(mods) + " " + env.get("CDJ_AUDIODEV", ""))
+        env["SNAPSHOT_ROOT"] = host.native(root)
+        point_dir = os.path.join(root, point) if point else ""
+        if point and snapshot.saved(point_dir):
+            d = host.native(point_dir)
+            self.main_argv += ["-incoming", "file:%s/main.vm" % d]
+            self.gui_argv += ["-incoming", "file:%s/gui.vm" % d]
+            env["SNAPSHOT_FROM"] = point
+            if point == "loaded":
+                # The deck comes back playing: no walk, no settings modal, no load.
+                env.update({"WALK": " ", "WALK_PRE": " ", "NOMODAL": "1", "LOADWAIT": "1", "READY_WAIT": "0"})
+            self.notes.append((1, "[%s] starting from the saved '%s' point %s" % (tag, point, d)))
+            points = []
+        elif point:
+            points.append(point)
+            self.notes.append((1, "[%s] no saved '%s' point yet: booting, and saving it on the way" % (tag, point)))
+        env["SNAPSHOT_SAVE"] = ",".join(points)
+        if points:
+            # The save stops both boards first, and a state that records
+            # "paused" comes back paused. Without the run state in the file
+            # the restored pair starts on its own.
+            for argv in (self.main_argv, self.gui_argv):
+                argv += ["-global", "migration.store-global-state=off"]
+        if points and not self.main_mon:
+            # Saving goes through MAIN's monitor.
+            self.main_mon = "%s/cdj-%s-main-mon.sock" % (self.lay.tmp, tag)
+            self.main_argv[self.main_argv.index("-monitor") + 1] = _monsock(self.lay).spec(self.main_mon)
 
     def _patch_gui(self):
         return os.path.join(self.lay.emu, "mods", "patch_gui.py")
@@ -306,7 +363,8 @@ class Deck:
 
     def _mint_argv(self, playerno, serial, out):
         argv = host.python_argv() + [os.path.join(self.lay.scripts, "firmware", "player_flash.py"),
-                                      playerno, out, os.path.join(self.lay.extract, "flash.bin")]
+                                      playerno, out,
+                                      os.path.join(cdj_model.extract_dir(self.lay, self.profile), "flash.bin")]
         return argv + ["--serial", serial] if serial else argv
 
     def _display(self):
@@ -314,7 +372,6 @@ class Deck:
         a headless batch; vnc is the virtual deck app's screen."""
         env, tag = self.env, self.tag
         d = nonempty(env, "GUI_DISPLAY", "gtk")
-        k = host.kind()
         if d == "vnc":
             # The virtual deck app: this deck's screen on a loopback VNC server
             # at CDJ_APP_VNC_BASE + its number (5921 for show1), and on a frame
@@ -344,27 +401,7 @@ class Deck:
             self.notes.append((2, "[%s] screen on VNC 127.0.0.1:%d (or the next free port to %d) and %s "
                                "for the virtual deck app" % (tag, port, last, self.gui_env["CDJ_GUI_FRAME_FILE"])))
             return "vnc=127.0.0.1:%d,to=%d" % (port - 5900, last - 5900)
-        # Fall back to headless when there is no X or Wayland socket (WSLg can
-        # lose its X server mid-session, and -display gtk then kills the GUI
-        # QEMU). macOS has no GTK build: its window is Cocoa, and it needs the
-        # logged-in desktop session (Aqua), which ssh does not have.
-        if k == host.MACOS:
-            if d == "gtk":
-                d = "cocoa"
-            if d in ("cocoa", "sdl") and _launchctl_manager() != "Aqua":
-                self.notes.append((2, "[%s] no desktop session (ssh?) -- falling back to GUI_DISPLAY=none" % tag))
-                d = "none"
-        elif k != host.WINDOWS and d in ("gtk", "sdl"):
-            wayland = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/nonexistent"),
-                                   os.environ.get("WAYLAND_DISPLAY", "wayland-0"))
-            if not (os.path.isdir("/tmp/.X11-unix") and os.listdir("/tmp/.X11-unix")) and not _is_socket(wayland):
-                self.notes.append((2, "[%s] no X or Wayland socket -- falling back to GUI_DISPLAY=none" % tag))
-                d = "none"
-        # The touch screen makes the window an absolute pointer, and QEMU then
-        # hides the host cursor for a guest that never draws one.
-        if d != "none" and not d.startswith("vnc") and "show-cursor=" not in d:
-            d += ",show-cursor=on"
-        return d
+        return window_display(d, tag, self.notes)
 
     # ------------------------------------------------------------ running --
 
@@ -557,6 +594,33 @@ def _same_filesystem(src, tmp_dir):
         return False
 
 
+def window_display(d, tag, notes):
+    """The -display for a window: GUI_DISPLAY d made to fit this host, with
+    the cursor shown."""
+    k = host.kind()
+    # Fall back to headless when there is no X or Wayland socket (WSLg can
+    # lose its X server mid-session, and -display gtk then kills the GUI
+    # QEMU). macOS has no GTK build: its window is Cocoa, and it needs the
+    # logged-in desktop session (Aqua), which ssh does not have.
+    if k == host.MACOS:
+        if d == "gtk":
+            d = "cocoa"
+        if d in ("cocoa", "sdl") and _launchctl_manager() != "Aqua":
+            notes.append((2, "[%s] no desktop session (ssh?) -- falling back to GUI_DISPLAY=none" % tag))
+            d = "none"
+    elif k != host.WINDOWS and d in ("gtk", "sdl"):
+        wayland = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/nonexistent"),
+                               os.environ.get("WAYLAND_DISPLAY", "wayland-0"))
+        if not (os.path.isdir("/tmp/.X11-unix") and os.listdir("/tmp/.X11-unix")) and not _is_socket(wayland):
+            notes.append((2, "[%s] no X or Wayland socket -- falling back to GUI_DISPLAY=none" % tag))
+            d = "none"
+    # The touch screen makes the window an absolute pointer, and QEMU then
+    # hides the host cursor for a guest that never draws one.
+    if d != "none" and not d.startswith("vnc") and "show-cursor=" not in d:
+        d += ",show-cursor=on"
+    return d
+
+
 def _launchctl_manager():
     try:
         return subprocess.run(["launchctl", "managername"], capture_output=True, text=True).stdout.strip()
@@ -594,9 +658,10 @@ def main(argv):
     if not profile.gui_machine:
         chain.err("boot_deck.sh: %s has no GUI board yet; use scripts/run/boot_main.sh" % profile.title)
         return 1
-    if os.environ.get("MAIN_BOOT") == "flash" and not flash_has_bootloader(os.path.join(lay.extract, "flash.bin")):
-        chain.err("[%s] extract/flash.bin holds no bootloader (made by an older setup); run "
-                  "./setup.sh --firmware <C2KNXS2.UPD> again, or leave MAIN_BOOT unset" % tag)
+    if os.environ.get("MAIN_BOOT") == "flash" and not flash_has_bootloader(
+            os.path.join(cdj_model.extract_dir(lay, profile), "flash.bin")):
+        chain.err("[%s] %s/flash.bin holds no bootloader (made by an older setup); run "
+                  "./setup.sh --firmware <C2KNXS2.UPD> again, or leave MAIN_BOOT unset" % (tag, profile.extract))
         return 1
     deck = Deck(tag, dict(os.environ), lay, profile)
     if not deck.start():

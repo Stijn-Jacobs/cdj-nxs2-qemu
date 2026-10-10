@@ -153,6 +153,18 @@ uint64_t c66x_state_hash(const c66x_core *c);
 /* One line on the compiled code (C66X_JIT / C66X_JIT_AUTO): regions, entries,
  * cycles run compiled, verify failures, kernels. Empty when none is loaded. */
 void c66x_jit_report(const c66x_core *c, char *buf, size_t len);
+/* Cycles run in compiled code so far, of every kind. */
+uint64_t c66x_jit_cycles(const c66x_core *c);
+
+/* Snapshots. The image holds everything architectural and every write or
+ * branch in flight; decoded code, the loop buffer and the busy-wait
+ * detector's learnt state are rebuilt after a load, so take one only while
+ * c66x_quiet() holds: no software-pipelined loop and no interrupt handler
+ * running. c66x_save(c, NULL) returns the image size. Only the build that
+ * wrote an image can read it. */
+int    c66x_quiet(const c66x_core *c);
+size_t c66x_save(const c66x_core *c, uint8_t *buf);
+void   c66x_load(c66x_core *c, const uint8_t *buf);
 
 /* Optional per-execute-packet trace, for offline debugging. */
 typedef void (*c66x_trace_fn)(c66x_core *c, void *opaque, uint32_t pc);

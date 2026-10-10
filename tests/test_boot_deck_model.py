@@ -37,3 +37,29 @@ def test_flash_boot_needs_a_flash_with_the_bootloader(tmp_path):
     new.write_bytes(b"\x09\x00\x05\xa0" + b"\xff" * 12)
     assert not boot_deck.flash_has_bootloader(str(old))
     assert boot_deck.flash_has_bootloader(str(new))
+
+
+def test_snapshot_key_follows_the_mods_and_their_source(tmp_path):
+    from types import SimpleNamespace
+    files = {n: tmp_path / n for n in ("qemu", "main.bin", "gui.bin", "media.img")}
+    for f in files.values():
+        f.write_bytes(f.name.encode())
+    mod = tmp_path / "mods" / "three_band" / "wave3.s"
+    mod.parent.mkdir(parents=True)
+    mod.write_text("v1")
+
+    def root(mods):
+        deck = SimpleNamespace(env={"SNAPSHOT": "idle"}, tag="zbdt3", notes=[], main_mon="m",
+                               lay=SimpleNamespace(tmp=str(tmp_path), emu=str(tmp_path)), main_qemu=str(files["qemu"]),
+                               gui_qemu=str(files["qemu"]), main_argv=[], gui_argv=[])
+        boot_deck.Deck._plan_snapshot(deck, [str(files["main.bin"]), str(files["gui.bin"])],
+                                      mods, str(files["media.img"]))
+        return deck.env["SNAPSHOT_ROOT"]
+
+    assert root(["wave3"]) == root(["wave3"])
+    assert root(["wave3"]) != root([])
+    assert root(["wave3"]) != root(["wave3", "phrase"])
+    before = root(["wave3"])
+    mod.write_text("v2")
+    assert root(["wave3"]) != before
+    assert root([]) == root([])

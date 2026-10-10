@@ -20,7 +20,13 @@ $(O)/%.o: %.c $(HDRS) | $(O)
 $(O)/bfinrun: bfinrun.c $(OBJS) | $(O)
 	$(CC) $(CFLAGS) $^ -o $@
 
+$(O)/byteops_test: tests/byteops_test.c $(OBJS) | $(O)
+	$(CC) $(CFLAGS) $^ -o $@
+
+check: $(O)/byteops_test
+	$(O)/byteops_test
+
 clean:
 	rm -rf $(O)
 
-.PHONY: all clean
+.PHONY: all check clean

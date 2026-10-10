@@ -46,6 +46,8 @@ static struct intc_vect cdj_intc_vectors[] = {
      * H'A40, IPRF [7:4], IMR9 bits 1 and 2. */
     INTC_VECT(CDJ_USB0, 0xA20), INTC_VECT(CDJ_USB1, 0xA40),
     INTC_VECT(CDJ_ETHI, 0xD60),
+    INTC_VECT(CDJ_LCDCI, 0xF40),
+    INTC_VECT(CDJ_2DG_TRI, 0x780),
     /* DMAC0A DEI0..DEI3, manual table 13.4: H'800..H'860, IPRE [15:12],
      * IMR1 bits 3..0. */
     INTC_VECT(CDJ_DMAC0A_DEI0, 0x800), INTC_VECT(CDJ_DMAC0A_DEI1, 0x820),
@@ -101,7 +103,8 @@ static struct intc_mask_reg cdj_intc_mask_registers[] = {
     { IMCR(3), IMR(3), 8, { CDJ_DMAC1A_DEI3, CDJ_DMAC1A_DEI2,
                             CDJ_DMAC1A_DEI1, CDJ_DMAC1A_DEI0 } },
     /* IMR4/IMCR4: -, TUNI2, TUNI1, TUNI0 (TMU0), JPUI, -, -, LCDCI */
-    { IMCR(4), IMR(4), 8, { 0, CDJ_TMU0_TUNI2, CDJ_TMU0_TUNI1, CDJ_TMU0_TUNI0 } },
+    { IMCR(4), IMR(4), 8, { 0, CDJ_TMU0_TUNI2, CDJ_TMU0_TUNI1, CDJ_TMU0_TUNI0,
+                            0, 0, 0, CDJ_LCDCI } },
     { IMCR(5),  IMR(5),  8, { 0 } },
     /* IMR6/IMCR6: -, -, ICBI, SCIFA4, CEU1I, -, MSIOFI1, MSIOFI0. The
      * firmware writes IMCR6 = 0x01 (MSIOFI0). */
@@ -119,7 +122,8 @@ static struct intc_mask_reg cdj_intc_mask_registers[] = {
     /* IMR10/IMCR10: -, DADERR, DEI5, DEI4 (DMAC1B) in bits 6..4, then the RTC
      * in bits 2..0. DEI4 and DEI5 are the DSP link's two DMA channels. */
     { IMCR(10), IMR(10), 8, { 0, 0, CDJ_DMAC1B_DEI5, CDJ_DMAC1B_DEI4 } },
-    { IMCR(11), IMR(11), 8, { 0 } },
+    /* IMR11/IMCR11: BRK, CEI, INI, TRI (2DG), -, TPUI, LMBI, TSIFI */
+    { IMCR(11), IMR(11), 8, { 0, 0, 0, CDJ_2DG_TRI } },
     { IMCR(12), IMR(12), 8, { 0 } },
     /* INTC-B INTMSK00 / INTMSKCLR00. Manual 13.3.6: bit 7 is IRQ0 down to
      * bit 0 = IRQ7. The firmware's INTMSKCLR00 = 0x04 unmasks IRQ5. */
@@ -133,7 +137,7 @@ static struct intc_prio_reg cdj_intc_prio_registers[] = {
     { IPR(0), 0, 16, 4, { CDJ_TMU0_TUNI0, CDJ_TMU0_TUNI1, CDJ_TMU0_TUNI2, 0 } },
     /* IPRB: JPU [15:12], LCDC [11:8], DMAC1A [7:4], BEU0 [3:0]. Reads 0x8040
      * once booted; 4 is the isrpri of both SPI-link T_CISRs. */
-    { IPR(1), 0, 16, 4, { 0, 0, CDJ_DMAC1A, 0 } },
+    { IPR(1), 0, 16, 4, { 0, CDJ_LCDCI, CDJ_DMAC1A, 0 } },
     /* IPRC: TMU1 TUNI0 [15:12], TUNI1 [11:8], TUNI2 [7:4] */
     { IPR(2), 0, 16, 4, { CDJ_TMU1_TUNI0, CDJ_TMU1_TUNI1, CDJ_TMU1_TUNI2, 0 } },
     { IPR(3),  0, 16, 4, { 0 } },
@@ -145,7 +149,8 @@ static struct intc_prio_reg cdj_intc_prio_registers[] = {
     /* IPRH: MSIOFI0 [15:12], MSIOFI1 [11:8], I2C1 [7:4], I2C0 [3:0]. The IIC
      * channels set their nibbles at 0x083AF952 and 0x083AF9A8. */
     { IPR(7),  0, 16, 4, { CDJ_MSIOFI0, 0, CDJ_IIC1, CDJ_IIC0 } },
-    { IPR(8),  0, 16, 4, { 0 } },
+    /* IPRI: SCIFA4 [15:12], ICB [11:8], TSIF [7:4], 2DG/ICB [3:0] */
+    { IPR(8),  0, 16, 4, { 0, 0, 0, CDJ_2DG_TRI } },
     /* IPRJ: CEU2_1 [15:12], EtherMAC [11:8], FSI [7:4], SDHI1 [3:0]. */
     { IPR(9),  0, 16, 4, { 0, CDJ_ETHI, 0, 0 } },
     /* IPRK: RTC [15:12], DMAC1B [11:8]. */

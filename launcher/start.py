@@ -4,6 +4,9 @@ CDJ-2000NXS2 windows, the controller relay and, if you chose a MIDI
 controller, the bridge. Ctrl-C stops everything.
 
   usage: ./start.sh             start
+         ./start.sh --model <id>   start that player (cdj2000nxs2, the default,
+                                 or an older one: see models/); setup.sh
+                                 stores the one you chose in cdj.conf
          ./start.sh --app       start with the virtual deck app as the window
          ./start.sh --service   boot into the service manual's SERVICE MODE
                                  screen instead of the player (see "Service
@@ -23,7 +26,7 @@ import subprocess
 import sys
 import time
 
-from . import chain, conf, host, mods
+from . import chain, conf, deck, host, model, mods
 from .chain import nonempty, say
 from .console import stdin_is_tty
 from .layout import Layout
@@ -52,6 +55,29 @@ def _stale_builds(lay, env):
     return [line for line in out.splitlines() if line.strip()]
 
 
+def _offer_rebuild(lay, env, dry):
+    """The boards and patches are compiled into the QEMU binaries, so after a
+    pull that changed them the decks would run the old code. Offers the
+    rebuild; False only when one ran and failed. STALE_CHECK=0 skips it."""
+    if env.get("STALE_CHECK", "1") != "1":
+        return True
+    stale = _stale_builds(lay, env)
+    if not stale:
+        return True
+    say("the emulator's source has changed since it was last built:")
+    for s in stale:
+        say("    " + s)
+    if not dry and stdin_is_tty():
+        ans = input("rebuild now (a few minutes)? [Y/n] ").strip() or "y"
+        if ans[:1] in "Yy":
+            return subprocess.run([host.find_bash(), host.posix(os.path.join(lay.emu, "build.sh")),
+                                   "main", "display"], env=env).returncode == 0
+        say("starting the old build (./build.sh main display rebuilds it)")
+    else:
+        say("run ./build.sh main display to pick the changes up")
+    return True
+
+
 def stop(lay):
     """Ask every running rig to stop its decks in order, then end any QEMU
     that is still there."""
@@ -73,8 +99,9 @@ def stop(lay):
 
 
 def main(argv):
-    dry, app, service = False, None, None
-    for a in argv:
+    dry, app, service, model_id = False, None, None, ""
+    args = iter(argv)
+    for a in args:
         if a == "stop":
             return stop(Layout())
         if a == "--dry-run":
@@ -87,6 +114,11 @@ def main(argv):
             service = True
         elif a == "--no-service":
             service = False
+        elif a == "--model":
+            model_id = next(args, "")
+            if not model_id:
+                chain.err("--model needs a player (one of: %s)" % " ".join(model.list_models()))
+                return 2
         elif a in ("-h", "--help"):
             sys.stdout.write(__doc__[__doc__.index("  usage:"):])
             return 0
@@ -100,6 +132,13 @@ def main(argv):
         return 1
     values = conf.load(lay.conf, warn=chain.err)
     c = conf.with_start_defaults(values)
+    try:
+        player = model.load(model_id or c["CDJ_MODEL"] or None)
+    except model.ModelError as e:
+        chain.err(str(e))
+        return 2
+    if not player.is_rig:
+        return _start_deck(lay, player, c, dry)
     if app is None:
         # The packaged program's window is the virtual deck app unless the
         # settings say otherwise.
@@ -155,25 +194,8 @@ def main(argv):
         env["PLAYERNO"] = nonempty(env, "PLAYERNO", "%N%")
     launch = chain.script_argv("live_linked" if decks == "2" else "live", [c["CDJ_NAME"], decks])
 
-    # The boards and patches are compiled into the QEMU binaries, so after a
-    # pull that changed them the decks would run the old code. STALE_CHECK=0
-    # skips the check.
-    if env.get("STALE_CHECK", "1") == "1":
-        stale = _stale_builds(lay, env)
-        if stale:
-            say("the emulator's source has changed since it was last built:")
-            for s in stale:
-                say("    " + s)
-            if not dry and stdin_is_tty():
-                ans = input("rebuild now (a few minutes)? [Y/n] ").strip() or "y"
-                if ans[:1] in "Yy":
-                    if subprocess.run([host.find_bash(), host.posix(os.path.join(lay.emu, "build.sh")),
-                                       "main", "display"]).returncode:
-                        return 1
-                else:
-                    say("starting the old build (./build.sh main display rebuilds it)")
-            else:
-                say("run ./build.sh main display to pick the changes up")
+    if not _offer_rebuild(lay, env, dry):
+        return 1
     missing = [f for f in ("main_unpacked.bin", "gui_unpacked.bin", "flash.bin")
                if not os.path.isfile(os.path.join(lay.extract, f))]
     if missing:
@@ -249,6 +271,22 @@ def main(argv):
                 % (env["CDJ_APP_VNC_BASE"], " ".join(shlex.quote(a) for a in app_cmd)))
         return 0
     return run(lay, env, launch, bridge, app_cmd)
+
+
+def _start_deck(lay, player, c, dry):
+    """An older player: one window, none of the NXS2 rig around it."""
+    env = dict(os.environ)
+    if lay.packaged:
+        env["MAIN_QEMU"] = lay.qemu_binaries()[0]
+    elif not env.get("MAIN_QEMU"):
+        for k in ("QEMU_BUILD", "QEMU_EB_BUILD"):
+            if c[k]:
+                env[k] = c[k]
+    if c["CDJ_AUDIO"] != "1":
+        env["NOSOUND"] = "1"
+    if not _offer_rebuild(lay, env, dry):
+        return 1
+    return deck.start(player, env, dry)
 
 
 def _shown(argv):

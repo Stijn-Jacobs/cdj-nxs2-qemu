@@ -298,6 +298,39 @@ static void cdj_c6x_sample(CdjC6x *c)
     g_string_free(g, true);
 }
 
+/* A paused DSP keeps sending its last buffers: an exact loop at deck speed
+ * 1.0, an inexact one at any other speed or with MASTER TEMPO, which no
+ * repeat detector is sure to find. What it does report is its play flag (the
+ * word its INT8 publisher decodes from the play bit of the id block MAIN
+ * ships, 1 to 0 at every PLAY press) and its play position in 1/75 s, which
+ * stops. A cue preview or a jog moves the position, so they stay audible.
+ * Both words are only trusted once the position has been seen moving with the
+ * flag set, so a DSP image that keeps them elsewhere never mutes. */
+#define C6X_PLAY_FLAG       0x008A738Cu
+#define C6X_PLAY_POS        0x008A7802u
+#define C6X_HELD_POLLS      20u         /* 10 ms polls, so a stopped position for 200 ms */
+
+bool cdj_c6x_deck_held(void)
+{
+    static uint16_t last_pos;
+    static unsigned still;
+    static bool seen_playing;
+    uint8_t *flag = cdj_c6x_ram(C6X_PLAY_FLAG, 4);
+    uint8_t *pos = cdj_c6x_ram(C6X_PLAY_POS, 2);
+    bool play;
+    uint16_t now;
+
+    if (!flag || !pos) {
+        return false;
+    }
+    play = flag[0] | flag[1] | flag[2] | flag[3];
+    now = pos[0] | pos[1] << 8;
+    still = now == last_pos ? still + 1 : 0;
+    seen_playing |= play && still == 0;
+    last_pos = now;
+    return seen_playing && !play && still >= C6X_HELD_POLLS;
+}
+
 static void cdj_c6x_watch_store(c66x_core *core, void *opaque, uint32_t addr,
                                 uint32_t val, unsigned size)
 {
@@ -482,9 +515,9 @@ static void cdj_c6x_stop(void)
     }
 }
 
-/* Fresh chip, program in L2, PC at the entry: what the ROM does at the end of
- * an I2C boot. A new core each time, so no predecode survives a reload. */
-static void cdj_c6x_start(uint32_t entry)
+/* A new core and SoC on the shared L2 and DDR, under run_lock. A new core
+ * each time, so no predecode survives a reload. */
+static void cdj_c6x_build(void)
 {
     CdjC6x *c = &cdj_c6x;
     c66x_bus bus = { c, cdj_c6x_bus_read, cdj_c6x_bus_write };
@@ -498,7 +531,6 @@ static void cdj_c6x_start(uint32_t entry)
         .log = cdj_c6x_soc_log,
     };
 
-    qemu_mutex_lock(&c->run_lock);
     if (c->soc) {
         c6655_soc_free(c->soc);
     }
@@ -546,6 +578,16 @@ static void cdj_c6x_start(uint32_t entry)
     /* An undriven input reads high, but READY must read low until the first
      * stage drives it, or MAIN ships all its windows before the stage runs. */
     c6655_soc_gpio_set_input(c->soc, C6X_PIN_READY, 0);
+}
+
+/* Fresh chip, program in L2, PC at the entry: what the ROM does at the end of
+ * an I2C boot. */
+static void cdj_c6x_start(uint32_t entry)
+{
+    CdjC6x *c = &cdj_c6x;
+
+    qemu_mutex_lock(&c->run_lock);
+    cdj_c6x_build();
     c66x_reset(c->core, entry);
 
     qemu_mutex_lock(&c->link_lock);
@@ -566,6 +608,9 @@ static void cdj_c6x_start(uint32_t entry)
     c->sync_target = 0;
     qatomic_set(&c->dsp_now_pub, 0);
     c->report_at = c->start_virt_ns + 5 * NANOSECONDS_PER_SECOND;
+    c->tl_on = cdj_report_enabled();
+    memset(&c->tl, 0, sizeof(c->tl));
+    c->tl.virt = c->start_virt_ns;
     qatomic_set(&c->running, true);
     qemu_mutex_unlock(&c->run_lock);
     info_report("c6x: DSP released at 0x%08x, %" PRIu64 " MHz on the virtual "
@@ -1527,6 +1572,41 @@ static void cdj_c6x_run_to(uint64_t target)
 }
 
 /*
+ * CDJ_REPORT=1: one line per 5 virtual seconds, so a log shows the start of a
+ * track against the steady state. Rates are per host second of the DSP thread
+ * (M/host) or of the interval; waited, busy and skipped are shares of the
+ * interval's wall or virtual time; lag is how far the DSP is behind MAIN.
+ */
+static void cdj_c6x_timeline(CdjC6x *c, int64_t virt, uint64_t dsp_now)
+{
+    int64_t wall = get_clock_realtime();
+    uint64_t cycles = c->cycles, host_ns = c->host_ns;
+    uint64_t compiled = c->core ? c66x_jit_cycles(c->core) : 0;
+    uint64_t wait_ns = c->sync_waits_ns, skipped_ns = c->idle_skipped_ns;
+    uint64_t now = virt > c->epoch_ns ? virt - c->epoch_ns : 0;
+    double dv = virt - c->tl.virt, dw = wall - c->tl.wall;
+    uint64_t dc = cycles - c->tl.cycles, dh = host_ns - c->tl.host_ns;
+
+    if (c->tl.wall) {
+        info_report("c6x: t %.0f s: DSP %.0f M/host s, %.0f%% compiled, busy %.0f%%, "
+                    "MAIN waited %.0f%%, idle skipped %.0f%%, lag %.1f ms, "
+                    "virtual/wall %.2f, clock %" PRIu64 " MHz",
+                    (virt - c->start_virt_ns) / 1e9, dh ? dc * 1e3 / dh : 0,
+                    dc ? 100.0 * (compiled - c->tl.compiled) / dc : 0,
+                    100 * dh / dw, 100 * (wait_ns - c->tl.wait_ns) / dw,
+                    100 * (skipped_ns - c->tl.skipped_ns) / dv,
+                    now > dsp_now ? (now - dsp_now) / 1e6 : 0, dv / dw, c->mhz);
+    }
+    c->tl.virt = virt;
+    c->tl.wall = wall;
+    c->tl.cycles = cycles;
+    c->tl.compiled = compiled;
+    c->tl.host_ns = host_ns;
+    c->tl.wait_ns = wait_ns;
+    c->tl.skipped_ns = skipped_ns;
+}
+
+/*
  * Single-thread stepping (CDJ_C6X_THREAD unset or 0): deterministic, but every
  * DSP cycle is paid for inside QEMU's main loop, which caps the chip at a few
  * tens of MHz. Also the report timer in threaded mode.
@@ -1551,6 +1631,9 @@ static void cdj_c6x_tick(void *opaque)
         c->sync_waits_ns += get_clock() - w0;
         c->vcpu_cpu_ns = cdj_c6x_thread_cpu_ns();
         c->ticks++;
+        if (c->tl_on && virt >= c->tl.virt + 5 * NANOSECONDS_PER_SECOND) {
+            cdj_c6x_timeline(c, virt, qatomic_read(&c->dsp_now_pub));
+        }
         qatomic_set(&c->sync_target, now + c->quantum_ns +
                     (cdj_c6x_pacing(c) ? c->quantum_ns : 0));
         qemu_sem_post(&c->go_sem);
@@ -1588,6 +1671,9 @@ static void cdj_c6x_tick(void *opaque)
         }
         cdj_c6x_sample(c);
         c->ticks++;
+        if (c->tl_on && virt >= c->tl.virt + 5 * NANOSECONDS_PER_SECOND) {
+            cdj_c6x_timeline(c, virt, c6655_soc_now_ns(c->soc));
+        }
         if (c->halted) {
             cdj_c6x_report("halt");
         } else if (virt >= c->report_at) {
@@ -1652,6 +1738,52 @@ static void cdj_c6x_tick(void *opaque)
 }
 
 /*
+ * A host that cannot run the DSP at its modelled clock stalls MAIN's virtual
+ * clock, and a sink paced by wall time then starves. When the DSP thread is busy
+ * for nearly a whole window and still falls behind, the clock drops to what the
+ * host delivered; it climbs back a few percent per window once the thread has
+ * slack. Only the clock changes: what the DSP computes does not.
+ */
+static void cdj_c6x_govern(CdjC6x *c)
+{
+    const int64_t window_ns = 200 * SCALE_MS;
+    int64_t wall = get_clock();
+    uint64_t dsp_ns = c6655_soc_now_ns(c->soc);
+    int64_t dw = wall - c->gov.wall;
+    uint64_t dv, busy, dc;
+
+    if (!c->gov.wall || !c->booted_latch) {
+        c->gov.wall = wall;
+        c->gov.dsp_ns = dsp_ns;
+        c->gov.host_ns = c->host_ns;
+        c->gov.cycles = c->cycles;
+        return;
+    }
+    if (dw < window_ns) {
+        return;
+    }
+    dv = dsp_ns - c->gov.dsp_ns;
+    busy = c->host_ns - c->gov.host_ns;
+    dc = c->cycles - c->gov.cycles;
+    if (busy * 10 >= dw * 9 && dv * 100 < dw * 97) {
+        uint64_t host_mhz = dc * 1000 / busy;
+        uint64_t mhz = MAX(host_mhz * 97 / 100, c->mhz_floor);
+
+        if (mhz < c->mhz) {
+            c->mhz = mhz;
+            c->cyc_rem = 0;
+        }
+    } else if (busy * 5 < dw * 4 && c->mhz < c->mhz_run) {
+        c->mhz = MIN(c->mhz + c->mhz / 32 + 1, c->mhz_run);
+        c->cyc_rem = 0;
+    }
+    c->gov.wall = wall;
+    c->gov.dsp_ns = dsp_ns;
+    c->gov.host_ns = c->host_ns;
+    c->gov.cycles = c->cycles;
+}
+
+/*
  * The DSP's own thread. It may run at most one quantum ahead of QEMU's virtual
  * clock and waits when it gets there, so a stalled vCPU (or a paused VM, whose
  * virtual clock stops) holds the DSP back instead of letting it slip. When the
@@ -1661,6 +1793,7 @@ static void *cdj_c6x_thread(void *opaque)
 {
     CdjC6x *c = &cdj_c6x;
 
+    cdj_thread_prefer_fast_core();
     /* Named so it can be told apart in a host profile. */
     info_report("c6x: DSP thread is host thread %d", qemu_get_thread_id());
     if (c->sync && c->slack_ns) {
@@ -1707,6 +1840,9 @@ static void *cdj_c6x_thread(void *opaque)
             }
             cdj_c6x_drain_upp_in();
             cdj_c6x_run_to(c->sync_target);
+            if (c->mhz_floor) {
+                cdj_c6x_govern(c);
+            }
             c->chunks_run++;
             qatomic_set(&c->dsp_cpu_ns, cdj_c6x_thread_cpu_ns());
             qemu_cond_broadcast(&c->done_cond);
@@ -1841,6 +1977,138 @@ static void cdj_c6x_summary(Notifier *n, void *unused)
     }
 }
 
+/*
+ * Snapshots. L2 and DDR are RAM regions and travel with the machine's RAM,
+ * but the core stores into them through host pointers that dirty tracking
+ * never sees, so the core must not run a cycle once a save has started.
+ * When the machine stops, the DSP finishes its quantum and steps on to a
+ * quiet point (see c66x_quiet); a stopped machine grants it no more quanta.
+ * run_lock is held from pre_save to post_save as well.
+ */
+static void cdj_c6x_vm_state(void *opaque, bool running, RunState state)
+{
+    CdjC6x *c = opaque;
+
+    if (running || !c->core) {
+        return;
+    }
+    qemu_mutex_lock(&c->run_lock);
+    cdj_c6x_run_to(c->sync_target);
+    for (unsigned i = 0; i < 1000000 && !c66x_quiet(c->core); i++) {
+        cdj_c6x_run_to(c6655_soc_now_ns(c->soc) + 1);
+    }
+    qemu_mutex_unlock(&c->run_lock);
+}
+
+static int cdj_c6x_pre_save(void *opaque)
+{
+    CdjC6x *c = opaque;
+    size_t core_len;
+
+    qemu_mutex_lock(&c->run_lock);
+    c->tick_deadline = timer_expire_time_ns(c->tick);
+    c->rx_deadline = c->rx_timer ? timer_expire_time_ns(c->rx_timer) : -1;
+    g_byte_array_set_size(c->snap, 0);
+    if (!c->core) {
+        return 0;
+    }
+    if (!c66x_quiet(c->core)) {
+        error_report("c6x: the DSP is not at a quiet point, pc 0x%08x: "
+                     "stop the machine before saving it",
+                     c66x_get_pc(c->core));
+        qemu_mutex_unlock(&c->run_lock);
+        return -EBUSY;
+    }
+    core_len = c66x_save(c->core, NULL);
+    g_byte_array_set_size(c->snap, core_len + c6655_soc_save(c->soc, NULL));
+    c66x_save(c->core, c->snap->data);
+    c6655_soc_save(c->soc, c->snap->data + core_len);
+    return 0;
+}
+
+static int cdj_c6x_post_save(void *opaque)
+{
+    qemu_mutex_unlock(&((CdjC6x *)opaque)->run_lock);
+    return 0;
+}
+
+static int cdj_c6x_post_load(void *opaque, int version_id)
+{
+    CdjC6x *c = opaque;
+
+    qemu_mutex_lock(&c->run_lock);
+    if (c->snap->len) {
+        cdj_c6x_build();
+        c66x_load(c->core, c->snap->data);
+        c6655_soc_load(c->soc, c->snap->data + c66x_save(c->core, NULL));
+    }
+    if (c->tick_deadline >= 0) {
+        timer_mod_ns(c->tick, c->tick_deadline);
+    }
+    if (c->rx_timer && c->rx_deadline >= 0) {
+        timer_mod_ns(c->rx_timer, c->rx_deadline);
+    }
+    qemu_mutex_unlock(&c->run_lock);
+    return 0;
+}
+
+static const VMStateDescription vmstate_cdj_c6x = {
+    .name = "cdj-c6x",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .pre_save = cdj_c6x_pre_save,
+    .post_save = cdj_c6x_post_save,
+    .post_load = cdj_c6x_post_load,
+    .fields = (const VMStateField[]) {
+        CDJ_VMSTATE_BYTES(snap, CdjC6x),
+        VMSTATE_INT64(tick_deadline, CdjC6x),
+        VMSTATE_INT64(rx_deadline, CdjC6x),
+        VMSTATE_UINT64(mhz, CdjC6x),
+        VMSTATE_BOOL(running, CdjC6x),
+        VMSTATE_BOOL(halted, CdjC6x),
+        VMSTATE_UINT64(sync_target, CdjC6x),
+        VMSTATE_UINT64(dsp_now_pub, CdjC6x),
+        VMSTATE_UINT32(ship_pending, CdjC6x),
+        VMSTATE_INT32(ready_level, CdjC6x),
+        VMSTATE_INT32(booted_level, CdjC6x),
+        VMSTATE_INT64(epoch_ns, CdjC6x),
+        VMSTATE_UINT64(cyc_rem, CdjC6x),
+        VMSTATE_INT64(start_virt_ns, CdjC6x),
+        VMSTATE_INT32(pth0, CdjC6x),
+        VMSTATE_BOOL(loaded, CdjC6x),
+        VMSTATE_INT32(ack, CdjC6x),
+        VMSTATE_BOOL(booted_latch, CdjC6x),
+        VMSTATE_INT64(booted_virt_ns, CdjC6x),
+        VMSTATE_UINT32(windows_seen, CdjC6x),
+        VMSTATE_UINT16_ARRAY(rxq, CdjC6x, C6X_RXQ),
+        VMSTATE_UINT64_ARRAY(rx_stamp, CdjC6x, C6X_RXQ),
+        VMSTATE_UINT32(rx_head, CdjC6x),
+        VMSTATE_UINT32(rx_len, CdjC6x),
+        VMSTATE_UINT32(watch_tag, CdjC6x),
+        VMSTATE_UINT32_ARRAY(lane_a_read_tag, CdjC6x, 16),
+        VMSTATE_UINT32(lane_a_read_n, CdjC6x),
+        VMSTATE_UINT32_ARRAY(arm_tag, CdjC6x, 16),
+        VMSTATE_UINT32(arm_n, CdjC6x),
+        VMSTATE_UINT64(tx_hold_until_ns, CdjC6x),
+        VMSTATE_UINT32(rx_ch, CdjC6x),
+        VMSTATE_UINT32(rx_want, CdjC6x),
+        VMSTATE_UINT64(rx_pending_since, CdjC6x),
+        VMSTATE_UINT16_2DARRAY(txf, CdjC6x, C6X_TXFRAMES, C6X_TXWORDS),
+        VMSTATE_UINT32_ARRAY(txf_len, CdjC6x, C6X_TXFRAMES),
+        VMSTATE_UINT32(tx_head, CdjC6x),
+        VMSTATE_UINT32(tx_count, CdjC6x),
+        VMSTATE_INT32(tx_cur, CdjC6x),
+        VMSTATE_UINT32(tx_pos, CdjC6x),
+        VMSTATE_UINT32(tx_ch, CdjC6x),
+        VMSTATE_BOOL(tx_waiting, CdjC6x),
+        VMSTATE_UINT64(last_word_ns, CdjC6x),
+        VMSTATE_UINT32(wpos, CdjC6x),
+        VMSTATE_UINT64(cycles, CdjC6x),
+        VMSTATE_INT64(report_at, CdjC6x),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 void cdj_c6x_init(void)
 {
     CdjC6x *c = &cdj_c6x;
@@ -1860,6 +2128,10 @@ void cdj_c6x_init(void)
      * busy-waits in its GPIO handshake, and at high rates that stall outruns
      * MAIN's handshake timeouts. */
     c->mhz_run = c->mhz;
+    /* CDJ_C6X_GOVERN=<MHz>: let the clock fall to what the host delivers, but
+     * not below this. Needs the lockstep thread. */
+    e = getenv("CDJ_C6X_GOVERN");
+    c->mhz_floor = e ? strtoull(e, NULL, 0) : 0;
     e = getenv("CDJ_C6X_MHZ_BOOT");
     if (e && strtoull(e, NULL, 0)) {
         c->mhz = strtoull(e, NULL, 0);
@@ -1876,8 +2148,13 @@ void cdj_c6x_init(void)
     if (e && *e) {
         c->pcm = fopen(e, "wb");
     }
-    c->l2 = g_malloc0(C6X_L2_SIZE);
-    c->ddr = g_malloc0(C6X_DDR_SIZE);
+    memory_region_init_ram(&c->l2_ram, NULL, "c6655.l2", C6X_L2_SIZE, &error_fatal);
+    memory_region_init_ram(&c->ddr_ram, NULL, "c6655.ddr", C6X_DDR_SIZE, &error_fatal);
+    c->l2 = memory_region_get_ram_ptr(&c->l2_ram);
+    c->ddr = memory_region_get_ram_ptr(&c->ddr_ram);
+    c->snap = g_byte_array_new();
+    vmstate_register_any(NULL, &vmstate_cdj_c6x, c);
+    qemu_add_vm_change_state_handler(cdj_c6x_vm_state, c);
     c->i2c = g_byte_array_new();
     c->table = g_byte_array_new();
     c->upp_in = g_queue_new();

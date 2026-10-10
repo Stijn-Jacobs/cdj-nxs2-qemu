@@ -5,6 +5,8 @@
 #include "qemu/timer.h"
 
 #define CDJ_PNL_LINK_SIZE 0x1000
+/* Reply bytes a second device can have queued at once. */
+#define CDJ_PNL_LINK_FIFO 128
 
 #define CDJ_PNL_LINK_SCSMR       0x00
 #define CDJ_PNL_LINK_SCBRR       0x04
@@ -349,6 +351,14 @@ static void cdj_pnl_link_write(void *opaque, hwaddr off, uint64_t val,
     }
     switch (off & 0xFFC) {
     case CDJ_PNL_LINK_SCFTDR:
+        if (s->hooks && s->hooks->link_selected &&
+            s->hooks->link_selected(s->extra)) {
+            if (!s->rxlen) {
+                s->rxhead = 0;
+            }
+            s->rx[s->rxhead + s->rxlen++] = s->hooks->link_byte(s->extra, val);
+            return;
+        }
         s->tx[s->txlen++] = (uint8_t)val;
         if (s->txlen == s->frame_len) {
             s->txlen = 0;
@@ -433,6 +443,63 @@ static void cdj_pnl_link_summary(Notifier *n, void *unused)
     }
 }
 
+static const VMStateDescription vmstate_cdj_pnl_press = {
+    .name = "cdj-pnl-press",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT32(off, CdjPnlLinkPress),
+        VMSTATE_UINT8(mask, CdjPnlLinkPress),
+        VMSTATE_INT64(at_ms, CdjPnlLinkPress),
+        VMSTATE_INT64(dur_ms, CdjPnlLinkPress),
+        VMSTATE_BOOL(seen, CdjPnlLinkPress),
+        VMSTATE_BOOL(held, CdjPnlLinkPress),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
+/* Every live key appends a press, so the saved list is longer than the one
+ * a fresh machine starts with: the count comes first and the list is
+ * allocated to it. */
+static int cdj_pnl_link_pre_load(void *opaque)
+{
+    CdjPnlLinkState *s = opaque;
+
+    g_free(s->press);
+    s->press = NULL;
+    return 0;
+}
+
+static const VMStateDescription vmstate_cdj_pnl_link = {
+    .name = "cdj-pnl-link",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .pre_load = cdj_pnl_link_pre_load,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT16_ARRAY(reg, CdjPnlLinkState, CDJ_PNL_LINK_SIZE / 4),
+        VMSTATE_UINT8(sync, CdjPnlLinkState),
+        VMSTATE_VBUFFER_UINT32(rx, CdjPnlLinkState, 0, NULL, frame_len),
+        VMSTATE_UINT32(rxhead, CdjPnlLinkState),
+        VMSTATE_UINT32(rxlen, CdjPnlLinkState),
+        VMSTATE_UINT32(txlen, CdjPnlLinkState),
+        VMSTATE_VBUFFER_UINT32(tx, CdjPnlLinkState, 0, NULL, frame_len),
+        VMSTATE_UINT32(npress, CdjPnlLinkState),
+        {
+            .name = "press",
+            .vmsd = &vmstate_cdj_pnl_press,
+            .num_offset = vmstate_offset_value(CdjPnlLinkState, npress, uint32_t),
+            .size = sizeof(CdjPnlLinkPress),
+            .flags = VMS_STRUCT | VMS_VARRAY_UINT32 | VMS_ALLOC | VMS_POINTER,
+            .offset = vmstate_offset_pointer(CdjPnlLinkState, press, CdjPnlLinkPress),
+        },
+        VMSTATE_UINT8(rot_val, CdjPnlLinkState),
+        VMSTATE_BOOL(rot_live, CdjPnlLinkState),
+        VMSTATE_VBUFFER_UINT32(lvl_val, CdjPnlLinkState, 0, NULL, payload_len),
+        VMSTATE_VBUFFER_UINT32(lvl_live, CdjPnlLinkState, 0, NULL, payload_len),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 void *cdj_pnl_link_init(MemoryRegion *sysmem, hwaddr addr, const char *name,
                         unsigned frame_len, uint8_t sync,
                         const CdjPnlLinkHooks *hooks, size_t extra_size)
@@ -446,7 +513,7 @@ void *cdj_pnl_link_init(MemoryRegion *sysmem, hwaddr addr, const char *name,
     s->sync = sync;
     s->hooks = hooks;
     s->extra = extra_size ? g_malloc0(extra_size) : NULL;
-    s->rx = g_new0(uint8_t, frame_len);
+    s->rx = g_new0(uint8_t, MAX(frame_len, CDJ_PNL_LINK_FIFO));
     s->tx = g_new0(uint8_t, frame_len);
     s->lvl_val = g_new0(uint8_t, s->payload_len);
     s->lvl_live = g_new0(bool, s->payload_len);
@@ -486,10 +553,11 @@ void *cdj_pnl_link_init(MemoryRegion *sysmem, hwaddr addr, const char *name,
         }
     }
     cdj_pnl_link_parse_presses(s);
+    vmstate_register_any(NULL, &vmstate_cdj_pnl_link, s);
     s->reg[CDJ_PNL_LINK_SCFSR >> 2] = CDJ_PNL_LINK_SCFSR_TEND
                                      | CDJ_PNL_LINK_SCFSR_TDFE;
     s->exit.notify = cdj_pnl_link_summary;
-    qemu_add_exit_notifier(&s->exit);
+    cdj_add_exit_report(&s->exit);
 
     memory_region_init_io(&s->iomem, NULL, &cdj_pnl_link_ops, s, name,
                           CDJ_PNL_LINK_SIZE);

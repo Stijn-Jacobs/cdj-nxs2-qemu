@@ -29,9 +29,18 @@ def test_installed_checks_the_named_models_images(tmp_path):
     assert not firmware.installed(str(tmp_path), "cdj2000")
     for rel, _ in m.expected:
         (tmp_path / os.path.basename(rel)).write_bytes(b"\0")
+    assert not firmware.installed(str(tmp_path), "cdj2000")  # the display update is part of the install
+    (tmp_path / model.DISPLAY_UPD_IMAGE).write_bytes(b"\0")
     assert firmware.installed(str(tmp_path), "cdj2000")
     # A different model's images are not enough.
     assert not firmware.installed(str(tmp_path))
+
+
+def test_a_profile_naming_no_images_is_not_installed(tmp_path, monkeypatch):
+    m = model.load("xdj1000mk2")
+    monkeypatch.setattr(m, "expected", ())
+    monkeypatch.setattr(model, "load", lambda mid=None: m)
+    assert not firmware.installed(str(tmp_path), "xdj1000mk2")
 
 
 def test_upd_files_single_file_update(tmp_path):

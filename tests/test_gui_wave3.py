@@ -192,8 +192,8 @@ def call_overview(mem, column):
     return cpu
 
 
-def overview_record(total, mid_and_low, low):
-    return bytes([total, mid_and_low, low, 0x3B, 0xFF, 0xFF])
+def overview_record(total, mid_and_low, low, phrase=15):
+    return bytes([total, mid_and_low, low, 0x3B, 0xFF, 0xF0 | phrase])
 
 
 def random_extents(rng):
@@ -226,7 +226,8 @@ def overview_pixels(mem):
 
 def test_overview_paints_3band_records_bottom_aligned_and_ends_the_column():
     rng = random.Random(3)
-    records = [overview_record(*random_extents(rng)) for _ in range(OVERVIEW_COLUMNS)]
+    records = [overview_record(*random_extents(rng), rng.randrange(16))
+               for _ in range(OVERVIEW_COLUMNS)]
     records[0] = overview_record(40, 40, 40)
     records[1] = overview_record(1, 1, 1)
     mem = overview_memory(records, blob('wave3ov'))
@@ -244,7 +245,7 @@ def stock_decode(record):
 def test_overview_decodes_any_other_record_as_the_stock_code_does():
     rng = random.Random(5)
     records = [bytes(rng.randrange(256) for _ in range(6)) for _ in range(OVERVIEW_COLUMNS)]
-    records[0] = bytes([9, 9, 9, 0x3B, 0xFF, 0xFE])
+    records[0] = bytes([9, 9, 9, 0x3B, 0xFE, 0xFF])
     records[1] = bytes([9, 9, 9, 0x3A, 0xFF, 0xFF])
     records[2] = bytes([0, 0, 0, 0x3B, 0, 0])
     mem = overview_memory(records, blob('wave3ov'))
@@ -349,7 +350,7 @@ def test_real_image_other_overview_records_decode_as_in_the_firmware(real_images
     stock, patched = real_images
     rng = random.Random(13)
     records = [bytes(rng.randrange(256) for _ in range(6)) for _ in range(30)]
-    records += [bytes([5, 5, 5, 0x3B, 0xFF, 0xFE]), bytes([5, 5, 5, 0x3C, 0xFF, 0xFF])]
+    records += [bytes([5, 5, 5, 0x3B, 0xFE, 0xFF]), bytes([5, 5, 5, 0x3C, 0xFF, 0xFF])]
     for record in records:
         a, mem_a = real_overview(stock, record)
         b, mem_b = real_overview(patched, record)

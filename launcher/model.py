@@ -12,6 +12,10 @@ from .layout import Layout
 
 DEFAULT = "cdj2000nxs2"
 
+# Where the display board's own update is kept beside the main images, for a
+# model whose display runs inside the MAIN emulator.
+DISPLAY_UPD_IMAGE = "display.upd"
+
 # Checked in this order, so a missing one is reported the same way cdj_model.sh
 # reports it: the first field a profile leaves out, not every one of them.
 REQUIRED = ("MODEL_TITLE", "MODEL_MAIN_MACHINE", "MODEL_EXTRACT", "MODEL_FW_VERSION",
@@ -33,11 +37,6 @@ def models_dir():
     return os.path.join(Layout().emu, "models")
 
 
-def list_models():
-    d = models_dir()
-    return sorted(f[:-len(".conf")] for f in os.listdir(d) if f.endswith(".conf"))
-
-
 def _parse(text):
     # A checkout with core.autocrlf can give the profile CRLF endings; a value
     # ending in a carriage return would name no machine.
@@ -54,6 +53,17 @@ def _parse(text):
     return values
 
 
+def _released(model_id):
+    with open(os.path.join(models_dir(), model_id + ".conf"), encoding="utf-8") as f:
+        return float(_parse(f.read())["MODEL_RELEASED"])
+
+
+def list_models():
+    """The default player first, then the others newest first."""
+    ids = [f[:-len(".conf")] for f in os.listdir(models_dir()) if f.endswith(".conf")]
+    return sorted(ids, key=lambda m: (m != DEFAULT, -_released(m)))
+
+
 class Model:
     def __init__(self, model_id, values):
         self.id = model_id
@@ -68,14 +78,55 @@ class Model:
         self.gui_section = values.get("MODEL_GUI_SECTION") or "1"
         self.main_lzss = values["MODEL_MAIN_LZSS"]
         self.fw_steps = values["MODEL_FW_STEPS"].split()
+        self.display_upd = values.get("MODEL_DISPLAY_UPD", "")
+        self.display_flash = values.get("MODEL_DISPLAY_FLASH", "")
+        self.launch = values.get("MODEL_LAUNCH") or "rig"
+        self.dsp_idle = values.get("MODEL_DSP_IDLE", "")
+        self.dsp_idle_knob = values.get("MODEL_DSP_IDLE_KNOB") or "CDJ_C6747_IDLE"
+        self.dsp_isr_fast = values.get("MODEL_DSP_ISR_FAST", "")
+        self.dsp_gen_args = values.get("MODEL_DSP_GEN_ARGS", "")
+        self.idle_s = values.get("MODEL_IDLE_S", "")
+        self.load_steps = values.get("MODEL_LOAD_STEPS", "")
+        self.tablet_peer = values.get("MODEL_TABLET_PEER") == "1"
+        self.rig_env = dict(w.split("=", 1) for w in values.get("MODEL_RIG_ENV", "").split())
         self.expected = tuple(tuple(line.split(None, 1))
                               for line in values.get("MODEL_EXPECTED", "").splitlines() if line.strip())
+
+    @property
+    def is_rig(self):
+        """The two-board real-DSP rig (rig.py); any other model starts as one
+        MAIN emulator (deck.py)."""
+        return self.launch == "rig"
+
+    @property
+    def has_dsp_module(self):
+        """A one-window model whose DSP runs through a generated module."""
+        return not self.is_rig and bool(self.dsp_idle)
+
+    @property
+    def builds_dsp_module(self):
+        """Setup builds this player's DSP module: the rig players, and a
+        one-window model whose profile names its DSP's idle loop."""
+        return self.is_rig or bool(self.dsp_idle)
+
+    @property
+    def module_dir(self):
+        """The folder of the jit cache that holds this model's built module;
+        the default model's is the one build_dsp_module.sh calls curated."""
+        return "curated" if self.id == DEFAULT else "curated-" + self.id
+
+    @property
+    def images(self):
+        """What a firmware install leaves in the extract folder."""
+        # A profile that has not pinned its images yet still needs the kernel.
+        names = tuple(os.path.basename(rel) for rel, _ in self.expected) or ("main_unpacked.bin",)
+        return names + (DISPLAY_UPD_IMAGE,) if self.display_upd else names
 
 
 def load(model_id=None):
     """The named profile (CDJ_MODEL, else cdj2000nxs2). Raises ModelError with
     the script's message on an unknown id or an incomplete profile."""
-    model_id = model_id or os.environ.get("CDJ_MODEL") or DEFAULT
+    model_id = (model_id or os.environ.get("CDJ_MODEL") or DEFAULT).strip().lower()
     path = os.path.join(models_dir(), model_id + ".conf")
     if not os.path.isfile(path):
         raise ModelError("unknown model '%s'; known: %s" % (model_id, "".join(m + " " for m in list_models())))
@@ -84,6 +135,17 @@ def load(model_id=None):
     for v in REQUIRED:
         if not values.get(v):
             raise ModelError("model profile %s does not set %s" % (path, v))
+    launch = values.get("MODEL_LAUNCH") or "rig"
+    if launch not in ("rig", "deck"):
+        raise ModelError("model profile %s: MODEL_LAUNCH is '%s', not rig or deck" % (path, launch))
+    # The rig starts the CDJ-2000NXS2's machines, and a deck model sharing
+    # extract/ would overwrite the NXS2's firmware.
+    if launch == "rig" and values["MODEL_MAIN_MACHINE"] != "cdj2000nxs2":
+        raise ModelError("model profile %s: only a model on the cdj2000nxs2 machine starts the rig "
+                         "(MODEL_LAUNCH=deck is missing)" % path)
+    if launch == "deck" and values["MODEL_EXTRACT"] == "extract":
+        raise ModelError("model profile %s: a deck model installs to its own folder, not extract "
+                         "(MODEL_EXTRACT is wrong)" % path)
     return Model(model_id, values)
 
 

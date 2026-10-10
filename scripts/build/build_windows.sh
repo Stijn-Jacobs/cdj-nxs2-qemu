@@ -50,7 +50,7 @@ df -h "$(dirname "$QEMU_BUILD")" | tail -1
 
 # A cross-drive build otherwise dies deep in the build with a ValueError from
 # tracetool.
-SRC_DRIVE="$(cd "$HERE/../.." && pwd | cut -c1-3)"
+SRC_DRIVE="$(cygpath -m "$(cd "$HERE/../.." && pwd)" | cut -c1-3)"
 for d in "$QEMU_BUILD" "$QEMU_EB_BUILD"; do
     case "$d" in
         "$SRC_DRIVE"*) ;;

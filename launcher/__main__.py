@@ -11,6 +11,7 @@ USAGE = """usage: python -m launcher <command> [options]
   stop                                     stop running decks
   firmware [--install [--force]] <UPD> [outdir]   prepare the firmware images
   run <script> [args]                      one of scripts/run/*.sh (rig, boot_deck, ...)
+  dsp-stamp <folder>                       stamp the DSP module installed in a folder
   packages                                 the missing build prerequisites, as package names
 """
 
@@ -45,6 +46,9 @@ def main(argv=None):
     if cmd == "firmware":
         from . import firmware
         return firmware.main(rest)
+    if cmd == "dsp-stamp":
+        from . import dsp_module
+        return dsp_module.main(rest)
     if cmd == "packages":
         from . import host, setup
         print(" ".join(setup.packages_for(host.kind(), setup.missing_prerequisites(host.kind()))))

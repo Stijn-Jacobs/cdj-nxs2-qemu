@@ -690,8 +690,9 @@ void jit_init(c66x_core *c)
         j->qprof = calloc(JIT_PROF, sizeof j->qprof[0]);
         j->kprof = calloc(4096, sizeof j->kprof[0]);
     }
+    /* "0" reads as off, as the core's other switches do, not as a directory. */
     const char *adir = getenv("C66X_JIT_AUTO");
-    if (adir && *adir) {
+    if (adir && *adir && strcmp(adir, "0")) {
         struct c66x_jit *j = jit_get(c);
         j->auto_dir = strdup(adir);
         if (!j->kprof)
@@ -748,6 +749,13 @@ void c66x_jit_report(const c66x_core *c, char *buf, size_t len)
              j->nloops, (unsigned long long)j->lcycles, j->nqregions, (unsigned long long)j->qcycles,
              j->auto_cached,
              j->auto_batch, j->auto_modules, j->auto_failed);
+}
+
+uint64_t c66x_jit_cycles(const c66x_core *c)
+{
+    const struct c66x_jit *j = c->jit;
+
+    return j ? j->cycles + j->kcycles + j->dcycles + j->lcycles + j->qcycles : 0;
 }
 
 void jit_free(c66x_core *c)

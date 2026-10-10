@@ -228,14 +228,14 @@ def udp_frame(src_mac, dst_mac, src_ip, dst_ip, sport, dport, payload):
     return dst_mac + src_mac + b'\x08\x00' + bytes(ip) + udp
 
 
-def arp_reply(request, our_ip):
+def arp_reply(request, our_ip, our_mac=PROBE_MAC):
     """The reply to an ARP who-has for our_ip, or None."""
     if (len(request) < 42 or request[12:14] != b'\x08\x06' or request[20:22] != b'\x00\x01'
             or request[38:42] != socket.inet_aton(our_ip)):
         return None
-    body = struct.pack('>HHBBH', 1, 0x0800, 6, 4, 2) + PROBE_MAC + socket.inet_aton(our_ip) \
+    body = struct.pack('>HHBBH', 1, 0x0800, 6, 4, 2) + our_mac + socket.inet_aton(our_ip) \
         + request[22:28] + request[28:32]
-    return request[6:12] + PROBE_MAC + b'\x08\x06' + body
+    return request[6:12] + our_mac + b'\x08\x06' + body
 
 
 class SegmentSocket:

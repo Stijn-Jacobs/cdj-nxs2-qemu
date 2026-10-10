@@ -138,6 +138,16 @@ static void cdj_scifa_summary(Notifier *n, void *unused)
 
 CdjScifaState *cdj_scifa_last;
 
+static const VMStateDescription vmstate_cdj_scifa = {
+    .name = "cdj-scifa",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT16_ARRAY(reg, CdjScifaState, CDJ_SCIFA_SIZE / 2),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 void cdj_scifa_init(MemoryRegion *sysmem, const char *name,
                            hwaddr addr, Chardev *chr)
 {
@@ -151,6 +161,7 @@ void cdj_scifa_init(MemoryRegion *sysmem, const char *name,
     qemu_chr_fe_init(&s->chr, chr, &error_abort);
     s->exit.notify = cdj_scifa_summary;
     qemu_add_exit_notifier(&s->exit);
+    vmstate_register_any(NULL, &vmstate_cdj_scifa, s);
     memory_region_init_io(&s->iomem, NULL, &cdj_scifa_ops, s,
                           name, CDJ_SCIFA_SIZE);
     memory_region_add_subregion(sysmem, addr, &s->iomem);

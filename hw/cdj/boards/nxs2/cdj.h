@@ -214,10 +214,19 @@ typedef struct CdjC6x {
     c66x_core *core;
     c6655_soc *soc;
     uint8_t *l2, *ddr;
+    MemoryRegion l2_ram, ddr_ram;   /* QEMU RAM, so a snapshot carries them */
+    /* Snapshot: the core and SoC images, and the timers' pending expiries. */
+    GByteArray *snap;
+    int64_t tick_deadline, rx_deadline;
     QEMUTimer *tick;
     int64_t quantum_ns;
     uint64_t mhz;
     uint64_t mhz_run;               /* CDJ_C6X_MHZ, taken up once stage 1 boots */
+    uint64_t mhz_floor;             /* CDJ_C6X_GOVERN: lowest clock the governor picks, 0 = off */
+    struct {
+        int64_t wall;
+        uint64_t dsp_ns, host_ns, cycles;
+    } gov;
     uint64_t max_catchup_ns;
     bool running;
     bool halted;
@@ -354,6 +363,12 @@ typedef struct CdjC6x {
     uint64_t ahead_ns;              /* how far the DSP thread may lead MAIN */
     uint64_t prof_inval, prof_inval_ns, prof_spi, prof_spi_ns, prof_pcm_ns;
     int64_t report_at;
+    /* CDJ_REPORT=1: totals at the last 5 s timeline line, to difference. */
+    struct {
+        int64_t virt, wall;
+        uint64_t cycles, compiled, host_ns, wait_ns, skipped_ns;
+    } tl;
+    bool tl_on;
     c66x_stop last_stop;
     Notifier exit;
 } CdjC6x;
@@ -520,6 +535,8 @@ enum {
     CDJ_DMAC1B,                  /* priority group: both share IPRK[11:8]      */
     CDJ_MSIOFI0,
     CDJ_ETHI,                    /* EtherMAC, vector H'D60, IPRJ [11:8]       */
+    CDJ_LCDCI,                   /* LCDC, vector H'F40, IPRB [11:8]           */
+    CDJ_2DG_TRI,                 /* 2DG transfer end, vector H'780, IPRI [3:0] */
     CDJ_INTC_NR_SOURCES
 };
 
@@ -555,6 +572,7 @@ extern CdjC6x cdj_c6x;
 extern CdjDma1State *cdj_dma1_singleton;
 bool cdj_c6x_on(void);
 void cdj_dspau_arm(void);
+bool cdj_c6x_deck_held(void);
 void cdj_c6x_mcbsp_tx(void *opaque, unsigned port, uint32_t word,
                              unsigned bits);
 void cdj_c6x_i2c_byte(uint8_t v);
@@ -598,6 +616,7 @@ void cdj_msiof(MemoryRegion *sysmem, const char *name, hwaddr addr,
 uint64_t cdj_dsp_i2c_tx_bytes(void);
 void cdj_iic(MemoryRegion *sysmem, const char *name, hwaddr addr,
                     unsigned ch, qemu_irq *irq);
+void cdj_sh7724_iic_init(MemoryRegion *sysmem, int auth_channel);
 void cdj_pnl_init(MemoryRegion *sysmem, hwaddr addr);
 /* The rear USB port's bus side: what a token gets back besides a length. */
 #define CDJ_USBF_NAK   (-1)

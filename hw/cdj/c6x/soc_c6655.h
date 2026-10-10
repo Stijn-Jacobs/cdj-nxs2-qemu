@@ -56,6 +56,12 @@ c6655_soc *c6655_soc_new(const c6655_soc_config *cfg);
 void       c6655_soc_free(c6655_soc *s);
 void       c6655_soc_reset(c6655_soc *s);
 
+/* Snapshots: the registers, the uPP queue and every on-chip RAM block as one
+ * image; c6655_soc_save(s, NULL) returns its size. Only the build that wrote
+ * an image can read it. */
+size_t c6655_soc_save(const c6655_soc *s, uint8_t *buf);
+void   c6655_soc_load(c6655_soc *s, const uint8_t *buf);
+
 /* Register access. owns() tells the integrator which addresses to route here;
  * everything else is RAM or unmapped. */
 int      c6655_soc_owns(uint32_t addr);

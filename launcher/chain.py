@@ -15,6 +15,7 @@ import sys
 import time
 
 from . import host
+from .console import Console
 from .layout import Layout
 
 SCRIPTS = ("live", "live_linked", "rig", "play_real_dsp", "instrumented_batch", "boot_decks",
@@ -43,6 +44,16 @@ def unset(env, *names):
 
 def say(*a):
     print(*a, flush=True)
+
+
+def warn_banner(*lines):
+    """A warning the user must not miss in the start-up output: set apart by
+    blank lines and in the console's warning colour."""
+    con = Console(False, False)
+    say()
+    for line in lines:
+        say("  %s%s %s%s" % (con.B + con.Y, con.WARN, line, con.N))
+    say()
 
 
 def err(*a):

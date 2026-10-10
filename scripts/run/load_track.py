@@ -21,6 +21,7 @@ import subprocess
 import sys
 import time
 import cdj_monsock
+import snapshot_deck
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TAG = sys.argv[1]
@@ -375,12 +376,31 @@ def shot(name):
     return nonzero(pixels(grab(name)))
 
 
+# SNAPSHOT_SAVE=<point,...>: the launcher's list of points to save on the
+# way (idle: the settled deck screen; loaded: the track loaded, before the
+# film), into SNAPSHOT_ROOT/<point>.
+SNAPSHOT_SAVE = [p for p in os.environ.get("SNAPSHOT_SAVE", "").split(",") if p]
+
+
+def save_point(point):
+    if point not in SNAPSHOT_SAVE:
+        return
+    t0 = time.time()
+    ok = snapshot_deck.save(MAINMON, MON, os.path.join(os.environ["SNAPSHOT_ROOT"], point))
+    print("[%s] snapshot '%s' %s in %.1f s" % (TAG, point, "saved" if ok else "FAILED", time.time() - t0))
+
+
 t_end = vnow() + MAXWAIT
 
 # Wait for the settled deck frame before watching for the modal: during early
-# boot the panel is bright enough to pass the modal threshold.
-if wait_deck(t_end):
+# boot the panel is bright enough to pass the modal threshold. A deck started
+# from a saved point (SNAPSHOT_FROM, set by the launcher) has no boot to wait
+# for, and a loaded one is too bright for the idle-deck band.
+if os.environ.get("SNAPSHOT_FROM"):
+    print("[%s] started from the saved '%s' point" % (TAG, os.environ["SNAPSHOT_FROM"]))
+elif wait_deck(t_end):
     print("[%s] deck settled at %.2f s" % (TAG, vnow() - (t_end - MAXWAIT)))
+    save_point("idle")
 else:
     print("[%s] DECK NEVER SETTLED -- anchor did not fire" % TAG)
 
@@ -581,6 +601,9 @@ print("[%s] NOTE: these are TWO DISPLAY axes and neither is an audio test. "
       "can pass VERDICT without having read any audio." % TAG)
 print("byte 0x%02x  pre=%s%s"
       % (KEYBYTE, pre, "" if (pre or 0) > 190000 else "   <-- NO TRACK LOADED"))
+
+if ok:
+    save_point("loaded")
 
 # KEYDUR: how long the key is held, in ms. panel_key.py defaults to a 150 ms
 # tap; on a CDJ a hold is a different gesture (holding CUE previews).

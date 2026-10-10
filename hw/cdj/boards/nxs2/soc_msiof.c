@@ -81,6 +81,16 @@ static void cdj_msiof_summary(Notifier *n, void *opaque)
     }
 }
 
+static const VMStateDescription vmstate_cdj_msiof = {
+    .name = "cdj-msiof",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT32_ARRAY(reg, CdjMsiofState, CDJ_MSIOF_SIZE / 4),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 void cdj_msiof(MemoryRegion *sysmem, const char *name, hwaddr addr,
                       bool dsp)
 {
@@ -90,6 +100,7 @@ void cdj_msiof(MemoryRegion *sysmem, const char *name, hwaddr addr,
     s->dsp = dsp;
     s->exit.notify = cdj_msiof_summary;
     qemu_add_exit_notifier(&s->exit);
+    vmstate_register_any(NULL, &vmstate_cdj_msiof, s);
     memory_region_init_io(&s->iomem, NULL, &cdj_msiof_ops, s, name,
                           CDJ_MSIOF_SIZE);
     memory_region_add_subregion_overlap(sysmem, A7ADDR(addr), &s->iomem, 1);

@@ -181,6 +181,17 @@ static const MemoryRegionOps link_ops = {
     .valid = { .min_access_size = 1, .max_access_size = 4 },
 };
 
+static const VMStateDescription vmstate_link_port = {
+    .name = "cdj2000-display-link",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT32(units, LinkPort),
+        VMSTATE_UINT32_ARRAY(reg, LinkPort, LINK_WINDOW / 4),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static void link_port_init(LinkPort *p, MemoryRegion *sysmem, const char *name,
                            hwaddr base, hwaddr addr_reg, qemu_irq irq,
                            qemu_irq ser_irq)
@@ -189,6 +200,7 @@ static void link_port_init(LinkPort *p, MemoryRegion *sysmem, const char *name,
     p->len_reg = addr_reg + 8;
     p->irq = irq;
     p->ser_irq = ser_irq;
+    vmstate_register_any(NULL, &vmstate_link_port, p);
     memory_region_init_io(&p->iomem, NULL, &link_ops, p, name, LINK_WINDOW);
     memory_region_add_subregion(sysmem, base, &p->iomem);
 }

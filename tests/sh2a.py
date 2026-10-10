@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """A big-endian SH-2A interpreter for the display mods: the integer, branch
-and load/store instructions the routines in mods/gui_*.s use and the stretches
+and load/store instructions the routines in mods/*/gui_*.s use and the stretches
 of display firmware they replace. Anything else raises, so a routine that grows
 an instruction this does not model fails loudly instead of running wrong."""
 import struct
@@ -126,6 +126,8 @@ class Sh2a:
             self.t = int(r[0] & imm == 0)                       # tst #imm,R0
         elif op & 0xFF00 == 0xC900:
             r[0] &= imm                                         # and #imm,R0
+        elif op & 0xFF00 == 0xCB00:
+            r[0] |= imm                                         # or #imm,R0
         elif op & 0xFF00 == 0x8400:                             # mov.b @(disp,Rm),R0
             r[0] = self.load(r[m] + (op & 15), 1)
         elif op & 0xFF00 == 0x8500:                             # mov.w @(disp,Rm),R0

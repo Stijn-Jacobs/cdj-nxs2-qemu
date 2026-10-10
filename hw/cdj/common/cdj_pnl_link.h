@@ -49,6 +49,12 @@ typedef struct CdjPnlLinkHooks {
     /* A "rel" matched a previously-held press. */
     void (*key_up)(CdjPnlLinkState *s, void *extra, unsigned off,
                    unsigned mask, int64_t now);
+    /* A second device on the same port (the CDJ-900's display processor):
+     * while link_selected says it is addressed, each transmitted byte goes
+     * to link_byte and the byte it returns is what MAIN reads back, one for
+     * one, with no frame, checksum or panel reply around it. */
+    bool (*link_selected)(void *extra);
+    uint8_t (*link_byte)(void *extra, uint8_t tx);
     /* Extra exit-summary lines, printed after the generic counters. */
     void (*summary)(CdjPnlLinkState *s, void *extra);
 } CdjPnlLinkHooks;

@@ -9,6 +9,7 @@ C6X=0 is the control: the same arm on the stand-in peer, which does not play.
 
   usage: bash scripts/run/play_real_dsp.sh <tag> [n]
   env:   C6X=1 MHZ=250 LOCKSTEP=1 JOBS=3 FILMN=8 MOTION_MS=1500
+         REPORTS=0 skips the summary reports after the run
 """
 
 import os
@@ -112,6 +113,8 @@ def main(argv):
         prefix, nonempty(env, "C6X", "1"), env.get("CDJ_C6X_MHZ", ""), nonempty(env, "LOCKSTEP", "1"),
         env.get("ICOUNT", ""), chain.pgrep_count("qemu-system"), chain.loadavg()))
     chain.run_script("instrumented_batch", [prefix, n], env)
+    if nonempty(env, "REPORTS", "1") == "0":
+        return 0
     chain.say("--- DSP (c6x exit lines)")
     chain.bash_report("report_dsp.sh", [prefix, n], env)
     chain.say("--- minimap playhead")

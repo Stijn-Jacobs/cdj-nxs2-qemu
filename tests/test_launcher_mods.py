@@ -16,7 +16,7 @@ from launcher.layout import Layout  # noqa: E402
 
 def test_loads_the_registry():
     m = mods.load(Layout())
-    assert {"high_fps", "live_clock", "three_band"} <= {x.key for x in m}
+    assert {"high_fps", "live_clock", "three_band", "phrase"} <= {x.key for x in m}
     assert all(x.env.startswith("CDJ_") for x in m)
 
 

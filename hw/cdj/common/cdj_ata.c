@@ -3,7 +3,7 @@
 #include "cdj_getenv.h"
 /* ---------------------------------------------------------------------------
  * ATA/ATAPI task file for the CD drive, modelled as an empty, healthy drive.
- * Enabled with CDJ_ATA=1.
+ * Enabled with CDJ_ATA=1; CDJ_ATA_DEBUG=1 logs every command packet.
  *
  * On the NXS2, without it boot subsystem 4 registers status 2 with
  * fatal_register (0x084026A6) and the firmware shows E-7001 DISC DRIVE
@@ -135,6 +135,13 @@ static void cdj_ata_packet(CdjAtaState *s, CdjAtaChannel *c)
     unsigned len;
 
     s->packets++;
+    if (getenv("CDJ_ATA_DEBUG")) {
+        info_report("ata: packet %02x %02x %02x %02x %02x %02x %02x %02x %02x "
+                    "%02x %02x %02x, byte count 0x%x", c->pkt[0], c->pkt[1],
+                    c->pkt[2], c->pkt[3], c->pkt[4], c->pkt[5], c->pkt[6],
+                    c->pkt[7], c->pkt[8], c->pkt[9], c->pkt[10], c->pkt[11],
+                    c->lbam | c->lbah << 8);
+    }
     switch (c->pkt[0]) {
     case 0x03:                      /* REQUEST SENSE */
         reply[0] = 0x70;
@@ -151,6 +158,19 @@ static void cdj_ata_packet(CdjAtaState *s, CdjAtaChannel *c)
         memcpy(&reply[8], "PIONEER DVD-ROM DVD-118        1.00", 28);
         len = MIN(c->pkt[4], 36);
         break;
+    case 0xE0:
+        /* Pioneer vendor status read: E0 08 <item>, reply length in byte 9.
+         * The CDJ-2000 polls item 0x3C, the mechanism state, and accepts the
+         * reply only as <item> 00 01 <state> (0x04107904). State 2 is a
+         * closed, empty tray (1 shows EJECT, 3 LOAD IN). */
+        if (c->pkt[1] == 0x08 && c->pkt[2] == 0x3C) {
+            reply[0] = c->pkt[2];
+            reply[2] = 1;
+            reply[3] = 2;
+            len = MIN(c->pkt[9], 4);
+            break;
+        }
+        /* fall through */
     default:
         s->not_ready++;
         cdj_ata_complete(s, c, SENSE_NOT_READY, ASC_MEDIUM_NOT_PRESENT);
@@ -320,6 +340,16 @@ static void cdj_ata_summary(Notifier *n, void *unused)
                 s->packets, s->not_ready, s->irqs);
 }
 
+static const VMStateDescription vmstate_cdj_ata = {
+    .name = "cdj-ata",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        CDJ_VMSTATE_SPAN(CdjAtaState, irq_level, ctl),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 void cdj_ata_init(MemoryRegion *sysmem, const char *name, hwaddr base,
                   qemu_irq irq)
 {
@@ -332,7 +362,8 @@ void cdj_ata_init(MemoryRegion *sysmem, const char *name, hwaddr base,
     s->irq = irq;
     s->ch[0].status = s->ch[1].status = ST_IDLE;
     s->exit.notify = cdj_ata_summary;
-    qemu_add_exit_notifier(&s->exit);
+    cdj_add_exit_report(&s->exit);
+    vmstate_register_any(NULL, &vmstate_cdj_ata, s);
     memory_region_init_io(&s->iomem, NULL, &cdj_ata_ops, s, name,
                           CDJ_ATA_SIZE);
     memory_region_add_subregion_overlap(sysmem, base, &s->iomem, 1);

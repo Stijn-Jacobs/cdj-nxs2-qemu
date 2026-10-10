@@ -174,6 +174,8 @@ void cic_input(c6655_soc *s, unsigned sysint, int level)
         return;
     int rising = level && !c->level[sysint];
     c->level[sysint] = level;
+    if (!level)
+        c->relatch_at[sysint] = 0;
     uint32_t bit = 1u << (sysint % 32);
     if (!rising || (c->raw[sysint / 32] & bit))
         return;                              /* status latches on edges only */
@@ -186,11 +188,58 @@ void cic_input(c6655_soc *s, unsigned sysint, int level)
 
 /* Status latches on the input's rising edge and a clear always takes: the
  * program's CIC dispatcher (0x0080C1A8) clears status before the EDMA3 ISR
- * clears IPR (0x00803BA4), so level re-latching would hold host 5 high. */
-static void cic_clear(soc_cic *c, unsigned sysint)
+ * clears IPR (0x00803BA4), so level re-latching would hold host 5 high.
+ *
+ * That dispatcher writes back every enabled status bit it read, so an EDMA3
+ * edge that lands between its read and its write is cleared before the ISR
+ * that owns it has run. The ISR then finds no status, IPR stays set and the
+ * input never edges again: the DSP stops servicing the McBSP output and
+ * replays its last 32 frames. At the real clock the window is a few
+ * instructions wide; at the clock the board is modelled at, MASTER TEMPO's
+ * load hits it within seconds. An input that is still high CIC_RELATCH_NS
+ * after its status was cleared latches again, long after any ISR that was
+ * merely late. Only the EDMA3 outputs get this: they stay high until the ISR
+ * clears IPR. */
+#define CIC_RELATCH_NS 1000000
+#define CIC_SYSINT_EDMA_FIRST 22
+#define CIC_SYSINT_EDMA_LAST  31
+
+static void cic_clear(c6655_soc *s, unsigned sysint)
 {
-    if (sysint < 7 * 32)
-        c->raw[sysint / 32] &= ~(1u << (sysint % 32));
+    soc_cic *c = &s->cic0;
+
+    if (sysint >= 7 * 32)
+        return;
+    c->raw[sysint / 32] &= ~(1u << (sysint % 32));
+    if (c->level[sysint] && sysint >= CIC_SYSINT_EDMA_FIRST && sysint <= CIC_SYSINT_EDMA_LAST) {
+        c->relatch_at[sysint] = s->now_ns + CIC_RELATCH_NS;
+        if (!c->relatch_due || c->relatch_at[sysint] < c->relatch_due)
+            c->relatch_due = c->relatch_at[sysint];
+        s->cache_valid = 0;
+    }
+}
+
+void cic_relatch(c6655_soc *s)
+{
+    soc_cic *c = &s->cic0;
+    uint64_t due = 0;
+
+    for (unsigned i = 0; i < 7 * 32; i++) {
+        uint64_t at = c->relatch_at[i];
+
+        if (!at)
+            continue;
+        if (at > s->now_ns) {
+            if (!due || at < due)
+                due = at;
+            continue;
+        }
+        c->relatch_at[i] = 0;
+        if (c->level[i])
+            c->raw[i / 32] |= 1u << (i % 32);
+    }
+    c->relatch_due = due;
+    cic_update(s);
 }
 
 uint32_t cic_read(c6655_soc *s, uint32_t off, unsigned size)
@@ -240,7 +289,7 @@ void cic_write(c6655_soc *s, uint32_t off, uint32_t val, unsigned size)
     else if (a == 0x20) {
         if (v < 7 * 32) c->raw[v / 32] |= 1u << (v % 32);
     } else if (a == 0x24)
-        cic_clear(c, v);
+        cic_clear(s, v);
     else if (a == 0x28) {
         if (v < 7 * 32) c->enable[v / 32] |= 1u << (v % 32);
     } else if (a == 0x2C) {
@@ -255,7 +304,7 @@ void cic_write(c6655_soc *s, uint32_t off, uint32_t val, unsigned size)
         unsigned base = (a - 0x280) / 4 * 32;
         for (unsigned b = 0; b < 32; b++)
             if ((v >> b) & 1)
-                cic_clear(c, base + b);
+                cic_clear(s, base + b);
     } else if (a >= 0x300 && a < 0x31C)
         c->enable[(a - 0x300) / 4] |= v;
     else if (a >= 0x380 && a < 0x39C)

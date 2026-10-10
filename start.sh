@@ -6,7 +6,8 @@
 # controller, the bridge. Ctrl-C stops everything.
 #
 #   usage: ./start.sh             start
-#          ./start.sh --app       start with the virtual deck app as the window
+#          ./start.sh --model <id>  start that player (an older one opens one window)
+#          ./start.sh --app      start with the virtual deck app as the window
 #          ./start.sh stop        stop a running rig from another shell
 #          ./start.sh --dry-run   show what would be started
 #   env:   every knob of scripts/run/rig.sh still works (AUDIODEV=, NOSOUND=1,

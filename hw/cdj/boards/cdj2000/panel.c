@@ -26,15 +26,67 @@
  *                          deck whose model word at 0x04C06FA4+0x1674 is <= 9)
  *   PlayPause 0x10/0x01    Cue 0x10/0x02      TrackRev 0x12/0x02
  *
- * This model answers a clean idle frame plus whatever the key socket or
+ * This model answers an idle frame plus whatever the key socket or
  * CDJ_PANEL_PRESS asks for, by raw offset -- both handled generically by
  * cdj_pnl_link_init().
+ *
+ * The idle frame is not all zero on the CDJ-2000: 0x0F/0x02 is the DIRECTION
+ * lever (key ID 1, "DirectionRev" in the key-name table at 0x0405C440) and
+ * it reads 1 in the FWD position. The input handler at 0x0426945A sets the
+ * reverse flag 0x04FDC21A when the bit is clear, every PLAY command carries
+ * that flag (0x04270FDC, 0x0428237E) and it reaches the DSP as bit 31 of
+ * the host-port window word 0x0C0C7BC4. With the bit clear a loaded track
+ * plays backwards, which at its first frame looks like a deck that never
+ * starts; with it set the playhead runs forward and REMAIN counts down, and
+ * clearing it mid-track turns the playhead round. The CDJ-2000NXS decodes
+ * the same report bit to the same key ID.
+ *
+ * The lever is a position, not a key, so a press or hold of 0x0F/0x02 on
+ * the key socket puts it in REV for as long as it lasts: the bit is
+ * inverted after the presses are laid in, and reads 1 (FWD) otherwise.
+ *
+ * The CDJ-900 (fw 4.32) is the other way round: its handler at 0x0426C5E0
+ * writes the reverse flag 0x04FDA482 only when the bit rises (to 1 in one
+ * mode, 0 in the other), and the flag is 0 from the 0x0426C4F0 reset. A set
+ * bit from the first frame is a rising edge that reverses every PLAY, so its
+ * idle frame keeps the bit clear and gets no hook.
  */
 #define CDJ2000_PNL_FRAME 0x18
 #define CDJ2000_PNL_SYNC  0x8F
 
-void cdj2000_panel_init(MemoryRegion *sysmem, hwaddr addr)
+/* The display whose processor shares this port, if it has a link_byte. */
+static const Cdj2000Display *cdj2000_panel_gui;
+
+static void cdj2000_panel_lever(CdjPnlLinkState *s, void *extra,
+                                uint8_t *rx, int64_t now)
 {
+    rx[0x0F] ^= 0x02;
+}
+
+static bool cdj2000_panel_link_selected(void *extra)
+{
+    return cdj2000_panel_gui->link_selected();
+}
+
+static uint8_t cdj2000_panel_link_byte(void *extra, uint8_t tx)
+{
+    return cdj2000_panel_gui->link_byte(tx);
+}
+
+void cdj2000_panel_init(MemoryRegion *sysmem, hwaddr addr,
+                        const Cdj2000Display *display)
+{
+    static CdjPnlLinkHooks hooks;
+
+    if (display->lever_fwd) {
+        hooks.build_last = cdj2000_panel_lever;
+    }
+
+    if (display->link_byte) {
+        cdj2000_panel_gui = display;
+        hooks.link_selected = cdj2000_panel_link_selected;
+        hooks.link_byte = cdj2000_panel_link_byte;
+    }
     cdj_pnl_link_init(sysmem, addr, "sh7763.scif2-panel", CDJ2000_PNL_FRAME,
-                      CDJ2000_PNL_SYNC, NULL, 0);
+                      CDJ2000_PNL_SYNC, &hooks, 0);
 }

@@ -14,6 +14,7 @@ import shutil
 import time
 
 from . import chain
+from . import model as cdj_model
 from .chain import export_default, nonempty
 from .layout import Layout
 
@@ -22,7 +23,8 @@ def batch_env(env, lay, prefix=""):
     """The batch's knobs. Returns (deck duration in s, private media, media dir)."""
     env["CDJ_ATA"] = "1"
     env["CDJ_IIC_CH"] = "both"
-    env["CDJ_IIC_ADDR"] = "0x30,0x2c,0x10"
+    # 0x49 is the CDJ-TOUR1's DAC sensor; no other model addresses it.
+    env["CDJ_IIC_ADDR"] = "0x30,0x2c,0x10,0x49"
     # The DSP reply knobs are defaults only, so a caller's own values win.
     export_default(env, "CDJ_DSP_REPLY", "1")
     export_default(env, "CDJ_DSP_REPLY_ID", "0")
@@ -97,7 +99,8 @@ def main(argv):
 
     # Read the big inputs once so the first runs do not start while the host is
     # still faulting them in.
-    for f in (os.path.join(lay.extract, "main_unpacked.bin"), os.path.join(lay.extract, "gui_unpacked.bin")):
+    images = cdj_model.extract_dir(lay, cdj_model.load())
+    for f in (os.path.join(images, "main_unpacked.bin"), os.path.join(images, "gui_unpacked.bin")):
         if os.path.isfile(f):
             with open(f, "rb") as fh:
                 while fh.read(1 << 22):

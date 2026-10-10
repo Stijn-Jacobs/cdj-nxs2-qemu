@@ -17,7 +17,7 @@ from test_main_wave3data import FirmwareSh4
 SIG_AT = 0x200                  # where the real signature starts (4-aligned)
 SPAN = SIG_AT + 6               # the hooked span, 2 mod 4 like the firmware's
 RESUME = SPAN + 10
-CAVE = (0x400, 0x2E00)
+CAVE = (0x400, 0x3E00)
 FRAME = 0xF000
 MEMCPY = 0x085336DC
 SLOT, STOCK, PACKED, SHARED_LOW, HEADER = 0x4000, 0x6000, 0x8000, 0x3F00, 0x3F10
@@ -27,7 +27,7 @@ NEVER_WRITTEN = 0xFFFFFFFF
 
 
 def build_image():
-    d = bytearray(0x3000)
+    d = bytearray(0x4000)
     for k, op in enumerate(patch_main.OVERVIEW_PUBLISH['sig']):
         struct.pack_into('<H', d, SIG_AT + 2 * k, op)
     struct.pack_into('<I', d, (SPAN & ~3) + 4 + 0x4E * 4, MEMCPY)
@@ -134,10 +134,12 @@ def test_without_an_overview_the_stock_records_stay(shared):
 def test_with_an_overview_every_record_carries_the_bands_and_the_mark():
     cpu, stock = run_publisher(PACKED)
     packed = packed_overview()
-    # Native halfwords ABC<<8|AB, A<<8|0x3B, 0xFFFF, laid out as the stock
-    # records are: the display reads them back as the bytes ABC AB A 3B FF FF.
+    # Native halfwords ABC<<8|AB, A<<8|0x3B, 0xFFF0|nibble, laid out as the stock
+    # records are: the display reads them back as the bytes ABC AB A 3B FF FN.
+    # The nibble stays what the stock record had (the phrase mod's colour).
     want = b''.join(struct.pack('<3H', packed[3 * i] << 8 | packed[3 * i + 1],
-                                packed[3 * i + 2] << 8 | 0x3B, 0xFFFF)
+                                packed[3 * i + 2] << 8 | 0x3B,
+                                0xFFF0 | stock[6 * i + 4] & 15)
                     for i in range(RECORDS))
     assert cpu.copies == 1
     assert bytes(cpu.mem[SLOT:SLOT + 6 * RECORDS]) == want

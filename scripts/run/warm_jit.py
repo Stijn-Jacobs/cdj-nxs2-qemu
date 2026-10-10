@@ -5,8 +5,8 @@
 A deck that only plays at 0 % runs a small part of the DSP program; MASTER
 TEMPO and a fader off centre run its time-stretch and resampling code. This
 driver makes one session cover all of it, so the run-time JIT compiles it
-(./setup.sh's warm-up, through scripts/run/warm_jit.sh) or a recording
-profiles it (scripts/build/build_dsp_module.sh).
+(scripts/build/build_dsp_module.sh, through scripts/run/warm_jit.sh) profiles
+it for the DSP module.
 
 The deck loads and starts playing by itself. From --start virtual seconds on,
 PLAN repeats until --duration has passed; then the fader goes back to centre,
@@ -29,13 +29,12 @@ MT_KEY = (0x15, 0x10)
 FADER = "0x04:%d:0:lvl"          # the tempo fader byte; about 127 is centre
 CENTRE = 127
 
-# (virtual seconds into one pass, action): MASTER TEMPO on, the fader across
-# both sides of centre, MASTER TEMPO off for a stretch so plain resampling is
-# covered too, and off again at the end so every pass starts the same way.
-PLAN = [(0, "mt"), (5, 100), (20, 150), (35, 90), (50, 170), (65, CENTRE),
-        (75, "mt"), (80, 110), (95, 160), (110, "mt"), (115, 60), (130, 200),
-        (145, CENTRE), (150, "mt")]
-PERIOD = 160
+# (virtual seconds into one pass, action): MASTER TEMPO on, the fader on both
+# sides of centre, MASTER TEMPO off so plain resampling is covered too, and the
+# fader back to centre. A pass is short because the module is built from a play
+# of about 30 s; each setting runs 4-5 s, long enough for its code to get hot.
+PLAN = [(0, "mt"), (3, 100), (8, 170), (13, "mt"), (16, 90), (21, 160), (26, CENTRE)]
+PERIOD = 30
 
 
 def schedule(start, duration):

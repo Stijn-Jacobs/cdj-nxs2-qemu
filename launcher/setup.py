@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""From a fresh clone to a running, customised CDJ-2000NXS2, in one command.
+"""From a fresh clone to a running, customised player, in one command: the
+CDJ-2000NXS2 by default, or an older one with --model.
 
   ./setup.sh                 walk through everything, asking as it goes
   ./setup.sh --dry-run       show every step and command, change nothing
@@ -17,9 +18,10 @@ already there:
                     a rekordbox USB export, or a plain folder of music files
                     that baken (github.com/M-Igashi/baken, MIT) analyses --
                     no rekordbox needed
-  5 DSP code        one headless deck plays for a few minutes so the DSP JIT
-                    compiles its hot code into ~/c14gen; with --curated-jit,
-                    a profile-guided module built from a recording instead
+  5 DSP module      the DSP's hot code compiled to a native module in ~/c14gen
+                    from two 30 s plays of your own firmware (20-40 min; asked,
+                    or skipped with --skip-dsp). Built again when it was made
+                    from other code
   6 your setup      one deck or two, Pro DJ Link, audio, a MIDI controller,
                     saved to cdj.conf -- which ./start.sh then uses
   7 mods            small on/off tweaks to how the deck behaves (see
@@ -31,13 +33,14 @@ options:
   -y, --yes              never ask: take the defaults and the options below
   --skip-build           leave step 2 out (a build tree you made yourself)
   --rebuild              run step 2 even when the emulators are already built
-  --no-warm              leave step 5 out
-  --warm                 run step 5's warm-up even when the cache is warm
-  --curated-jit          step 5 builds the profile-guided DSP module (~1 h,
-                         ~16 GB free disk while it runs)
-  --keep-recording       keep that build's DSP recording (~10 GB) afterwards
+  --skip-dsp             leave step 5 out (./start.sh says how to build the module later)
   --reconfigure          ask the step 6 and 7 questions again
-  --firmware <file>      the C2KNXS2.UPD to use (re-installs the images)
+  --model <id>           the player: cdj2000nxs2 (default) or an older one in models/;
+                         asked when not given. An older player gets steps 1-4
+                         and a one-window start: no mods or deck setup, and a
+                         DSP module (step 5) for the ones with a DSP profile
+  --firmware <file>      your update file for that player (re-installs the images);
+                         C2KNXS2.UPD for the CDJ-2000NXS2
   --music <folder>       the rekordbox USB export to image (re-makes the stick)
   --tracks <folder>      a plain folder of music to image instead, analysed by baken
   --decks 1|2            --name <deck name>    --djlink on|off   --audio on|off
@@ -58,13 +61,13 @@ import sys
 import tempfile
 import time
 
-from . import baken, chain, conf, firmware, host, mods, pythons
+from . import baken, chain, conf, dsp_module, firmware, host, model, mods, pythons
 from .console import Console, dropped_path, stdin_is_tty
 from .layout import Layout
 
 USAGE = __doc__[__doc__.index("  ./setup.sh  "):__doc__.index("  -h, --help") + len("  -h, --help")] + "\n"
 
-VALUE_OPTS = {"--firmware": ("firmware", "a file"), "--music": ("music", "a folder"),
+VALUE_OPTS = {"--model": ("model", "a player"), "--firmware": ("firmware", "a file"), "--music": ("music", "a folder"),
               "--tracks": ("tracks", "a folder"),
               "--decks": ("decks", "1 or 2"), "--name": ("name", "a word"),
               "--djlink": ("djlink", "on or off"), "--audio": ("audio", "on or off"),
@@ -72,12 +75,13 @@ VALUE_OPTS = {"--firmware": ("firmware", "a file"), "--music": ("music", "a fold
               "--build-dir": ("build_dir", "a directory")}
 
 
+ON_OFF = ("on", "1", "yes", "y", "off", "0", "no", "n")
+
+
 class Options:
     def __init__(self):
-        self.dry = self.yes = self.skip_build = self.rebuild = self.reconfigure = False
-        self.warm = "auto"
-        self.curated = self.keep_recording = False
-        self.firmware = self.music = self.tracks = self.decks = self.name = self.djlink = ""
+        self.dry = self.yes = self.skip_build = self.rebuild = self.skip_dsp = self.reconfigure = False
+        self.model = self.firmware = self.music = self.tracks = self.decks = self.name = self.djlink = ""
         self.audio = self.controller = self.relay = self.build_dir = ""
 
 
@@ -96,17 +100,15 @@ def parse_args(argv):
             o.rebuild = True
         elif a == "--reconfigure":
             o.reconfigure = True
-        elif a == "--no-warm":
-            o.warm = "off"
-        elif a == "--warm":
-            o.warm = "force"
-        elif a == "--curated-jit":
-            o.curated = True
-        elif a == "--keep-recording":
-            o.keep_recording = True
+        elif a == "--skip-dsp":
+            o.skip_dsp = True
         elif a in VALUE_OPTS:
             attr, what = VALUE_OPTS[a]
             if i + 1 >= len(argv) or not argv[i + 1]:
+                sys.stderr.write("%s needs %s\n" % (a, what))
+                raise SystemExit(2)
+            if (attr in ("djlink", "audio") and argv[i + 1].lower() not in ON_OFF) or (
+                    attr == "relay" and not argv[i + 1].isdigit()):
                 sys.stderr.write("%s needs %s\n" % (a, what))
                 raise SystemExit(2)
             setattr(o, attr, argv[i + 1])
@@ -140,15 +142,11 @@ def _mb(path):
 
 
 def _onoff(v):
-    return "1" if v in ("on", "1", "yes", "y") else "0"
+    return "1" if v.lower() in ("on", "1", "yes", "y") else "0"
 
 
 def _yesno(v):
     return "on" if v == "1" else "off"
-
-
-def _modules(cache):
-    return len(glob.glob(os.path.join(cache, "batch*", "m.so")))
 
 
 class Setup:
@@ -178,9 +176,10 @@ class Setup:
             os.environ.update({"QEMU_BUILD": c["QEMU_BUILD"], "QEMU_EB_BUILD": c["QEMU_EB_BUILD"],
                                "C66X_JIT_LIBDIR": self.jit_libdir})
         self.c = c
+        self.configured = os.path.isfile(lay.conf) and bool(c["CDJ_DECKS"])
 
-        con._p("%sCDJ-2000NXS2 emulator setup%s" % (con.B, con.N))
-        con.dim("the real firmware of a Pioneer CDJ-2000NXS2, on emulated hardware")
+        con._p("%sCDJ emulator setup%s" % (con.B, con.N))
+        con.dim("the real firmware of a Pioneer CDJ, on emulated hardware")
         con.info("platform: %s%s, %s CPU threads%s" % (self.platform, " (WSL)" if self.wsl else "", self.cores,
                                                        ", packages via " + self.pkg if self.pkg else ""))
         con.info("this folder: %s" % host.posix(lay.emu if not lay.packaged else lay.data))
@@ -189,6 +188,7 @@ class Setup:
         if self.platform == host.UNKNOWN:
             con.die("only Windows (MSYS2), Linux and macOS are supported.")
 
+        self.choose_model()
         self.step_prerequisites()
         self.step_build()
         self.step_firmware()
@@ -197,6 +197,42 @@ class Setup:
         self.step_config()
         self.step_mods()
         return self.summary()
+
+    def choose_model(self):
+        """The player this setup is for: --model, else asked (Enter keeps the
+        one in cdj.conf, or the CDJ-2000NXS2). A run that cannot ask keeps it."""
+        con, o, c = self.con, self.o, self.c
+        known = model.list_models()
+        stored = c["CDJ_MODEL"] or model.DEFAULT
+        wanted = o.model
+        try:
+            if not wanted:
+                wanted = stored
+                fresh = not os.path.isfile(self.lay.conf)
+                if con.interactive and (fresh or o.reconfigure or con.ask_yn(
+                        "player: %s. choose a different one?" % model.load(stored).title, "n")):
+                    titles = {m: model.load(m).title for m in known}
+                    con.info("Players: %s" % ", ".join("%s (%s)" % (m, t) for m, t in titles.items()))
+                    wanted = con.choose("which player?", stored, *known,
+                                        aliases={t.lower(): m for m, t in titles.items()})
+            self.model = model.load(wanted)
+        except model.ModelError as e:
+            con.die(str(e))
+        c["CDJ_MODEL"] = self.model.id
+        # Saved now: a later step that stops setup (no firmware for the new
+        # player, say) would otherwise leave cdj.conf on the old one.
+        if self.model.id != stored and not o.dry and os.path.isfile(self.lay.conf):
+            conf.save(self.lay.conf, dict(self.values, CDJ_MODEL=self.model.id))
+        if not self.model.is_rig:
+            con.info("player: %s (one window; no mods or deck setup%s)"
+                     % (self.model.title, "" if self.model.has_dsp_module else ", no DSP code"))
+
+    @property
+    def fw_dir(self):
+        return model.extract_dir(self.lay, self.model)
+
+    def firmware_ready(self):
+        return firmware.installed(self.fw_dir, self.model.id)
 
     def _package_manager(self):
         if self.platform == host.WINDOWS:
@@ -362,6 +398,8 @@ class Setup:
         if self.lay.packaged:
             main, gui = self.lay.qemu_binaries()
             return main, gui, os.path.join(self.lay.runtime, "qemu", "libc66x.so")
+        if not self.model.is_rig:
+            return os.path.join(host.native(self.c["QEMU_BUILD"]), "qemu-system-sh4" + sfx), "", ""
         return (os.path.join(host.native(self.c["QEMU_BUILD"]), "qemu-system-sh4" + sfx),
                 os.path.join(host.native(self.c["QEMU_EB_BUILD"]), "qemu-system-sh4eb" + sfx),
                 os.path.join(self.jit_libdir, "libc66x.so"))
@@ -373,7 +411,8 @@ class Setup:
         if lay.packaged:
             con.good("prebuilt: %s" % os.path.dirname(main))
             return
-        con.info("build trees: %s, %s" % (self.c["QEMU_BUILD"], self.c["QEMU_EB_BUILD"]))
+        con.info("build trees: %s%s" % (self.c["QEMU_BUILD"],
+                                         ", " + self.c["QEMU_EB_BUILD"] if self.model.is_rig else ""))
         if o.skip_build:
             con.dim("skipped (--skip-build)")
             return
@@ -387,7 +426,7 @@ class Setup:
              "this project's patches to QEMU"),
             (3, "main", main,
              "a missing library shows as a meson 'Dependency ... not found' above; step 1 lists the package",
-             "the MAIN emulator (SH-4 + the CDJ-2000NXS2 board; the long one, 10-40 min)"),
+             "the MAIN emulator (SH-4 + the player boards; the long one, 10-40 min)"),
             (4, "display", gui,
              "same toolchain as 2.3; if that worked, look for a disk-full or gtk3 error above",
              "the display-board emulator (SH-2A)"),
@@ -395,6 +434,8 @@ class Setup:
              "the DSP core library for the run-time JIT"),
         )
         for n, name, artifact, hint, label in phases:
+            if not self.model.is_rig and name in ("display", "dsp"):
+                continue
             if artifact and os.path.exists(artifact) and not o.rebuild:
                 con.good("%s  %s(already built: %s)%s" % (label, con.D, artifact, con.N))
                 continue
@@ -406,35 +447,40 @@ class Setup:
                 con.die("the build stopped at phase 2.%d" % n)
 
     def step_firmware(self):
-        con, o, lay = self.con, self.o, self.lay
+        con, o, lay, m = self.con, self.o, self.lay, self.model
         con.step(3, "Firmware (your own update file)")
-        shown = os.path.relpath(lay.extract, lay.root) if not lay.packaged else lay.extract
-        if firmware.installed(lay.extract) and not o.firmware:
+        shown = os.path.relpath(self.fw_dir, lay.root) if not lay.packaged else self.fw_dir
+        if self.firmware_ready() and not o.firmware:
             con.good("firmware images in %s/ (checked when they were installed)" % shown)
             return
-        con.info("The emulator boots the CDJ-2000NXS2's own firmware, and this repository")
+        names = " ".join(m.upd)
+        con.info("The emulator boots the %s's own firmware, and this repository" % m.title)
         con.info("contains none of it. You need Pioneer DJ's public update file for the")
-        con.info("CDJ-2000NXS2, %sversion 1.87%s (C2KNXS2.UPD), from their support site." % (con.B, con.N))
+        con.info("%s, %sversion %s%s (%s), from their support site." % (
+            m.title, con.B, m.fw_version, con.N, names))
+        if len(m.upd) > 1:
+            con.info("It is %d files; name any one of them, the others must lie beside it." % len(m.upd))
         upd = o.firmware
         while not upd or not os.path.isfile(upd):
             if not con.interactive:
                 if o.dry:
-                    con.would("scripts/firmware/prepare_firmware.sh --install <your C2KNXS2.UPD>")
+                    con.would("scripts/firmware/prepare_firmware.sh --model %s --install <your %s>" % (m.id, names))
                     return
-                con.die("no firmware: pass --firmware /path/to/C2KNXS2.UPD")
+                con.die("no firmware: pass --firmware /path/to/%s" % m.upd[0])
             if upd:
                 con.warn("no such file: %s" % upd)
-            upd = dropped_path(con.ask("path to C2KNXS2.UPD (drag the file here):", ""),
+            upd = dropped_path(con.ask("path to %s (drag the file here):" % m.upd[0], ""),
                                self.platform == host.WINDOWS)
-        force = any(os.path.exists(os.path.join(lay.extract, f)) for f in firmware.IMAGES)
+        force = any(os.path.exists(os.path.join(self.fw_dir, f)) for f in m.images)
         label = "unpacking and verifying %s" % os.path.basename(upd)
         log = os.path.join(lay.logs, "firmware.log")
-        argv, env = launcher_cmd("firmware", "--install", *(["--force"] if force else []), upd)
-        if not con.run_phase(label, log, "only the v1.87 update (sha256 f211191a...) is supported; "
-                             "the log says which image differed", argv, rel=lay.emu, env=env):
-            con.die("the firmware was not installed; nothing in extract/ changed")
-        if firmware.installed(lay.extract) and not o.dry:
-            con.good("six images installed in %s/" % shown)
+        argv, env = launcher_cmd("firmware", "--model", m.id, "--install", *(["--force"] if force else []), upd)
+        if not con.run_phase(label, log, "only the v%s update (sha256 %s...) is supported; "
+                             "the log says which image differed" % (m.fw_version, m.upd_sha256[0][:8]),
+                             argv, rel=lay.emu, env=env):
+            con.die("the firmware was not installed; nothing in %s/ changed" % shown)
+        if self.firmware_ready() and not o.dry:
+            con.good("%d images installed in %s/" % (len(m.images), shown))
 
     def make_image(self, folder, expect_pioneer=True):
         con, lay = self.con, self.lay
@@ -547,7 +593,8 @@ class Setup:
                 con.die("no USB image: pass --music <a rekordbox export folder>, or --tracks <a folder of music>")
             music, tracks = self._choose_usb_source()
 
-        os.makedirs(lay.extract, exist_ok=True)
+        if not o.dry:
+            os.makedirs(lay.extract, exist_ok=True)
         if tracks:
             while not os.path.isdir(tracks):
                 if not con.interactive:
@@ -571,7 +618,7 @@ class Setup:
 
     def deck_ready(self):
         main, gui, dsp = self.binaries()
-        return all(os.path.exists(p) for p in (main, gui, dsp)) and firmware.installed(self.lay.extract) \
+        return all(os.path.exists(p) for p in (main, gui, dsp) if p) and self.firmware_ready() \
             and os.path.isfile(self.lay.usb_image)
 
     def _stop_background(self):
@@ -580,104 +627,75 @@ class Setup:
         self.con.die("stopped; the headless deck was shut down")
 
     def step_dsp(self):
-        con, o, lay = self.con, self.o, self.lay
-        cache = lay.jit_cache
-        shown = "~/c14gen" if not lay.packaged else cache
-        curated_so = os.path.join(cache, "curated", "m.so")
-        con.step(5, "DSP code (the JIT's cache)")
-        con.info("The DSP program runs through a JIT that compiles its hot code to native")
-        con.info("modules, cached in %s. Until they are there a deck runs slower than" % shown)
-        con.info("real time (audio gaps), so setup builds them now.")
-        done = False
-        if o.curated:
-            if lay.packaged:
-                con.warn("the curated module is a maintainer build; the packaged program uses the warm-up")
-            else:
-                done = self._curated(curated_so)
-            if not done:
-                # Without this the "already warm" line below reads as if the curated build ran.
-                con.warn("--curated-jit did NOT build a module (the reason is above);")
-                con.warn("check it with: bash scripts/build/build_dsp_module.sh --preflight")
-        if done:
+        con, o, lay, m = self.con, self.o, self.lay, self.model
+        con.step(5, "DSP module")
+        if not m.builds_dsp_module:
+            con.dim("not needed for the %s: its DSP is not emulated" % m.title)
             return
-        n = _modules(cache)
-        warm, env = launcher_cmd("run", "warm_jit", "warm")
-        log = os.path.join(lay.logs, "warm-jit-%s.log" % self.ts)
-        if o.warm == "off":
-            con.dim("warm-up skipped (--no-warm): the first minutes of your first sessions will be slow")
-        elif os.path.isfile(curated_so) and o.warm != "force":
-            con.good("curated module in %s/curated: nothing to warm" % shown)
-        elif n > 0 and o.warm != "force":
-            con.good("already warm: %d compiled modules in %s (--warm adds more)" % (n, shown))
+        shown = "~/c14gen" if not lay.packaged else lay.jit_cache
+        module = dsp_module.check(lay, m)
+        if module.path and not module.notice:
+            con.good("DSP module: %s/%s/m.so (built from this code)" % (shown, m.module_dir))
+            return
+        con.info("The %s's DSP program runs through a native module generated from your" % m.title)
+        con.info("own firmware and installed in %s/%s. Without it the sound gaps." % (shown, m.module_dir))
+        if os.path.isfile(os.path.join(lay.jit_cache, m.module_dir, "m.so")):
+            con.warn("the installed module was not built from this code, so it is built again")
+        if o.skip_dsp:
+            con.dim("skipped (--skip-dsp): %s builds it later" % dsp_module.build_command(lay, m))
+        elif lay.packaged:
+            con.warn("the DSP module is a maintainer build; the packaged program has none for the %s yet" % m.title)
         elif not o.dry and not self.deck_ready():
-            con.warn("warm-up skipped: it needs the emulators, the firmware and the USB stick;")
-            con.warn("run ./setup.sh --warm once they are there")
-        elif o.warm == "auto" and not con.ask_yn(
-                "warm it now? (one headless deck plays for about 15 minutes)", "y"):
-            con.dim("skipped; ./setup.sh --warm does it later")
+            con.warn("the DSP module needs the emulators, the firmware and the USB stick first;")
+            con.warn("run %s once they are there" % dsp_module.build_command(lay, m))
+        elif not con.ask_yn("build it now? (about 20-40 minutes, ~2 GB free disk while it runs)", "y"):
+            con.dim("skipped; %s builds it later" % dsp_module.build_command(lay, m))
         else:
-            try:
-                ok = con.run_phase("warming the DSP JIT: a headless deck plays with a tempo sweep (~15 min)",
-                                   log, "the deck's own log is %s; ./setup.sh --warm tries again"
-                                   % os.path.join(lay.tmp, "bridge-main-warm1.log"), warm, rel=lay.emu, env=env)
-            except KeyboardInterrupt:
-                self._stop_background()
-            if ok and o.dry:
-                subprocess.run(warm + ["--dry-run"], env=env)
-            elif ok:
-                text = _read(log)
-                built = re.findall(r"^warm: (\d+) new", text, re.M)
-                auto = [ln for ln in text.splitlines() if "c66x jit auto:" in ln]
-                if auto:
-                    con.dim(auto[-1].split("c66x jit ", 1)[-1])
-                if built and int(built[-1]) > 0:
-                    con.good("%s new modules compiled; %d in %s" % (built[-1], _modules(cache), shown))
-                else:
-                    con.warn("the JIT compiled nothing new; the end of %s says why" % os.path.relpath(log, lay.emu))
+            self._build_module()
 
-    def _curated(self, curated_so):
-        con, o, lay = self.con, self.o, self.lay
+    def _build_module(self):
+        con, o, lay, m = self.con, self.o, self.lay, self.model
         bash = host.find_bash() or "bash"
         cmd = [bash, host.posix(os.path.join(lay.scripts, "build", "build_dsp_module.sh"))]
-        if o.keep_recording:
-            cmd.append("--keep-recording")
+        env = dict(os.environ, CDJ_MODEL=m.id)
         log = os.path.join(lay.logs, "dsp-module-%s.log" % self.ts)
         if o.dry:
             con.would("%s > logs/dsp-module-%s.log, which runs:" % (" ".join(cmd), self.ts))
-            r = subprocess.run(cmd + ["--dry-run"], capture_output=True, text=True)
+            r = subprocess.run(cmd + ["--dry-run"], capture_output=True, text=True, env=env)
             for line in (r.stdout + r.stderr).splitlines():
                 con._p("      " + line)
-            return True
-        if not self.deck_ready():
-            con.warn("the curated module needs the emulators, the firmware and the USB stick first")
-            return False
-        r = subprocess.run(cmd + ["--preflight"], capture_output=True, text=True)
+            return
+        r = subprocess.run(cmd + ["--preflight"], capture_output=True, text=True, env=env)
         if r.returncode != 0:
-            con.warn("no curated module: %s" % "; ".join((r.stdout + r.stderr).strip().splitlines()))
-            return False
+            con.warn("no DSP module: %s" % "; ".join((r.stdout + r.stderr).strip().splitlines()))
+            return
         try:
-            ok = con.run_phase("curated DSP module: record, generate, profile-guided build (about an hour)", log,
-                               "the deck's own log is %s; a module that does not replay EXACT is not installed"
-                               % os.path.join(lay.tmp, "bridge-main-rec1.log"), cmd, rel=lay.emu)
+            ok = con.run_phase("DSP module: profile, generate, profile-guided build (20-40 minutes)", log,
+                               "the deck's own log is %s; %s tries again"
+                               % (os.path.join(lay.tmp, "bridge-main-prof1.log"), dsp_module.build_command(lay, m)),
+                               cmd, rel=lay.emu, env=env)
         except KeyboardInterrupt:
             self._stop_background()
         if ok:
-            con.good("installed ~/c14gen/curated/m.so: ./start.sh loads it from now on")
-            return True
-        con.warn("no curated module; falling back to the quick warm-up")
-        return False
+            con.good("installed ~/c14gen/%s/m.so: ./start.sh loads it from now on" % m.module_dir)
 
     def step_config(self):
         con, o, c, lay = self.con, self.o, self.c, self.lay
         con.step(6, "Your setup")
+        if not self.model.is_rig:
+            con.dim("nothing to ask: the %s starts as one window with your stick" % self.model.title)
+            self.ask5 = self._conf_differs()
+            return
         asked = bool(o.decks or o.name or o.djlink or o.audio or o.controller or o.relay)
-        if os.path.isfile(lay.conf) and not o.reconfigure and not asked:
+        if self.configured and not o.reconfigure and not asked:
             con.good("keeping your setup in cdj.conf (./setup.sh --reconfigure to change it)")
-            self.ask5 = False
+            self.ask5 = self._conf_differs()
         else:
             self.ask5 = True
         if self.ask5:
             self._questions()
+            if not o.dry:
+                conf.save(lay.conf, self._conf_values(mods.load(lay)))
         # A kept setup still takes the Pythons found now, e.g. after installing mido.
         if not self.ask5 and not lay.packaged and (
                 (self.py_midi and not _same(self.py_midi, c["CDJ_MIDI_PYTHON"]))
@@ -686,14 +704,24 @@ class Setup:
             c["CDJ_TOOLS_PYTHON"] = host.posix(self.py_tools or c["CDJ_TOOLS_PYTHON"])
             self.ask5 = True
 
-    def _save_conf(self, mod_list):
-        con, o, c, lay = self.con, self.o, self.c, self.lay
+    def _conf_differs(self):
+        """Whether cdj.conf lacks something this run decided (the player, a
+        build directory), so that a kept setup still writes it."""
+        return not os.path.isfile(self.lay.conf) or any(self.c[k] != self.values.get(k, "") for k in conf.KEYS)
+
+    def _conf_values(self, mod_list):
+        c = self.c
         values = dict(self.values)
         values.update({k: c[k] for k in conf.KEYS})
         for m in mod_list:
             confkey = mods.conf_key(m.env)
             val = c.get(confkey, "")
             values[confkey] = val if val in (m.on, m.off) else (m.on if m.default == "on" else m.off)
+        return values
+
+    def _save_conf(self, mod_list):
+        con, o, lay = self.con, self.o, self.lay
+        values = self._conf_values(mod_list)
         if o.dry:
             con.info("(dry run) would write cdj.conf:")
             for line in conf.render(values).splitlines():
@@ -705,10 +733,15 @@ class Setup:
     def step_mods(self):
         con, o, c, lay = self.con, self.o, self.c, self.lay
         con.step(7, "Mods")
+        if not self.model.is_rig:
+            con.dim("the mods patch the CDJ-2000NXS2's firmware: skipped for the %s" % self.model.title)
+            if self.ask5:
+                self._save_conf([])
+            return
         con.info("Small on/off tweaks to how the deck behaves, each with its own default;")
         con.info("./setup.sh --reconfigure asks again, or edit cdj.conf by hand.")
         mod_list = mods.load(lay)
-        if os.path.isfile(lay.conf) and not o.reconfigure:
+        if self.configured and not o.reconfigure:
             con.good("keeping your mods in cdj.conf (./setup.sh --reconfigure to change them)")
             ask7 = False
         else:
@@ -741,8 +774,8 @@ class Setup:
         if o.djlink:
             c["CDJ_DJLINK"] = _onoff(o.djlink)
         else:
-            c["CDJ_DJLINK"] = _onoff(con.choose("Pro DJ Link network?",
-                                                "on" if c["CDJ_DECKS"] == "2" else "off", "on", "off"))
+            djlink = c["CDJ_DJLINK"] or ("1" if c["CDJ_DECKS"] == "2" else "0")
+            c["CDJ_DJLINK"] = _onoff(con.choose("Pro DJ Link network?", _yesno(djlink), "on", "off"))
         if o.audio:
             c["CDJ_AUDIO"] = _onoff(o.audio)
         else:
@@ -804,11 +837,12 @@ class Setup:
         c["CDJ_RELAY_PORT"] = str(port)
         if port != want:
             con.warn("TCP %d is reserved or in use here; the controller relay uses %d" % (want, port))
-        gport = int((c["CDJ_GROUP"] or "239.77.77.1:45000").rsplit(":", 1)[-1] or 45000)
+        group_ip, _, group_port = (c["CDJ_GROUP"] or "239.77.77.1:45000").rpartition(":")
+        gport = int(group_port or 45000)
         gfree = host.pick_udp_port(gport)
         if gfree != gport and c["CDJ_DJLINK"] == "1":
             con.warn("UDP %d is reserved by Windows; Pro DJ Link uses %d" % (gport, gfree))
-        c["CDJ_GROUP"] = "239.77.77.1:%d" % gfree
+        c["CDJ_GROUP"] = "%s:%d" % (group_ip or "239.77.77.1", gfree)
         if not lay.packaged:
             c["CDJ_MIDI_PYTHON"] = host.posix(self.py_midi or "")
             c["CDJ_TOOLS_PYTHON"] = host.posix(self.py_tools or "")
@@ -816,6 +850,13 @@ class Setup:
     def summary(self):
         con, c, lay, o = self.con, self.c, self.lay, self.o
         con._p("\n%sReady.%s" % (con.B + con.G, con.N))
+        run = "CDJ-Emulator" if lay.packaged else "./start.sh"
+        if not self.model.is_rig:
+            con.info("player       %s" % self.model.title)
+            if self.model.has_dsp_module:
+                con.info("DSP module   %s" % self._module_summary())
+            con.info("start it:    %s%s%s      stop: Ctrl-C (or close the window)" % (con.B, run, con.N))
+            return self.offer_start()
         decks = c["CDJ_DECKS"] or "1"
         name = c["CDJ_NAME"] or "show"
         con.info("decks        %s (%s1%s)" % (decks, name, ", %s2" % name if decks == "2" else ""))
@@ -824,22 +865,25 @@ class Setup:
         con.info("sound        %s" % _yesno(c["CDJ_AUDIO"] or "1"))
         ctl = c["CDJ_CONTROLLER"] or "none"
         con.info("controller   %s%s" % (ctl, " (relay on 127.0.0.1:%s)" % c["CDJ_RELAY_PORT"] if ctl != "none" else ""))
-        cache = lay.jit_cache
-        shown = "~/c14gen" if not lay.packaged else cache
-        if os.path.isfile(os.path.join(cache, "curated", "m.so")):
-            con.info("DSP JIT      curated module (%s/curated)" % shown)
-        elif _modules(cache) > 0:
-            con.info("DSP JIT      %d cached modules (%s)" % (_modules(cache), shown))
-        else:
-            con.info("DSP JIT      cold: the first minutes of your first sessions will be slow")
+        con.info("DSP module   %s" % self._module_summary())
         mod_line = ", ".join("%s=%s" % (m.key, "on" if c.get(mods.conf_key(m.env)) == m.on else "off")
                               for m in mods.load(lay))
         con.info("mods         %s" % mod_line)
-        run = "CDJ-Emulator" if lay.packaged else "./start.sh"
         con.info("start it:    %s%s%s      stop: Ctrl-C (or %s stop from another shell)" % (con.B, run, con.N, run))
-        main = self.binaries()[0]
-        if (not o.dry and con.interactive and firmware.installed(lay.extract) and os.path.isfile(lay.usb_image)
-                and os.path.exists(main) and con.ask_yn("start the deck now?", "y")):
+        return self.offer_start()
+
+    def _module_summary(self):
+        module = dsp_module.check(self.lay, self.model)
+        if module.path and not module.notice:
+            return "built (%s)" % self.model.module_dir
+        if module.path:
+            return "built before modules were stamped; %s rebuilds it" % dsp_module.build_command(self.lay, self.model)
+        return "none usable yet: the sound will gap (%s builds it)" % dsp_module.build_command(self.lay, self.model)
+
+    def offer_start(self):
+        con, lay = self.con, self.lay
+        if (not self.o.dry and con.interactive and self.firmware_ready() and os.path.isfile(lay.usb_image)
+                and os.path.exists(self.binaries()[0]) and con.ask_yn("start the deck now?", "y")):
             from . import start
 
             return start.main([])
@@ -847,7 +891,13 @@ class Setup:
 
 
 def ready(lay):
-    return os.path.isfile(lay.conf) and firmware.installed(lay.extract) and os.path.isfile(lay.usb_image)
+    if not os.path.isfile(lay.conf):
+        return False
+    try:
+        player = model.load(conf.load(lay.conf).get("CDJ_MODEL") or None)
+    except model.ModelError:
+        return False
+    return firmware.installed(model.extract_dir(lay, player), player.id) and os.path.isfile(lay.usb_image)
 
 
 def missing_prerequisites(platform):

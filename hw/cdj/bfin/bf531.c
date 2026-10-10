@@ -9,6 +9,7 @@
 #include "bf531.h"
 #include <stdarg.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -659,10 +660,40 @@ uint16_t bf531_flags(const bf531 *s)
 
 /* LDR block: u32 destination, u32 byte count, u16 flags; bit 0 zero-fill
  * (no payload), bit 4 ignore (payload skipped), bit 15 the last block. */
+/* A whole .UPD starts with the section lengths as decimal lines; the display
+ * program is the first section. A bare section starts with its title. */
+static void first_section(const uint8_t **img, size_t *len)
+{
+    const uint8_t *p = *img, *end = *img + *len;
+    size_t first = 0;
+    bool seen = false;
+
+    while (p < end && *p >= '0' && *p <= '9') {
+        size_t n = 0;
+
+        while (p < end && *p >= '0' && *p <= '9') {
+            n = n * 10 + *p++ - '0';
+        }
+        if (end - p < 2 || p[0] != '\r' || p[1] != '\n') {
+            return;
+        }
+        p += 2;
+        if (!seen) {
+            first = n;
+            seen = true;
+        }
+    }
+    if (seen && first <= (size_t)(end - p)) {
+        *img = p;
+        *len = first;
+    }
+}
+
 int bf531_load_update(bf531 *s, const uint8_t *img, size_t len)
 {
     size_t off = 0x20;
 
+    first_section(&img, &len);
     if (len - off > FLASH_SIZE - FLASH_APP) {
         return -1;
     }
@@ -771,6 +802,47 @@ bfin_core *bf531_core(bf531 *s)
 uint64_t bf531_frames(const bf531 *s)
 {
     return s->frames;
+}
+
+/* ---- snapshots ---------------------------------------------------------- */
+
+/* The SoC's state between two runs, as (offset, length) runs of the struct:
+ * the L1 banks, every register through the DMA channels, the frame count and
+ * the standing SPORT1 packet. The SDRAM and the core follow them. */
+#define SNAP_RUN(first, end) { offsetof(bf531, first),                                offsetof(bf531, end) - offsetof(bf531, first) }
+
+static const struct { size_t off, len; } snap_runs[] = {
+    SNAP_RUN(l1_data_a, flash),
+    SNAP_RUN(mmr, fb),
+    { offsetof(bf531, frames), sizeof(uint64_t) },
+    { offsetof(bf531, sport1_rx), sizeof(bf531) - offsetof(bf531, sport1_rx) },
+};
+
+size_t bf531_save(const bf531 *s, uint8_t *buf)
+{
+    size_t at = 0;
+
+    for (size_t i = 0; i < sizeof(snap_runs) / sizeof(snap_runs[0]); i++) {
+        if (buf) {
+            memcpy(buf + at, (const uint8_t *)s + snap_runs[i].off, snap_runs[i].len);
+        }
+        at += snap_runs[i].len;
+    }
+    if (buf) {
+        memcpy(buf + at, s->sdram, s->sdram_size);
+    }
+    at += s->sdram_size;
+    return at + bfin_snap_save(s->core, buf ? buf + at : NULL);
+}
+
+void bf531_load(bf531 *s, const uint8_t *buf)
+{
+    for (size_t i = 0; i < sizeof(snap_runs) / sizeof(snap_runs[0]); i++) {
+        memcpy((uint8_t *)s + snap_runs[i].off, buf, snap_runs[i].len);
+        buf += snap_runs[i].len;
+    }
+    memcpy(s->sdram, buf, s->sdram_size);
+    bfin_snap_load(s->core, buf + s->sdram_size);
 }
 
 const uint8_t *bf531_sdram(const bf531 *s, uint32_t *size)

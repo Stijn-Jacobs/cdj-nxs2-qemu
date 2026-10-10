@@ -1,5 +1,5 @@
 diff --git a/hw/char/sh_serial.c b/hw/char/sh_serial.c
-index 355886e..f9c9b7d 100644
+index 355886e..d45b86d 100644
 --- a/hw/char/sh_serial.c
 +++ b/hw/char/sh_serial.c
 @@ -28,6 +28,8 @@
@@ -11,7 +11,15 @@ index 355886e..f9c9b7d 100644
  #include "hw/qdev-core.h"
  #include "hw/qdev-properties.h"
  #include "hw/qdev-properties-system.h"
-@@ -90,6 +92,40 @@ static void sh_serial_clear_fifo(SHSerialState *s)
+@@ -35,6 +37,7 @@
+ #include "chardev/char-fe.h"
+ #include "qapi/error.h"
+ #include "qemu/timer.h"
++#include "migration/vmstate.h"
+ #include "qemu/log.h"
+ #include "trace.h"
+ 
+@@ -90,6 +93,40 @@ static void sh_serial_clear_fifo(SHSerialState *s)
      s->rx_tail = 0;
  }
  
@@ -52,7 +60,7 @@ index 355886e..f9c9b7d 100644
  static void sh_serial_write(void *opaque, hwaddr offs,
                              uint64_t val, unsigned size)
  {
-@@ -97,6 +133,7 @@ static void sh_serial_write(void *opaque, hwaddr offs,
+@@ -97,6 +134,7 @@ static void sh_serial_write(void *opaque, hwaddr offs,
      DeviceState *d = DEVICE(s);
      unsigned char ch;
  
@@ -60,7 +68,7 @@ index 355886e..f9c9b7d 100644
      trace_sh_serial_write(d->id, size, offs, val);
      switch (offs) {
      case 0x00: /* SMR */
-@@ -216,6 +253,7 @@ static uint64_t sh_serial_read(void *opaque, hwaddr offs,
+@@ -216,6 +254,7 @@ static uint64_t sh_serial_read(void *opaque, hwaddr offs,
      DeviceState *d = DEVICE(s);
      uint32_t ret = UINT32_MAX;
  
@@ -68,3 +76,42 @@ index 355886e..f9c9b7d 100644
  #if 0
      switch (offs) {
      case 0x00:
+@@ -453,6 +492,30 @@ static Property sh_serial_properties[] = {
+     DEFINE_PROP_END_OF_LIST()
+ };
+ 
++static const VMStateDescription vmstate_sh_serial = {
++    .name = "sh_serial",
++    .version_id = 1,
++    .minimum_version_id = 1,
++    .fields = (const VMStateField[]) {
++        VMSTATE_UINT8(smr, SHSerialState),
++        VMSTATE_UINT8(brr, SHSerialState),
++        VMSTATE_UINT8(scr, SHSerialState),
++        VMSTATE_UINT8(dr, SHSerialState),
++        VMSTATE_UINT8(sr, SHSerialState),
++        VMSTATE_UINT16(fcr, SHSerialState),
++        VMSTATE_UINT8(sptr, SHSerialState),
++        VMSTATE_UINT8_ARRAY(rx_fifo, SHSerialState, SH_RX_FIFO_LENGTH),
++        VMSTATE_UINT8(rx_cnt, SHSerialState),
++        VMSTATE_UINT8(rx_tail, SHSerialState),
++        VMSTATE_UINT8(rx_head, SHSerialState),
++        VMSTATE_INT32(flags, SHSerialState),
++        VMSTATE_INT32(rtrg, SHSerialState),
++        VMSTATE_TIMER(fifo_timeout_timer, SHSerialState),
++        VMSTATE_UINT64(etu, SHSerialState),
++        VMSTATE_END_OF_LIST()
++    }
++};
++
+ static void sh_serial_class_init(ObjectClass *oc, void *data)
+ {
+     DeviceClass *dc = DEVICE_CLASS(oc);
+@@ -460,6 +523,7 @@ static void sh_serial_class_init(ObjectClass *oc, void *data)
+     device_class_set_props(dc, sh_serial_properties);
+     dc->realize = sh_serial_realize;
+     dc->reset = sh_serial_reset;
++    dc->vmsd = &vmstate_sh_serial;
+     /* Reason: part of SuperH CPU/SoC, needs to be wired up */
+     dc->user_creatable = false;
+ }

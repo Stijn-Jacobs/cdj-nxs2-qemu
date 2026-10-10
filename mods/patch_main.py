@@ -33,6 +33,7 @@ engine moves the site's span into one trampoline that runs it once and then
 calls each selected mod's routine in registry order -- see
 sigpatch.trampoline() for the code and the contract a hook routine follows.
 """
+import glob
 import os
 import subprocess
 import sys
@@ -225,6 +226,28 @@ MODS = {
         hook=True,
         **PREVIEW_READ,
     ),
+    # Hooks PREVIEW_READ: reads the track's PSSI and beat grid and reduces them
+    # to the 600-column phrase table phrasedata writes.
+    'phrasefetch': Mod(
+        what='phrase analysis (PSSI) read and reduced to overview columns',
+        target='main',
+        fw_versions=('1.87',),
+        args=[],
+        literal=False,
+        hook=True,
+        **PREVIEW_READ,
+    ),
+    # Hooks OVERVIEW_PUBLISH: writes the phrase table phrasefetch kept into the
+    # overview records' spare bits (see main_phrasedata.s).
+    'phrasedata': Mod(
+        what='phrase colours in the overview payload',
+        target='main',
+        fw_versions=('1.87',),
+        args=[],
+        literal=False,
+        hook=True,
+        **OVERVIEW_PUBLISH,
+    ),
     'abletonlink': Mod(
         what='Ableton Link announcements (UDP 20808)',
         target='main',
@@ -310,11 +333,12 @@ MODS = {
 
 
 def source(name):
-    return os.path.join(HERE, 'main_%s.s' % name)
+    """Each routine sits in its own mod's folder, mods/<mod>/."""
+    return glob.glob(os.path.join(HERE, '*', 'main_%s.s' % name))[0]
 
 
 def blob_path(name):
-    return os.path.join(HERE, 'main_%s.bin' % name)
+    return source(name)[:-2] + '.bin'
 
 
 def patch(data, names):
@@ -341,7 +365,8 @@ def assemble():
     with tempfile.TemporaryDirectory() as tmp:
         for name in MODS:
             obj = os.path.join(tmp, name + '.o')
-            subprocess.run(['sh4-linux-gnu-as', '--isa=sh4', '-little', '-I', HERE,
+            subprocess.run(['sh4-linux-gnu-as', '--isa=sh4', '-little',
+                            '-I', os.path.dirname(source(name)),
                             '-o', obj, source(name)], check=True)
             subprocess.run(['sh4-linux-gnu-objcopy', '-O', 'binary',
                             obj, blob_path(name)], check=True)

@@ -14,20 +14,22 @@
  */
 #define CDJ_DMAC_SIZE   0x2000
 #define DMAC_UNIT       16
+#define DMAC_CHANNELS   6
 
 typedef struct CdjDmacState {
     MemoryRegion iomem;
-    /* DEI lines for channels 0..3 (DMAC0A); NULL for the rest. */
-    qemu_irq dei[4];
-    QEMUBH *dei_bh[4];
-    QEMUTimer *dei_timer[4];
+    /* DEI lines per channel; NULL where the board connects none. */
+    qemu_irq dei[DMAC_CHANNELS];
+    QEMUBH *dei_bh[DMAC_CHANNELS];
+    QEMUTimer *dei_timer[DMAC_CHANNELS];
+    int64_t dei_deadline[DMAC_CHANNELS];    /* migrated: a pending timer's expiry, -1 none */
     /* Raises vs acknowledgements per channel; a big gap means a storm. */
-    unsigned dei_raised[4];
-    unsigned dei_acked[4];
+    unsigned dei_raised[DMAC_CHANNELS];
+    unsigned dei_acked[DMAC_CHANNELS];
     /* Cap on raises per channel, 0 = unlimited. A storming source is
      * silenced with one warning instead of starving the boot. */
-    unsigned dei_max[4];
-    bool dei_capped[4];
+    unsigned dei_max[DMAC_CHANNELS];
+    bool dei_capped[DMAC_CHANNELS];
     /* Channels armed against a peripheral FIFO and waiting for its DREQ,
      * one bit per register block. */
     uint32_t dreq_pending;
@@ -251,9 +253,10 @@ static void cdj_dmac_write(void *opaque, hwaddr off, uint64_t val, unsigned size
         unsigned ch = chn < 0 ? ARRAY_SIZE(s->dei) : (unsigned)chn;
         unsigned slot = chan / 16;
 
-        /* DEI is held while TE is set; the ack is a write clearing a TE
-         * that was set (not the arming write). */
-        if ((was & 0x02) && !(val & 0x02) &&
+        /* DEI is held while TE and IE are both set; the ack is a write
+         * clearing a TE or IE that was set (not the arming write). */
+        if ((((was & 0x02) && !(val & 0x02)) ||
+             ((was & 0x04) && !(val & 0x04))) &&
             ch < ARRAY_SIZE(s->dei) && s->dei[ch]) {
             if (s->dei_bh[ch]) {
                 qemu_bh_cancel(s->dei_bh[ch]);
@@ -336,6 +339,61 @@ static void cdj_dmac_dump(Notifier *n, void *unused)
     }
 }
 
+static int cdj_dmac_pre_save(void *opaque)
+{
+    CdjDmacState *s = opaque;
+
+    for (unsigned i = 0; i < ARRAY_SIZE(s->dei_timer); i++) {
+        s->dei_deadline[i] = s->dei_timer[i] ? timer_expire_time_ns(s->dei_timer[i]) : -1;
+    }
+    return 0;
+}
+
+static int cdj_dmac_post_load(void *opaque, int version_id)
+{
+    CdjDmacState *s = opaque;
+
+    for (unsigned i = 0; i < ARRAY_SIZE(s->dei_timer); i++) {
+        if (s->dei_timer[i] && s->dei_deadline[i] >= 0) {
+            timer_mod_ns(s->dei_timer[i], s->dei_deadline[i]);
+        }
+    }
+    return 0;
+}
+
+static const VMStateDescription vmstate_cdj_dmac = {
+    .name = "cdj-dmac",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .pre_save = cdj_dmac_pre_save,
+    .post_load = cdj_dmac_post_load,
+    .fields = (const VMStateField[]) {
+        VMSTATE_INT64_ARRAY(dei_deadline, CdjDmacState, DMAC_CHANNELS),
+        CDJ_VMSTATE_SPAN(CdjDmacState, dei_raised, dreq_pending),
+        CDJ_VMSTATE_SPAN(CdjDmacState, nread, reg),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
+static void cdj_dmac_dei_attach(CdjDmacState *s, unsigned ch, qemu_irq irq,
+                                unsigned max)
+{
+    s->dei[ch] = irq;
+    s->dei_max[ch] = max;
+    if (irq) {
+        s->dei_bh[ch] = qemu_bh_new(cdj_dmac_dei_raise, &s->dei[ch]);
+        s->dei_timer[ch] = timer_new_ns(QEMU_CLOCK_VIRTUAL,
+                                        cdj_dmac_dei_raise, &s->dei[ch]);
+    }
+}
+
+/* DEI line of channel 4 or 5, which cdj_dmac_init() leaves out. */
+void cdj_dmac_dei_connect(unsigned ch, qemu_irq irq)
+{
+    assert(cdj_dmac && ch >= 4 && ch < DMAC_CHANNELS);
+    cdj_dmac_dei_attach(cdj_dmac, ch, irq, 0);
+}
+
 /* dei[] gives the first four channels' DEI lines, a NULL line leaving that
  * channel without an interrupt, and a raise cap per line (0 = unlimited).
  * Which lines a board connects is its own policy. */
@@ -347,20 +405,16 @@ void cdj_dmac_init(MemoryRegion *sysmem, const char *name, hwaddr base,
 
     s->dreq_base = dreq_base;
     s->dreq_size = dreq_size;
-    for (i = 0; i < ARRAY_SIZE(s->dei); i++) {
-        s->dei[i] = dei ? dei[i].irq : NULL;
-        s->dei_max[i] = dei ? dei[i].max : 0;
-        if (s->dei[i]) {
-            s->dei_bh[i] = qemu_bh_new(cdj_dmac_dei_raise, &s->dei[i]);
-            s->dei_timer[i] = timer_new_ns(QEMU_CLOCK_VIRTUAL,
-                                           cdj_dmac_dei_raise, &s->dei[i]);
-        }
+    for (i = 0; i < 4; i++) {
+        cdj_dmac_dei_attach(s, i, dei ? dei[i].irq : NULL,
+                            dei ? dei[i].max : 0);
     }
+    vmstate_register_any(NULL, &vmstate_cdj_dmac, s);
     memory_region_init_io(&s->iomem, NULL, &cdj_dmac_ops, s,
                           name, CDJ_DMAC_SIZE);
     memory_region_add_subregion(sysmem, base, &s->iomem);
     s->dreq_bh = qemu_bh_new(cdj_dmac_dreq_run, s);
     s->exit.notify = cdj_dmac_dump;
-    qemu_add_exit_notifier(&s->exit);
+    cdj_add_exit_report(&s->exit);
     cdj_dmac = s;
 }

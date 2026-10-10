@@ -25,6 +25,8 @@
 #include "hw/sh4/sh_intc.h"
 #include "hw/timer/tmu012.h"
 #include "chardev/char-fe.h"
+#include "migration/vmstate.h"
+#include "migration/qemu-file-types.h"
 /* QEMU 9.1 still uses the sysemu/ include prefix. */
 #include "sysemu/blockdev.h"
 #include "sysemu/block-backend.h"
@@ -34,6 +36,23 @@
 
 /* Strip the SH-4 segment bits to get the physical address, as sh7750.c does. */
 #define A7ADDR(x) ((x) & 0x1fffffff)
+
+/* A run of plain fields, _first to _last, migrated as their bytes. A snapshot
+ * is only ever restored by the binary that wrote it, so the layout matches. */
+#define CDJ_VMSTATE_SPAN(_state, _first, _last)                              \
+    VMSTATE_BUFFER_UNSAFE(_first, _state, 0,                                 \
+                          offsetof(_state, _last) + sizeof_field(_state, _last) \
+                          - offsetof(_state, _first))
+
+/* A GByteArray * field, migrated as its length and bytes; NULL saves as empty. */
+extern const VMStateInfo cdj_vmstate_info_bytes;
+#define CDJ_VMSTATE_BYTES(_field, _state) {                                  \
+    .name = stringify(_field),                                               \
+    .size = sizeof(GByteArray *),                                            \
+    .info = &cdj_vmstate_info_bytes,                                         \
+    .flags = VMS_SINGLE,                                                     \
+    .offset = vmstate_offset_value(_state, _field, GByteArray *),            \
+}
 
 /* RAM a board maps besides its DRAM. With an env knob it is opt-in: the
  * region stays unmapped unless the variable is set. */
@@ -129,7 +148,15 @@ typedef struct CdjDmacDei {
 } CdjDmacDei;
 void cdj_dmac_init(MemoryRegion *sysmem, const char *name, hwaddr base,
                    hwaddr dreq_base, hwaddr dreq_size, const CdjDmacDei *dei);
+void cdj_dmac_dei_connect(unsigned ch, qemu_irq irq);
 void cdj_dmac_dreq(void);
 
 const char *cdj_getenv(const char *name);
+
+/* Statistics the models print at start and exit are off unless CDJ_REPORT=1. */
+bool cdj_report_enabled(void);
+void cdj_add_exit_report(Notifier *n);
+
+/* Ask the host to run the calling thread on a performance core. */
+void cdj_thread_prefer_fast_core(void);
 #endif

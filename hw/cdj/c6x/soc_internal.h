@@ -71,6 +71,8 @@ typedef struct soc_cic {
     uint32_t control, host_control, global_enable;
     uint32_t raw[7], enable[7];
     uint8_t  level[7 * 32];               /* input line levels */
+    uint64_t relatch_at[7 * 32];          /* when a cleared, still-high input latches again; 0 = none */
+    uint64_t relatch_due;                 /* earliest relatch_at, 0 = none */
     uint8_t  chmap[CIC_NSYS];
     uint8_t  hintmap[CIC_NHOST];
     uint32_t hint_enable[3];
@@ -79,6 +81,7 @@ typedef struct soc_cic {
 
 void     cic_reset(soc_cic *c);
 void     cic_input(c6655_soc *s, unsigned sysint, int level);
+void     cic_relatch(c6655_soc *s);
 uint32_t cic_read(c6655_soc *s, uint32_t off, unsigned size);
 void     cic_write(c6655_soc *s, uint32_t off, uint32_t val, unsigned size);
 

@@ -21,11 +21,16 @@
  * (executed + idle-skipped): the executed cycles and host seconds in it. The
  * whole-run rate mixes boot, load and playback; a window isolates one phase.
  *
- * REPLAY_IDLE=1 arms the core's busy-wait skip the way the machine does (head
- * 0x80076F00, stack 0x008AC668..0x008BC670). The recording machine ran with
- * it, so the core
- * stops exactly at the recorded skips, and the replay then pays the same
- * idle-tracking cost the machine pays, which it otherwise does not.
+ * REPLAY_RETURN_AT=<pc> makes the function at <pc> return at once, as the
+ * CDJ-2000's hook on its control register 9 routine does in the machine; without
+ * it the replay runs the routine's instructions and stops on one the core lacks.
+ *
+ * REPLAY_IDLE arms the core's busy-wait skip the way the machine does: 1 is
+ * the NXS2's (head 0x80076F00, stack 0x008AC668..0x008BC670), or give the
+ * head, stack range and bus-read flag as <head>:<stack_lo>:<stack_hi>[:<reads>].
+ * The recording machine ran with it, so the core stops exactly at the
+ * recorded skips, and the replay then pays the same idle-tracking cost the
+ * machine pays, which it otherwise does not.
  */
 #include "c66x.h"
 
@@ -54,7 +59,16 @@ static uint64_t n_read, n_write, bad_write, n_hash, bad_hash, n_irq, n_store, n_
 static uint64_t write_hash = 1469598103934665603ull;
 static int stop_now;
 static uint64_t n_steps, step_hist[64];     /* c66x_step calls by log2 budget */
-static int replay_idle;
+static unsigned long idle_head = 0x80076F00, idle_lo = 0x008AC668, idle_hi = 0x008BC670;
+static int replay_idle, idle_reads;
+static uint32_t return_at;
+
+/* The B3 register of the C6x calling convention is register 35. */
+static int return_hook(c66x_core *c, void *opaque)
+{
+    c66x_set_pc(c, c66x_get_reg(c, 35));
+    return 0;
+}
 
 static uint32_t u32(const uint8_t *p) { uint32_t v; memcpy(&v, p, 4); return v; }
 static uint64_t u64(const uint8_t *p) { uint64_t v; memcpy(&v, p, 8); return v; }
@@ -252,8 +266,12 @@ int main(int argc, char **argv)
     for (size_t k = NR; k-- > 0;)
         nb[k] = R[k].inline_ ? nb[k + 1] : k;
 
+    const char *ra = getenv("REPLAY_RETURN_AT");
+    return_at = ra ? strtoul(ra, NULL, 0) : 0;
     const char *ie = getenv("REPLAY_IDLE");
     replay_idle = ie && strcmp(ie, "0");
+    if (replay_idle && strcmp(ie, "1"))
+        sscanf(ie, "%lx:%lx:%lx:%d", &idle_head, &idle_lo, &idle_hi, &idle_reads);
     uint64_t idle_stuck = 0;
     const char *we = getenv("REPLAY_WINDOW");
     uint64_t win = we ? strtoull(we, NULL, 0) : 0, win_end = win, win_exec0 = 0;
@@ -321,7 +339,9 @@ int main(int argc, char **argv)
             C = c66x_new(&bus);
             nmap = 0;
             if (replay_idle)
-                c66x_set_idle_loop(C, 0x80076F00, 0x008AC668, 0x008BC670, 0);
+                c66x_set_idle_loop(C, idle_head, idle_lo, idle_hi, idle_reads);
+            if (return_at)
+                c66x_hook_pc(C, return_at, return_hook, NULL);
             break;
         case 'M': {
             uint32_t base = u32(r->p + 9), size = u32(r->p + 13), id = u32(r->p + 17);
