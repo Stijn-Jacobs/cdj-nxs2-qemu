@@ -52,7 +52,7 @@ df -h "$(dirname "$QEMU_BUILD")" | tail -1
 # tracetool.
 SRC_DRIVE="$(cygpath -m "$(cd "$HERE/../.." && pwd)" | cut -c1-3)"
 for d in "$QEMU_BUILD" "$QEMU_EB_BUILD"; do
-    case "$d" in
+    case "$(cygpath -m "$d")" in
         "$SRC_DRIVE"*) ;;
         *) echo "build dir $d is not on the source drive $SRC_DRIVE --" >&2
            echo "QEMU's tracetool cannot relpath across drives on Windows." >&2
