@@ -82,39 +82,36 @@ experimental. Sound is on by default (`NOSOUND=1` turns it off). Screenshots sho
 | Tempo and BPM readout | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Transport** | | | | | | | | |
 | PLAY / pause | ✅ | ✅ | · | ✅ | · | ✅ | ✅ | ✅ |
-| CUE | · | ⚠️<sup>2</sup> | · | ✅<sup>3</sup> | · | ❌<sup>4</sup> | · | ✅<sup>3</sup> |
-| AUTO CUE | · | ⚠️<sup>2</sup> | · | ✅ | · | · | · | ✅ |
+| CUE | · | ✅<sup>2</sup> | · | ✅<sup>2</sup> | · | ❌<sup>3</sup> | · | ✅<sup>2</sup> |
+| AUTO CUE | · | ✅ | · | ✅ | · | · | · | ✅ |
 | **Tempo** | | | | | | | | |
-| Tempo fader | ✅ | · | · | ✅ | · | ✅ | · | ✅<sup>5</sup> |
+| Tempo fader | ✅ | · | · | ✅ | · | ✅ | · | ✅<sup>4</sup> |
 | Tempo range | · | · | · | · | · | · | · | · |
-| MASTER TEMPO | ⚠️<sup>6</sup> | · | · | · | · | · | · | · |
+| MASTER TEMPO | ✅ | · | · | · | · | · | · | · |
 | **Jog** | | | | | | | | |
 | Pitch bend | ✅ | · | · | ✅ | · | ✅ | · | ✅ |
-| Vinyl / scratch | ⚠️<sup>7</sup> | · | · | · | · | · | · | · |
+| Vinyl / scratch | ⚠️<sup>5</sup> | · | · | · | · | · | · | · |
 | Needle search | ✅ | · | · | · | · | · | · | · |
 | **Performance** | | | | | | | | |
 | Hot cues | · | · | · | · | · | · | · | · |
 | Loops | · | · | · | · | · | · | · | · |
 | Beat jump | · | · | · | · | · | · | · | · |
-| Slip | ⚠️<sup>8</sup> | · | · | · | · | · | · | · |
+| Slip | ⚠️<sup>6</sup> | · | · | · | · | · | · | · |
 | **Interface** | | | | | | | | |
 | Touch screen | ✅ | ✅ | ✅ | ✅ | ➖ | ➖ | ➖ | ➖ |
 | **Pro DJ Link** | | | | | | | | |
-| Link with other players | ✅ | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> |
-| MASTER / SYNC | ⚠️<sup>10</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> | ❌<sup>9</sup> |
+| Link with other players | ✅ | ❌<sup>7</sup> | ❌<sup>7</sup> | ❌<sup>7</sup> | ❌<sup>7</sup> | ❌<sup>7</sup> | ❌<sup>7</sup> | ❌<sup>7</sup> |
+| MASTER / SYNC | ✅ | ❌<sup>7</sup> | ❌<sup>7</sup> | ❌<sup>7</sup> | ❌<sup>7</sup> | ❌<sup>7</sup> | ❌<sup>7</sup> | ❌<sup>7</sup> |
 
 Firmware: CDJ-2000NXS2 1.87, XDJ-1000MK2 1.45, XDJ-700 1.15, XDJ-1000 1.13, CDJ-900NXS 1.31, CDJ-2000NXS 1.44, CDJ-900 4.32, CDJ-2000 4.33.
 
 1. Plays below real time, so the sound is chopped.
-2. Only with AUTO CUE switched on before the load; CUE is inert otherwise.
-3. While playing with no cue set, CUE is ignored; it returns once a cue exists.
-4. After CUE the playhead stays frozen and the time readout goes blank, although the audio plays.
-5. Tempo down measured, tempo up not shown.
-6. MASTER TEMPO runs, but its time-stretch at a tempo other than centre is still slower than real time.
-7. Turning the jog while paused searches the track (measured once); VINYL scratching is untested.
-8. SLIP with the beat-loop pads runs without halting the DSP; the slipped playback itself was not checked.
-9. Not started for this player: it runs as a single deck without Pro DJ Link, mods, controller or the virtual deck app.
-10. SYNC follows the master's tempo, but the follower's speed hunts around it instead of settling.
+2. While playing with no cue set, CUE is ignored; it returns once a cue exists.
+3. After CUE the playhead stays frozen and the time readout goes blank, although the audio plays.
+4. Tempo down measured, tempo up not shown.
+5. Turning the jog while paused searches the track (measured once); VINYL scratching is untested.
+6. SLIP with the beat-loop pads runs without halting the DSP; the slipped playback itself was not checked.
+7. The launcher starts this player as a single deck, so Pro DJ Link is not available for it yet.
 
 </details>
 <!-- feature-matrix:end -->
