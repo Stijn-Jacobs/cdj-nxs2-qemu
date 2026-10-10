@@ -172,12 +172,15 @@ skipped when it is already done:
    (MP3, FLAC, AAC/M4A, WAV, AIFF, ALAC), which
    [baken](https://github.com/M-Igashi/baken) analyses instead — no
    rekordbox needed. Either way, a disk image is built from the result.
-5. **DSP code** — boots one deck without a window and lets it play a track for
-   a few minutes while MASTER TEMPO and the tempo fader are swept, so the DSP's
-   JIT compiles the program's hot code into its cache (`~/c14gen`) and your
-   first real session already keeps up (about 15 minutes). For the smoothest
-   playback, including the first seconds after a load, build the curated
-   module once instead: `./setup.sh --curated-jit` (about an hour).
+5. **DSP module**— asks whether to build the DSP module now (the default;
+   `--skip-dsp`, or answering no, leaves it for later). A headless deck plays a
+   track for 30 seconds, the DSP's hot code is compiled to a native module from
+   what it ran, and a second 30-second play with that module collects the
+   profile-guided counts for the final build. It takes about 20 minutes for the
+   CDJ-2000NXS2, CDJ-2000NXS and XDJ-1000 and about 37 for the CDJ-2000 (6
+   compile jobs; less on an idle machine), needs about 2 GB of free disk while
+   it runs, and installs into `~/c14gen`. Setup builds it again when it was
+   made from other code (see [Limits](#limits)).
 6. **Your setup** — one deck or two, Pro DJ Link, sound, a MIDI controller;
    saved to `cdj.conf`.
 7. **Mods** — small on/off tweaks to how the deck behaves: take the defaults
@@ -215,9 +218,9 @@ Setup stores the player in `cdj.conf`, so `./start.sh` alone starts it from
 then on. An older player gets the build, firmware and USB steps and opens one
 window with your stick; a second deck, Pro DJ Link, MIDI controllers, mods and
 the virtual deck app are CDJ-2000NXS2 features and are skipped. The
-CDJ-2000, CDJ-2000NXS and XDJ-1000 also get setup's step 5, which records one headless
-deck playing and builds their DSP module from it (about an hour); `./start.sh`
-loads it from `~/c14gen/curated-<player>/`. Which players exist is whatever has a profile in `models/`.
+CDJ-2000, CDJ-2000NXS and XDJ-1000 also get setup's step 5, which builds their DSP
+module the same way; `./start.sh` loads it from `~/c14gen/curated-<player>/`.
+Which players exist is whatever has a profile in `models/`.
 
 **Updating:** `git pull`, then `./start.sh` as usual. The emulator is compiled,
 so when a pull changed its code `start.sh` notices and offers to rebuild
@@ -237,9 +240,8 @@ version), and your own music.
 - **Pro DJ Link** runs over multicast on your network interface. The first
   time, macOS may ask whether your terminal may find devices on the local
   network: allow it, or the two decks will not see each other.
-- The DSP JIT compiles with Apple's clang (`gcc` on macOS is clang), and
-  `--curated-jit` uses clang's own profile-guided build with Xcode's
-  `llvm-profdata`.
+- The DSP module compiles with Apple's clang (`gcc` on macOS is clang), and
+  its profile-guided build uses clang's own with Xcode's `llvm-profdata`.
 - Python packages go into `.venv/` in this folder, since Homebrew's Python
   refuses `pip install` outside a virtual environment; setup offers the exact
   command. QEMU 9.1's configure needs `distlib`, which current `pip` no longer
@@ -257,10 +259,7 @@ version), and your own music.
 ./setup.sh --yes                never ask; take the defaults and the options below
 ./setup.sh --skip-build         leave the build out (a build tree you made yourself)
 ./setup.sh --rebuild            build even when the emulators are already built
-./setup.sh --no-warm            leave the DSP warm-up out
-./setup.sh --warm               warm the DSP code cache again
-./setup.sh --curated-jit        build a profile-guided DSP module instead (about an hour; smoothest playback)
-  --keep-recording              keep that build's DSP recording (~10 GB)
+./setup.sh --skip-dsp           leave the DSP module out (./start.sh says how to build it later)
   --firmware <file>             the C2KNXS2.UPD to use (re-installs the images)
   --music <folder>              the rekordbox USB export to image
   --tracks <folder>             a plain folder of music to image instead, analysed by baken
@@ -772,17 +771,17 @@ so it takes as long as `decks2`; after that a deck takes a minute and a half.
 - **Speed depends on your CPU.** One deck runs in real time on a fast desktop.
   Two decks need roughly twice that, and on a busy or modest machine they fall
   behind real time (the audio then has gaps).
-- **The DSP code is compiled on your machine.** A deck keeps up only once the
-  JIT has compiled the DSP program's hot code, and none is shipped, because it
-  would be derived from Pioneer's code. `setup.sh` warms that cache with a few
-  minutes of play; code the warm-up did not reach is compiled the first time
-  you use it, with a short slow patch then. `./setup.sh --curated-jit` goes
-  further: it records the DSP running your own firmware and builds one
-  profile-guided module from that recording, the way the maintainers build
-  theirs. It takes about an hour and ~16 GB of free disk while it runs, and the
-  module is installed only if it replays the recording exactly. With it,
-  playback holds real time from the first seconds after a load, so it is the
-  recommended setup when you can spare the hour.
+- **The DSP code is compiled on your machine.** A deck keeps up only with a
+  native module of the DSP program's hot code, and none is shipped, because it
+  would be derived from Pioneer's code. Setup builds it from your own firmware
+  (step 5) and installs it with a stamp naming what it was built from: the
+  generator version, the DSP core's interface, the firmware and the player.
+  `./start.sh` compares the stamp with the current code. After a `git pull`
+  that changed the generator or the core's interface it does not load the
+  module and shows a banner that it needs regenerating (`./setup.sh` rebuilds
+  it); the deck runs far below real time until then. If you skipped step 5 the
+  banner says how to build the module. With one, playback holds real time from
+  the first seconds after a load.
   Mods do not affect it: they patch the MAIN and display firmware, never the
   DSP program the module is built from, so turning a mod on or off later
   needs no rebuild. To compare without the module, start with

@@ -15,7 +15,7 @@ end of the load; PLAY pauses and resumes. The machine is paced to real time
 import os
 import subprocess
 
-from . import chain, host, mods
+from . import chain, dsp_module, host, mods
 from . import model as cdj_model
 from .chain import export_default, ifset, nonempty, warn_banner
 from .layout import Layout
@@ -40,18 +40,19 @@ def default_audiodev():
 def jit_module(env, m):
     """The DSP JIT module: the first that exists of C66X_JIT (named by hand),
     ~/c14gen/$MODULE/m.so (MODULE=none: no module), the model's own module
-    (built by ./setup.sh --curated-jit) and, for the default player only, the
-    maintainers' g23n (compiles MASTER TEMPO at a non-zero tempo too), g20u800
-    (g18u plus MASTER TEMPO's code) and g18u. Another player runs a different
-    DSP program, which those modules do not fit."""
+    (built by ./setup.sh, and only while its stamp fits) and, for the default
+    player only, the maintainers' g23n (compiles MASTER TEMPO at a non-zero
+    tempo too), g20u800 (g18u plus MASTER TEMPO's code) and g18u. Another
+    player runs a different DSP program, which those modules do not fit."""
     if env.get("C66X_JIT") or env.get("MODULE") == "none":
         return env.get("C66X_JIT", "")
-    cache = Layout().jit_cache
-    names = [env["MODULE"]] if env.get("MODULE") else []
-    names += [m.module_dir] + (["g23n", "g20u800", "g18u"] if m.id == cdj_model.DEFAULT else [])
-    cands = [os.path.join(cache, d, "m.so") for d in names]
-    if not host.is_windows() and m.id == cdj_model.DEFAULT:
-        cands.append("/tmp/c14gen/g18u/m.so")
+    lay = Layout()
+    cands = [os.path.join(lay.jit_cache, env["MODULE"], "m.so")] if env.get("MODULE") else []
+    cands.append(dsp_module.check(lay, m).path)
+    if m.id == cdj_model.DEFAULT:
+        cands += [os.path.join(lay.jit_cache, d, "m.so") for d in ("g23n", "g20u800", "g18u")]
+        if not host.is_windows():
+            cands.append("/tmp/c14gen/g18u/m.so")
     for c in cands:
         if os.path.isfile(c):
             return host.native(c)
@@ -117,15 +118,17 @@ def rig_env(env, tag, ndecks, frames):
         export_default(env, "QEMU_EB_BUILD", "/c/qemu-build-mingw-eb")
     # With a module the run-time auto-JIT is off, so no compiler runs
     # mid-session. AUTOJIT=1 keeps it on beside a module, AUTOJIT=0 turns it off.
+    chosen = bool(env.get("C66X_JIT") or env.get("MODULE"))
     env["C66X_JIT"] = jit_module(env, m)
     export_default(env, "C66X_JIT_AUTO", host.native(Layout().jit_cache))
     autojit = env.get("AUTOJIT", "")
     if autojit == "0" or (autojit != "1" and env["C66X_JIT"]):
         chain.unset(env, "C66X_JIT_AUTO")
-    if not env["C66X_JIT"] and env.get("C66X_JIT_AUTO"):
-        warn_banner("No curated DSP module: playback can stutter, most of all in the first",
-                    "seconds after a load. Build it once with ./setup.sh --curated-jit (about",
-                    "an hour); mods do not affect it.")
+    # A module of this player that is not loaded matters unless another one
+    # took its place; one loaded without a stamp always does.
+    own = dsp_module.check(Layout(), m)
+    if own.notice and not chosen and (own.path or not env["C66X_JIT"]):
+        warn_banner(*own.notice)
     export_default(env, "CDJ_NATIVE_LIBC", "1")
 
     # Pro DJ Link, on by default. DJLINK=0 turns it off; DJLINK=tap:<adapter>

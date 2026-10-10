@@ -13,7 +13,7 @@ def test_schedule_repeats_the_plan_every_period():
 
 def test_schedule_stops_before_the_end():
     plan = wj.schedule(10, 20)
-    assert plan == [(10, "mt"), (15, 100)]
+    assert plan == [(10, "mt"), (13, 100), (18, 170), (23, "mt"), (26, 90)]
     assert all(t < 30 for t, _ in wj.schedule(10, 20))
     assert wj.schedule(0, 0) == []
 
@@ -54,4 +54,4 @@ def test_vclock_wait_until(tmp_path, capsys):
 def test_print_plan_cli():
     r = run_script("scripts/run/warm_jit.py", "t", "--start", "0", "--duration", "6", "--print-plan")
     assert r.returncode == 0, r.stderr
-    assert r.stdout.split("\n")[:2] == ["    0.0  MASTER TEMPO", "    5.0  fader 100"]
+    assert r.stdout.split("\n")[:2] == ["    0.0  MASTER TEMPO", "    3.0  fader 100"]

@@ -38,6 +38,11 @@ import shlex
 import subprocess
 import sys
 
+# Bumped whenever the generated C changes what a module computes (not when it only
+# changes speed or size); launcher/dsp_module.py stamps it beside an installed
+# module, and start-up refuses a module built by another version.
+GENERATOR_VERSION = 1
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 CORE_DIR = os.path.dirname(HERE)
 

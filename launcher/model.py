@@ -105,9 +105,9 @@ class Model:
 
     @property
     def builds_dsp_module(self):
-        """Setup builds this player's DSP module from a recording of it: a
-        one-window model, or a rig player whose DSP program is not the NXS2's."""
-        return bool(self.dsp_idle)
+        """Setup builds this player's DSP module: the rig players, and a
+        one-window model whose profile names its DSP's idle loop."""
+        return self.is_rig or bool(self.dsp_idle)
 
     @property
     def module_dir(self):

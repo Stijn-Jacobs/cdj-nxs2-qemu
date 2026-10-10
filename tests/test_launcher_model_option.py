@@ -14,7 +14,7 @@ EMU = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if EMU not in sys.path:
     sys.path.insert(0, EMU)
 
-from launcher import conf, deck, model, start  # noqa: E402
+from launcher import conf, deck, dsp_module, model, rig, start  # noqa: E402
 from launcher.console import Console  # noqa: E402
 from launcher.layout import Layout  # noqa: E402
 from launcher.setup import Options, Setup, parse_args  # noqa: E402
@@ -121,9 +121,18 @@ def test_unknown_model_is_refused(tmp_path):
         s.choose_model()
 
 
+def _install(lay, m, **changed):
+    """A module of `m` with a stamp that fits the current code."""
+    folder = os.path.join(lay.jit_cache, m.module_dir)
+    os.makedirs(folder, exist_ok=True)
+    with open(os.path.join(folder, "m.so"), "wb"):
+        pass
+    dsp_module.write(folder, dict(dsp_module.current(lay, m), **changed))
+
+
 @pytest.fixture
 def tree(tmp_path, monkeypatch):
-    lay = SimpleNamespace(root=str(tmp_path), extract=str(tmp_path / "extract"), logs=str(tmp_path / "logs"),
+    lay = SimpleNamespace(emu=EMU, root=str(tmp_path), extract=str(tmp_path / "extract"), logs=str(tmp_path / "logs"),
                           usb_image=str(tmp_path / "extract" / "usbmedia3.img"), jit_cache=str(tmp_path / "c14gen"),
                           packaged=False)
     monkeypatch.setattr(deck, "Layout", lambda: lay)
@@ -209,11 +218,61 @@ def test_deck_dsp_env_comes_from_the_profile(tree, tmp_path):
     m = model.load("cdj2000nxs")
     knobs = deck.dsp_env(lay, m, {})
     assert knobs == {"CDJ_C6747_IDLE": "0xC004CB8C:0x11804AE0:0x11805C00", "C66X_IDLE_ISR_FAST": "1"}
-    (tmp_path / "c14gen" / m.module_dir).mkdir(parents=True)
-    (tmp_path / "c14gen" / m.module_dir / "m.so").write_bytes(b"")
+    _install(lay, m)
     assert deck.dsp_env(lay, m, {})["C66X_JIT"].endswith("curated-cdj2000nxs/m.so")
     assert "C66X_JIT" not in deck.dsp_env(lay, m, {"MODULE": "none"})
     assert deck.dsp_env(lay, m, {"C66X_IDLE_ISR_FAST": "0"})["C66X_IDLE_ISR_FAST"] == "0"
+
+
+def _step_dsp(tmp_path, model_id, **opts):
+    s = _setup(tmp_path, **opts)
+    s.model = model.load(model_id)
+    s.lay.jit_cache = str(tmp_path / "c14gen")
+    return s
+
+
+def test_setup_keeps_a_module_that_fits_the_current_code(tmp_path, capsys):
+    s = _step_dsp(tmp_path, "cdj2000nxs2")
+    _install(s.lay, s.model)
+    s.step_dsp()
+    assert "built from this code" in capsys.readouterr().out
+
+
+def test_every_rig_player_and_every_player_with_a_dsp_profile_builds_a_module():
+    assert model.load().builds_dsp_module
+    assert model.load("cdj2000").builds_dsp_module
+    assert not model.load("cdj900").builds_dsp_module
+
+
+def test_setup_builds_a_missing_module_unless_told_to_skip(tmp_path, monkeypatch, capsys):
+    s = _step_dsp(tmp_path, "xdj1000", skip_dsp=True)
+    built = []
+    monkeypatch.setattr(s, "_build_module", lambda: built.append(1))
+    s.step_dsp()
+    assert not built and "--skip-dsp" in capsys.readouterr().out
+    s = _step_dsp(tmp_path, "xdj1000")
+    monkeypatch.setattr(s, "deck_ready", lambda: True)
+    monkeypatch.setattr(s, "_build_module", lambda: built.append(1))
+    s.step_dsp()
+    assert built == [1]
+
+
+def test_setup_builds_a_stale_module_again(tmp_path, monkeypatch, capsys):
+    s = _step_dsp(tmp_path, "xdj1000")
+    _install(s.lay, s.model, generator="0")
+    built = []
+    monkeypatch.setattr(s, "deck_ready", lambda: True)
+    monkeypatch.setattr(s, "_build_module", lambda: built.append(1))
+    s.step_dsp()
+    assert built == [1] and "not built from this code" in capsys.readouterr().out
+
+
+def test_the_recording_options_are_gone(capsys):
+    for old in ("--curated-jit", "--keep-recording", "--warm", "--no-warm"):
+        with pytest.raises(SystemExit) as e:
+            parse_args([old])
+        assert e.value.code == 2
+    assert parse_args(["--skip-dsp"]).skip_dsp
 
 
 def test_cdj2000_names_its_idle_loop_for_the_c6727(tree):

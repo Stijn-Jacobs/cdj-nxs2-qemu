@@ -15,7 +15,7 @@ import os
 import shlex
 import subprocess
 
-from . import chain, host, model, snapshot
+from . import chain, dsp_module, host, model, snapshot
 from .boot_deck import _monsock, window_display
 from .chain import nonempty, say, warn_banner
 from .layout import Layout
@@ -44,19 +44,18 @@ def missing_images(lay, m):
 
 def dsp_env(lay, m, env):
     """The DSP knobs a model's profile sets: the busy-wait loop the core skips,
-    the interrupt fast path, and the module built by build_dsp_module.sh unless
-    MODULE=none or C66X_JIT names one by hand."""
+    the interrupt fast path, and the module built by build_dsp_module.sh (when its
+    stamp fits) unless MODULE=none or C66X_JIT names one by hand."""
     knobs = {m.dsp_idle_knob: nonempty(env, m.dsp_idle_knob, m.dsp_idle)}
     if m.dsp_isr_fast:
         knobs["C66X_IDLE_ISR_FAST"] = nonempty(env, "C66X_IDLE_ISR_FAST", m.dsp_isr_fast)
-    module = os.path.join(lay.jit_cache, m.module_dir, "m.so")
     if env.get("C66X_JIT") or env.get("MODULE") == "none":
         return knobs
-    if os.path.isfile(module):
-        knobs["C66X_JIT"] = host.native(module)
-    else:
-        warn_banner("No DSP module for the %s yet: its DSP runs far below real time" % m.title,
-                    "and the sound will gap. ./setup.sh --model %s builds it." % m.id)
+    module = dsp_module.check(lay, m)
+    if module.path:
+        knobs["C66X_JIT"] = host.native(module.path)
+    if module.notice:
+        warn_banner(*module.notice)
     return knobs
 
 
