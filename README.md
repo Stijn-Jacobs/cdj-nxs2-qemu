@@ -118,14 +118,14 @@ show the firmware interface, not a claim of feature parity.
 | Vinyl / scratch | ⚠️<sup>4</sup> | · | · | · | · | · | · | · |
 | Needle search | ✅ | · | · | · | ➖ | · | ➖ | · |
 | **Performance** | | | | | | | | |
-| Hot cues | · | · | · | · | ➖ | · | ➖ | · |
-| Loops | · | · | · | · | · | · | · | · |
+| Hot cues | ✅ | · | · | · | ➖ | · | ➖ | · |
+| Loops | ⚠️<sup>5</sup> | · | · | · | · | · | · | · |
 | Beat jump | · | · | · | · | ➖ | ➖ | ➖ | ➖ |
-| Slip | ⚠️<sup>5</sup> | · | · | · | · | · | · | ➖ |
+| Slip | ⚠️<sup>6</sup> | · | · | · | · | · | · | ➖ |
 | **Interface** | | | | | | | | |
 | Touch screen | ✅ | ✅ | ✅ | ✅ | ➖ | ➖ | ➖ | ➖ |
 | **Pro DJ Link** | | | | | | | | |
-| Link with other players | ✅ | ❌<sup>6</sup> | ❌<sup>6</sup> | ❌<sup>6</sup> | ❌<sup>6</sup> | ❌<sup>6</sup> | ❌<sup>6</sup> | ❌<sup>6</sup> |
+| Link with other players | ✅ | ❌<sup>7</sup> | ❌<sup>7</sup> | ❌<sup>7</sup> | ❌<sup>7</sup> | ❌<sup>7</sup> | ❌<sup>7</sup> | ❌<sup>7</sup> |
 
 Firmware: CDJ-2000NXS2 1.87, XDJ-1000MK2 1.45, XDJ-700 1.15, XDJ-1000 1.13, CDJ-900NXS 1.31, CDJ-2000NXS 1.44, CDJ-900 4.32, CDJ-2000 4.33.
 
@@ -133,8 +133,9 @@ Firmware: CDJ-2000NXS2 1.87, XDJ-1000MK2 1.45, XDJ-700 1.15, XDJ-1000 1.13, CDJ-
 2. Only one run so far.
 3. Sound can drop out after switching it on.
 4. VINYL scratching not tested yet.
-5. The slipped playback is not checked yet.
-6. Only one deck can be started so far.
+5. Loops engage in only some runs.
+6. The slipped playback is not checked yet.
+7. Only one deck can be started so far.
 
 </details>
 <!-- feature-matrix:end -->
