@@ -47,6 +47,7 @@ DSP, SH7269 GUI processor).
 | `MODEL_RIG_ENV` | a `rig` model: `NAME=value` words the rig exports unless the caller already set them (the knobs whose NXS2 addresses do not hold in that model's MAIN) |
 | `MODEL_TABLET_PEER` | `1`: the rig also starts `scripts/net/tablet_peer.py` on the Pro DJ Link segment (the CDJ-TOUR1 forwards its browse keys to a tablet until one tells it not to) |
 | `MODEL_IDLE_S`, `MODEL_LOAD_STEPS` | how a `deck` model reaches its snapshot points (`SNAPSHOT=idle\|loaded`): seconds from power-on to the settled screen, then the `;`-separated steps that load a track (`sendkey <key> <ms>`, `key <panel payload>`, `wait <s>`; see `scripts/run/snapshot_deck.py`) |
+| `MODEL_PROFILE_STEPS` | a `deck` model: steps appended to `MODEL_LOAD_STEPS` for a DSP-module profile run only, never for a snapshot, so that a mode the deck is not normally left in (MASTER TEMPO, playback away from the tempo slider's centre) gets its hot code compiled into the module instead of being interpreted at run time |
 
 ## Adding a model
 

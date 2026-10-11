@@ -87,6 +87,21 @@ def _train_module(env):
         env["C66X_JIT"] = host.native(env["DSP_TRAIN_MODULE"])
 
 
+def _profile_steps(m):
+    """The load steps, plus whatever only a profile run should go through.
+
+    The DSP module is compiled from what the hot code did during one run, so a
+    mode the deck is not normally left in -- MASTER TEMPO, or playback away
+    from the centre of the tempo slider -- only gets its kernels compiled if
+    that run enters it. A snapshot must not (it has to come back at the settled
+    screen), so the extra steps are a field of their own rather than part of
+    MODEL_LOAD_STEPS.
+    """
+    if not m.profile_steps:
+        return m.load_steps
+    return "%s; %s" % (m.load_steps, m.profile_steps)
+
+
 def _lines(path):
     try:
         with open(path, "rb") as f:
@@ -104,7 +119,7 @@ def record_deck(lay, m, tag, dry):
     log = os.path.join(lay.tmp, "bridge-main-%s1.log" % tag)
     mon = "%s/cdj-deck-%s-%s-mon.sock" % (lay.tmp, m.id, tag)
     env = dict(os.environ, MODULE="none", AUDIODEV="none", GUI_DISPLAY="none", CDJ_REPORT="1",
-               MODEL_IDLE_S=m.idle_s, MODEL_LOAD_STEPS=m.load_steps)
+               MODEL_IDLE_S=m.idle_s, MODEL_LOAD_STEPS=_profile_steps(m))
     _train_module(env)
     argv, env = deck_command(lay, m, env)
     argv += ["-monitor", _monsock(lay).spec(mon)]

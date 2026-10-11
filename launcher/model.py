@@ -87,6 +87,7 @@ class Model:
         self.dsp_gen_args = values.get("MODEL_DSP_GEN_ARGS", "")
         self.idle_s = values.get("MODEL_IDLE_S", "")
         self.load_steps = values.get("MODEL_LOAD_STEPS", "")
+        self.profile_steps = values.get("MODEL_PROFILE_STEPS", "")
         self.tablet_peer = values.get("MODEL_TABLET_PEER") == "1"
         self.rig_env = dict(w.split("=", 1) for w in values.get("MODEL_RIG_ENV", "").split())
         self.expected = tuple(tuple(line.split(None, 1))
