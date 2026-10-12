@@ -10,3 +10,10 @@ logs/
 tools/
 __pycache__/
 *.pyc
+
+# re:spin fork: build trees and run artefacts stay local.
+qemu-build/
+qemu-build-eb/
+build/
+runs/
+env.sh
