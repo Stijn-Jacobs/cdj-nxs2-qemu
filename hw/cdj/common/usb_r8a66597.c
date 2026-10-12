@@ -38,6 +38,7 @@ struct CdjUsbState {
     USBPacket packet;
     QEMUTimer *attach_timer;
     bool attached;                 /* the guest has been told about the device */
+    bool armed_before;             /* the driver armed BCHG once since power-on */
     bool in_port_reset;            /* driving USBRST, not losing the device */
 
     /* Each pipe owns a slice of buffer RAM (partitioned by PIPEBUF); a FIFO
@@ -726,14 +727,19 @@ static void cdj_usb_write(void *opaque, hwaddr off, uint64_t val, unsigned size)
         break;
 
     case CDJ_USB_INTENB1:
-        /* A device already in the port produces no edge, so fire BCHG shortly
-         * after the driver arms it, like plugging the stick in.
-         * CDJ_USB_ATTACH_MS overrides the delay. */
+        /* A device already in the port at power-on was seen by the controller
+         * before the driver armed BCHG, so the change is pending the moment it
+         * is armed: fire at once. A later arm (after a detach) is a plug-in,
+         * 500 ms after arming. CDJ_USB_ATTACH_MS overrides both. Stock MAIN's
+         * updater gives up on media ~3 s after it starts; with the stick at
+         * power-on it is found ~0.2-0.3 s before that, while a 500 ms first
+         * attach sent it down its no-media path (phase_saved 0x80). */
         if ((val & CDJ_USB_BCHG) && s->attach_timer && !s->attached &&
             cdj_usb_present(s) && !timer_pending(s->attach_timer)) {
             const char *ms = getenv("CDJ_USB_ATTACH_MS");
-            int64_t delay = ms ? strtoll(ms, NULL, 0) : 500;
+            int64_t delay = ms ? strtoll(ms, NULL, 0) : s->armed_before ? 500 : 0;
 
+            s->armed_before = true;
             timer_mod(s->attach_timer,
                       qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) + delay);
         }
@@ -819,9 +825,10 @@ static void cdj_usb_realize(DeviceState *dev, Error **errp)
 
 static const VMStateDescription vmstate_cdj_usb = {
     .name = "cdj-usb",
-    .version_id = 1,
-    .minimum_version_id = 1,
+    .version_id = 2,
+    .minimum_version_id = 2,
     .fields = (const VMStateField[]) {
+        VMSTATE_BOOL(armed_before, CdjUsbState),
         VMSTATE_TIMER_PTR(attach_timer, CdjUsbState),
         CDJ_VMSTATE_SPAN(CdjUsbState, attached, port_pipe),
         CDJ_VMSTATE_SPAN(CdjUsbState, pipecfg, reg),
