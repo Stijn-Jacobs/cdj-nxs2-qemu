@@ -283,11 +283,13 @@ void cdj_regs(MemoryRegion *sysmem, const char *name, hwaddr base,
  * CCN / exception registers (0xFF000000).
  *
  * The interrupt entry dispatches on INTEVT (0xFF000028), so EXPEVT and INTEVT
- * expose QEMU's env->expevt/intevt. The rest of the block is a plain register
+ * expose QEMU's env->expevt/intevt; TRA (0xFF000020) exposes env->tra, which
+ * an exception handler reads to tell its own TRAPA #imm from a fault. The rest of the block is a plain register
  * file.
  */
 #define CDJ_CCN_BASE    0xFF000000
 #define CDJ_CCN_SIZE    0x1000
+#define CCN_TRA         0x20    /* TRAPA immediate << 2 (env->tra) */
 #define CCN_EXPEVT      0x24
 #define CCN_INTEVT      0x28
 
@@ -305,6 +307,8 @@ static uint64_t cdj_ccn_read(void *opaque, hwaddr off, unsigned size)
     uint32_t intevt;
 
     switch (off) {
+    case CCN_TRA:
+        return s->cpu->env.tra;
     case CCN_EXPEVT:
         return s->cpu->env.expevt;
     case CCN_INTEVT:
@@ -330,6 +334,9 @@ static void cdj_ccn_write(void *opaque, hwaddr off, uint64_t val, unsigned size)
     CdjCcnState *s = opaque;
 
     switch (off) {
+    case CCN_TRA:
+        s->cpu->env.tra = val;
+        return;
     case CCN_EXPEVT:
         s->cpu->env.expevt = val;
         return;
