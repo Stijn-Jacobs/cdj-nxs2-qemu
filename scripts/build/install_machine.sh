@@ -154,6 +154,13 @@ config CDJ2000
     default y
     depends on SH4
     select CDJ_COMMON
+
+# The CDJ-850 (SH7263/SH-2A, big-endian), machine cdj850.
+config CDJ850
+    bool
+    default y
+    depends on SH4
+    select CDJ_COMMON
 EOF
     echo "patched hw/sh4/Kconfig"
 fi

@@ -125,6 +125,38 @@ def _do_sections(py, tools, out, upd_files, log):
     return True
 
 
+def _do_c850_raw(tools, out, upd_files, log):
+    """extract/main_flat.bin (the `main` region) and extract/boot.bin (the
+    `boot` region) from the CDJ-850's raw-binary container, using the same
+    outdir layout the `sections` step uses."""
+    try:
+        try:
+            import c850_decode
+        except ImportError:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location(
+                "c850_decode", os.path.join(tools, "c850_decode.py"))
+            c850_decode = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(c850_decode)
+        data = c850_decode.read_upd(upd_files[0])
+        regions = c850_decode.carve_regions(data)
+        with open(os.path.join(out, "extract", "main_flat.bin"), "wb") as f:
+            f.write(regions["main"])
+        with open(os.path.join(out, "extract", "boot.bin"), "wb") as f:
+            f.write(regions["boot"])
+        with open(log, "w", encoding="utf-8") as f:
+            f.write("main_flat.bin <- %s[0x060000:0x200000]\n" % os.path.basename(upd_files[0]))
+            f.write("boot.bin <- %s[0x000000:0x040000]\n" % os.path.basename(upd_files[0]))
+    except Exception as e:
+        try:
+            with open(log, "w", encoding="utf-8") as f:
+                f.write("c850_raw failed: %s\n" % e)
+        except OSError:
+            pass
+        return False
+    return True
+
+
 def prepare(upd, out=None, install_to=None, force=False, root=None, model=None, say=print, prog=None):
     """Unpack and verify `upd` for `model` (the default profile when None)
     into `out` (a new temporary directory when None); with install_to, copy
@@ -179,6 +211,8 @@ def prepare(upd, out=None, install_to=None, force=False, root=None, model=None, 
         log = os.path.join(out, "log", name + ".log")
         if name == "sections":
             ok = _do_sections(py, tools, out, upd_files, log)
+        elif name == "c850_raw":
+            ok = _do_c850_raw(tools, out, upd_files, log)
         elif name in STEPS:
             tool, args = STEPS[name](m)
             argv = py + [os.path.join(tools, tool)] + [str(a) for a in args]

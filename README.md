@@ -90,6 +90,7 @@ show the firmware interface, not a claim of feature parity.
 | **CDJ-2000NXS** | 🧪 Experimental | Loads and plays from USB in real time with the DSP module setup builds. PLAY, CUE, tempo and jog work. |
 | **CDJ-900** | 🧪 Experimental | Loads and plays from USB; its display shows the overview, playhead and time. |
 | **CDJ-2000** | 🧪 Experimental | Loads and plays from USB in real time with the DSP module setup builds. PLAY, CUE, tempo and jog work. |
+| **CDJ-850** | 🧪 Experimental (bring-up) | Boots the real firmware into RTOS init (panel serial, DSP bootstrap); parks at a task barrier waiting on DSP56371 reply bytes — no USB, display content, or sound yet. |
 
 <!-- feature-matrix:start -->
 <details>
@@ -97,37 +98,37 @@ show the firmware interface, not a claim of feature parity.
 
 ✅ works, measured &nbsp; ⚠️ partly, see the note &nbsp; ❌ does not work &nbsp; ➖ the player does not have it &nbsp; · not tested yet
 
-| | CDJ-2000NXS2 | XDJ-1000MK2 | XDJ-700 | XDJ-1000 | CDJ-900NXS | CDJ-2000NXS | CDJ-900 | CDJ-2000 |
-|---|---|---|---|---|---|---|---|---|
+| | CDJ-2000NXS2 | XDJ-1000MK2 | XDJ-700 | XDJ-1000 | CDJ-900NXS | CDJ-2000NXS | CDJ-900 | CDJ-2000 | CDJ-850 |
+|---|---|---|---|---|---|---|---|---|---|
 | **Media** | | | | | | | | |
-| USB | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| USB | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
 | **Playback** | | | | | | | | |
-| Sound | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
-| Real time with the setup DSP module | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ |
+| Sound | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | ❌ |
+| Real time with the setup DSP module | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | · |
 | **Display** | | | | | | | | |
-| Waveform / overview | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Tempo and BPM readout | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Waveform / overview | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Tempo and BPM readout | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
 | **Transport** | | | | | | | | |
-| PLAY / pause | ✅ | ✅ | ⚠️<sup>1</sup> | ✅ | ⚠️<sup>1</sup> | ✅ | ✅ | ✅ |
-| CUE | ✅ | ✅ | · | ✅ | · | ✅ | · | ✅ |
+| PLAY / pause | ✅ | ✅ | ⚠️<sup>1</sup> | ✅ | ⚠️<sup>1</sup> | ✅ | ✅ | ✅ | ❌ |
+| CUE | ✅ | ✅ | · | ✅ | · | ✅ | · | ✅ | ❌ |
 | **Tempo** | | | | | | | | |
-| Tempo fader | ✅ | · | · | ✅ | · | ✅ | · | ✅ |
-| MASTER TEMPO | ⚠️<sup>2</sup> | · | · | · | · | · | · | · |
+| Tempo fader | ✅ | · | · | ✅ | · | ✅ | · | ✅ | · |
+| MASTER TEMPO | ⚠️<sup>2</sup> | · | · | · | · | · | · | · | · |
 | **Jog** | | | | | | | | |
-| Pitch bend | ✅ | · | · | ✅ | · | ✅ | · | ✅ |
-| Vinyl / scratch | ⚠️<sup>3</sup> | · | · | · | · | · | · | · |
-| Needle search | ✅ | · | · | · | ➖ | · | ➖ | · |
+| Pitch bend | ✅ | · | · | ✅ | · | ✅ | · | ✅ | · |
+| Vinyl / scratch | ⚠️<sup>3</sup> | · | · | · | · | · | · | · | · |
+| Needle search | ✅ | · | · | · | ➖ | · | ➖ | · | ➖ |
 | **Performance** | | | | | | | | |
-| Hot cues | ✅ | · | · | · | ➖ | · | ➖ | · |
-| Loops | ⚠️<sup>4</sup> | · | · | · | · | · | · | · |
-| Beat jump | · | · | · | · | ➖ | ➖ | ➖ | ➖ |
-| Slip | ⚠️<sup>5</sup> | · | · | · | · | · | · | ➖ |
+| Hot cues | ✅ | · | · | · | ➖ | · | ➖ | · | ➖ |
+| Loops | ⚠️<sup>4</sup> | · | · | · | · | · | · | · | · |
+| Beat jump | · | · | · | · | ➖ | ➖ | ➖ | ➖ | ➖ |
+| Slip | ⚠️<sup>5</sup> | · | · | · | · | · | · | ➖ | ➖ |
 | **Interface** | | | | | | | | |
-| Touch screen | ✅ | ✅ | ✅ | ✅ | ➖ | ➖ | ➖ | ➖ |
+| Touch screen | ✅ | ✅ | ✅ | ✅ | ➖ | ➖ | ➖ | ➖ | ➖ |
 | **Pro DJ Link** | | | | | | | | |
-| Link with other players | ✅ | ❌<sup>6</sup> | ❌<sup>6</sup> | ❌<sup>6</sup> | ❌<sup>6</sup> | ⚠️<sup>7</sup> | ❌<sup>6</sup> | ❌<sup>6</sup> |
+| Link with other players | ✅ | ❌<sup>6</sup> | ❌<sup>6</sup> | ❌<sup>6</sup> | ❌<sup>6</sup> | ⚠️<sup>7</sup> | ❌<sup>6</sup> | ❌<sup>6</sup> | ➖<sup>8</sup> |
 
-Firmware: CDJ-2000NXS2 1.87, XDJ-1000MK2 1.45, XDJ-700 1.15, XDJ-1000 1.13, CDJ-900NXS 1.31, CDJ-2000NXS 1.44, CDJ-900 4.32, CDJ-2000 4.33.
+Firmware: CDJ-2000NXS2 1.87, XDJ-1000MK2 1.45, XDJ-700 1.15, XDJ-1000 1.13, CDJ-900NXS 1.31, CDJ-2000NXS 1.44, CDJ-900 4.32, CDJ-2000 4.33, CDJ-850 1.13.
 
 1. Only one run so far.
 2. Sound can drop out after switching it on.
@@ -136,6 +137,7 @@ Firmware: CDJ-2000NXS2 1.87, XDJ-1000MK2 1.45, XDJ-700 1.15, XDJ-1000 1.13, CDJ-
 5. The slipped playback is not checked yet.
 6. Only one deck can be started so far.
 7. Announces itself; browsing not checked yet.
+8. The CDJ-850 has no Ethernet port.
 
 </details>
 <!-- feature-matrix:end -->
@@ -287,6 +289,7 @@ update file as `--firmware`:
 | `cdj2000nxs` | `C2KNXS.UPD` | 1.44 |
 | `cdj900` | `C900GUI.UPD`, `C900DRIV.UPD`, `C900MAIN.UPD`, `C900PANL.UPD` | 4.32 |
 | `cdj2000` | `C2KGUI.UPD`, `C2KDRIV.UPD`, `C2KMAIN.UPD`, `C2KPANL.UPD` | 4.33 |
+| `cdj850` | `C850MAIN.UPD` | 1.13 |
 
 ```sh
 ./setup.sh --model cdj2000 --firmware path/to/C2KGUI.UPD   # the other three files beside it
@@ -306,7 +309,9 @@ CDJ-900NXS only `U` (USB), `Enter` (the select knob's push) and `Space`
 (PLAY) are: `U` and seven `Enter`s load the first track. The CDJ-900 also has
 `↑` / `↓`, `,` (TRACK back), `[` / `]` (SEARCH), `B`, `T`, `I`, `M`, `L` and
 `D`; `U` and four `Enter`s load the first track. `C` (CUE) and `Esc` (BACK)
-are mapped, but the emulated CDJ-900 does not react to them yet.
+are mapped, but the emulated CDJ-900 does not react to them yet. The CDJ-850
+is earlier bring-up than the rest: it boots its firmware into RTOS init and
+parks at a task barrier (no USB stick, track loading, or keys yet).
 
 <a id="keyboard"></a>
 
@@ -817,6 +822,7 @@ so it takes as long as `decks2`; after that a deck takes a minute and a half.
 | `hw/cdj/boards/nxs2/` | the CDJ-2000NXS2: its MAIN board, one file per device, and the display board (`sh7269gui.c`); `diag/` holds the diagnostic hooks, `standin/` historical models that are off by default |
 | `hw/cdj/boards/cdj2000/` | the CDJ-2000 and CDJ-2000NXS: MAIN board (Renesas SH7763), Blackfin display and C6727 / C6747 DSP models, experimental |
 | `hw/cdj/boards/cdj900/` and `hw/cdj/m16c/` | the CDJ-900: the CDJ-2000's MAIN board with its M16C display micro (core, SoC and the display model), experimental |
+| `hw/cdj/boards/cdj850/` | the CDJ-850: SH7263 (SH-2A) MAIN board with panel serial, VFD text display, SSI audio and a DSP56371 model, bring-up |
 | `hw/cdj/boards/xdj1000/` | the XDJ-700, XDJ-1000 and CDJ-900NXS: their SH7724 MAIN board with its LCD controller and graphics blocks, experimental |
 | `mods/` | the [mods](#mods) registry and the display- and MAIN-firmware patches behind them |
 | `models/` | one profile per player, read by the firmware and launch scripts (see `models/README.md`) |

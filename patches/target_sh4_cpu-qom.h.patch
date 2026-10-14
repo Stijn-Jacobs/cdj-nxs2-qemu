@@ -1,0 +1,13 @@
+diff --git a/target/sh4/cpu-qom.h b/target/sh4/cpu-qom.h
+index 6cf5fbb..3ca285e 100644
+--- a/target/sh4/cpu-qom.h
++++ b/target/sh4/cpu-qom.h
+@@ -27,6 +27,8 @@
+ #define TYPE_SH7750R_CPU SUPERH_CPU_TYPE_NAME("sh7750r")
+ #define TYPE_SH7751R_CPU SUPERH_CPU_TYPE_NAME("sh7751r")
+ #define TYPE_SH7785_CPU  SUPERH_CPU_TYPE_NAME("sh7785")
++/* Generic big- or little-endian SH-2A for SH-2A-only guests (CDJ-850). */
++#define TYPE_SH2A_CPU    SUPERH_CPU_TYPE_NAME("sh2a")
+ 
+ OBJECT_DECLARE_CPU_TYPE(SuperHCPU, SuperHCPUClass, SUPERH_CPU)
+ 

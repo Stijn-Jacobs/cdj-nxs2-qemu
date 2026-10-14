@@ -1,8 +1,8 @@
 diff --git a/hw/sh4/Kconfig b/hw/sh4/Kconfig
-index 99a76a9..299d80c 100644
+index 99a76a9..78b477a 100644
 --- a/hw/sh4/Kconfig
 +++ b/hw/sh4/Kconfig
-@@ -25,3 +25,30 @@ config SH7750
+@@ -25,3 +25,37 @@ config SH7750
      select SH_INTC
      select SH_SCI
      select SH_TIMER
@@ -23,6 +23,13 @@ index 99a76a9..299d80c 100644
 +
 +# The CDJ-2000 and CDJ-2000NXS (SH7763), machines cdj2000 and cdj2000nxs.
 +config CDJ2000
++    bool
++    default y
++    depends on SH4
++    select CDJ_COMMON
++
++# The CDJ-850 (SH7263/SH-2A, big-endian), machine cdj850.
++config CDJ850
 +    bool
 +    default y
 +    depends on SH4

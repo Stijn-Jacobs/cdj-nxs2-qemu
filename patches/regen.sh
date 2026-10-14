@@ -40,6 +40,7 @@ FILES=(
     system/runstate.c
     target/sh4/cpu.c
     target/sh4/cpu.h
+    target/sh4/cpu-qom.h
     target/sh4/helper.c
     target/sh4/helper.h
     target/sh4/op_helper.c

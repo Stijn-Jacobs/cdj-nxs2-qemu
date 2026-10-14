@@ -1,8 +1,16 @@
 diff --git a/target/sh4/cpu.h b/target/sh4/cpu.h
-index d928bcf..1e46b75 100644
+index d928bcf..458df79 100644
 --- a/target/sh4/cpu.h
 +++ b/target/sh4/cpu.h
-@@ -130,6 +130,13 @@ typedef struct tlb_t {
+@@ -31,6 +31,7 @@
+ #define SH_CPU_SH7751  (1 << 3)
+ #define SH_CPU_SH7751R (1 << 4)
+ #define SH_CPU_SH7785  (1 << 5)
++#define SH_CPU_SH2A    (1 << 6)
+ #define SH_CPU_SH7750_ALL (SH_CPU_SH7750 | SH_CPU_SH7750S | SH_CPU_SH7750R)
+ #define SH_CPU_SH7751_ALL (SH_CPU_SH7751 | SH_CPU_SH7751R)
+ 
+@@ -130,6 +131,13 @@ typedef struct tlb_t {
  enum sh_features {
      SH_FEATURE_SH4A = 1,
      SH_FEATURE_BCR3_AND_BCR4 = 2,
@@ -16,7 +24,7 @@ index d928bcf..1e46b75 100644
  };
  
  typedef struct memory_content {
-@@ -201,12 +208,62 @@ typedef struct CPUArchState {
+@@ -201,12 +209,62 @@ typedef struct CPUArchState {
      /* The features that we should emulate. See sh_features above.  */
      uint32_t features;
  
@@ -79,7 +87,7 @@ index d928bcf..1e46b75 100644
  /**
   * SuperHCPU:
   * @env: #CPUSH4State
-@@ -372,12 +429,19 @@ static inline target_ulong cpu_read_sr(CPUSH4State *env)
+@@ -372,12 +430,23 @@ static inline target_ulong cpu_read_sr(CPUSH4State *env)
                       (env->sr_t << SR_T);
  }
  
@@ -95,11 +103,15 @@ index d928bcf..1e46b75 100644
 +    /* SH-2A is always privileged -- see SH_FEATURE_SH2A. */
 +    if (env->features & SH_FEATURE_SH2A) {
 +        env->sr |= (1u << SR_MD);
++        /* No RB bit on SH-2A (manual section 2.2.2): keep env->sr RB-free so
++         * no path (GDB writes via this helper included) can re-arm R0-R7
++         * banking behind the translator's back. SH-4 guests unaffected. */
++        env->sr &= ~(1u << SR_RB);
 +    }
  }
  
  static inline void cpu_get_tb_cpu_state(CPUSH4State *env, vaddr *pc,
-@@ -395,4 +459,44 @@ static inline void cpu_get_tb_cpu_state(CPUSH4State *env, vaddr *pc,
+@@ -395,4 +464,44 @@ static inline void cpu_get_tb_cpu_state(CPUSH4State *env, vaddr *pc,
  #endif
  }
  

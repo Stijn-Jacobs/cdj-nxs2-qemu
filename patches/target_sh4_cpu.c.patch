@@ -1,5 +1,5 @@
 diff --git a/target/sh4/cpu.c b/target/sh4/cpu.c
-index 8f07261..e953157 100644
+index 8f07261..06d310a 100644
 --- a/target/sh4/cpu.c
 +++ b/target/sh4/cpu.c
 @@ -24,6 +24,7 @@
@@ -31,7 +31,59 @@ index 8f07261..e953157 100644
  }
  #endif
  
-@@ -232,9 +237,111 @@ static void superh_cpu_initfn(Object *obj)
+@@ -120,8 +125,20 @@ static void superh_cpu_reset_hold(Object *obj, ResetType type)
+     env->fpscr = FPSCR_PR; /* value for userspace according to the kernel */
+     set_float_rounding_mode(float_round_nearest_even, &env->fp_status); /* ?! */
+ #else
+-    env->sr = (1u << SR_MD) | (1u << SR_RB) | (1u << SR_BL) |
++    env->sr = (1u << SR_MD) | (1u << SR_BL) |
+               (1u << SR_I3) | (1u << SR_I2) | (1u << SR_I1) | (1u << SR_I0);
++    /*
++     * SH-4 only: the bank-select bit. SH-2A has no SR.RB (SH-2A Software
++     * Manual, section 2.2.2) and no banked R0-R7, so a reset that leaves
++     * RB=1 runs the whole boot on the shadow bank until the first from-zero
++     * LDC clears it -- the CDJ-850 pool-2 failure of Task 6c. The SH-2A
++     * value matches what the cdj850 board's reset clear produces; that
++     * board line is kept as belt-and-braces (Task 6d deliberately mirrors
++     * rather than moves it, so -M none smoke guests get the same fix).
++     */
++    if (!(env->features & SH_FEATURE_SH2A)) {
++        env->sr |= (1u << SR_RB);
++    }
+     env->fpscr = FPSCR_DN | FPSCR_RM_ZERO; /* CPU reset value according to SH4 manual */
+     set_float_rounding_mode(float_round_to_zero, &env->fp_status);
+     set_flush_to_zero(1, &env->fp_status);
+@@ -206,6 +223,29 @@ static void sh7785_class_init(ObjectClass *oc, void *data)
+     scc->cvr = 0x71440211;
+ }
+ 
++/*
++ * Generic SH-2A for SH-2A-only guests (CDJ-850 MAIN): enables the 32-bit
++ * translator path via SH_FEATURE_SH2A. The PVR/PRR/CVR are placeholders;
++ * Task 5 (board bring-up) should set the real chip's IDs once known. They
++ * are not consulted on the translate/helper paths.
++ */
++static void sh2a_cpu_initfn(Object *obj)
++{
++    CPUSH4State *env = cpu_env(CPU(obj));
++
++    env->id = SH_CPU_SH2A;
++    env->features = SH_FEATURE_SH2A;
++}
++
++static void sh2a_class_init(ObjectClass *oc, void *data)
++{
++    SuperHCPUClass *scc = SUPERH_CPU_CLASS(oc);
++
++    scc->pvr = 0x00000000;
++    scc->prr = 0x00000000;
++    scc->cvr = 0x00000000;
++}
++
+ static void superh_cpu_realizefn(DeviceState *dev, Error **errp)
+ {
+     CPUState *cs = CPU(dev);
+@@ -232,9 +272,111 @@ static void superh_cpu_initfn(Object *obj)
  }
  
  #ifndef CONFIG_USER_ONLY
@@ -144,3 +196,12 @@ index 8f07261..e953157 100644
  };
  
  #include "hw/core/sysemu-cpu-ops.h"
+@@ -316,6 +458,8 @@ static const TypeInfo superh_cpu_type_infos[] = {
+                            sh7751r_cpu_initfn),
+     DEFINE_SUPERH_CPU_TYPE(TYPE_SH7785_CPU, sh7785_class_init,
+                            sh7785_cpu_initfn),
++    DEFINE_SUPERH_CPU_TYPE(TYPE_SH2A_CPU, sh2a_class_init,
++                           sh2a_cpu_initfn),
+ 
+ };
+ 
