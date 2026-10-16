@@ -299,3 +299,29 @@ carries MIDI back to the deck. To check the port without any MIDI library,
 `--monitor` prints every message with a timestamp and `--count` prints how many
 of each status byte arrived per second (24 `F8` clocks per beat, `FA`/`FB`/`FC`
 on transport changes).
+
+## The deck's own USB HID port (rekordbox mode)
+
+The same USB-B port also carries the deck's HID channel: in **LINK › CONTROL
+MODE › USB MIDI** (the PC / rekordbox source) the firmware speaks the Pioneer
+HID protocol over it -- handshake and all -- to whichever program is on the
+other end of the cable. `scripts/net/usb_hid_port.py` is that program: it
+receives the port's HID reports over the same UDP relay (27020 / 27021) and
+presents them as a HID device with the deck's own report descriptor, so the
+deck reads as a CDJ to the software:
+
+    python3 scripts/net/usb_hid_port.py                 # Linux: makes a /dev/uhid device
+    python3 scripts/net/usb_hid_port.py --monitor       # anywhere: one line per report
+
+The relay is byte-transparent -- the deck's firmware does the handshake, so the
+bridge only has to be the right HID device. `--name` is the product string the
+host matches the model on (default `CDJ-2000NXS2`); set it to whatever model the
+running firmware is. `--monitor` shows the handshake packets (announce, host
+challenge, deck reply, host reply, ack) as they happen, which is how to confirm
+the firmware reached HID mode.
+
+**On Windows and macOS there is no virtual HID device yet** (Windows needs a
+Virtual HID Framework minidriver, macOS a DriverKit one), so real rekordbox
+cannot open the deck there until one exists; `--monitor` works everywhere in the
+meantime. Pro DJ Link over the TAP adapter remains the way to reach real
+rekordbox on the same PC today.

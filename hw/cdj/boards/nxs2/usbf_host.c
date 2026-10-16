@@ -23,13 +23,15 @@
  * endpoint the deck does not have reads 00.
  */
 #define CDJ_USBF_HOST_ENV "CDJ_USBF_HOST"
+/* A report descriptor is well under this; the deck's own is a few hundred bytes. */
+#define HID_DESC_MAX 512
 
 enum { HOST_DETACHED, HOST_SETTLE, HOST_ENUMERATE, HOST_CONFIGURED, HOST_FAILED };
 enum { XFER_SETUP, XFER_DATA, XFER_STATUS };
 /* The enumeration, one control transfer per step. */
 enum {
     STEP_DEVICE_DESC, STEP_SET_ADDRESS, STEP_CONFIG_HEAD, STEP_CONFIG_DESC,
-    STEP_SET_CONFIG,
+    STEP_SET_CONFIG, STEP_HID_DESC,
 };
 
 typedef struct {
@@ -47,7 +49,9 @@ typedef struct {
 
     uint16_t vid, pid;
     uint8_t maxp0, config;
-    uint8_t midi_in, midi_out, hid_in, hid_out;
+    uint8_t midi_in, midi_out, hid_in, hid_out, hid_if;
+    uint8_t hid_desc[HID_DESC_MAX];
+    unsigned hid_desc_len;
 
     uint8_t out[1 + 1024];          /* a host->deck datagram not yet taken */
     int out_len;
@@ -104,7 +108,7 @@ static bool cdj_usbf_host_control(CdjUsbfHost *h)
  * interrupt endpoints, from the configuration descriptor. */
 static void cdj_usbf_host_parse(CdjUsbfHost *h)
 {
-    unsigned off, class = 0, subclass = 0;
+    unsigned off, class = 0, subclass = 0, iface = 0;
 
     for (off = 0; off + 2 <= h->len && h->data[off]; off += h->data[off]) {
         const uint8_t *d = h->data + off;
@@ -113,6 +117,7 @@ static void cdj_usbf_host_parse(CdjUsbfHost *h)
         if (d[1] == USB_DT_INTERFACE && off + 9 <= h->len) {
             class = d[5];
             subclass = d[6];
+            iface = d[2];
         } else if (d[1] == USB_DT_ENDPOINT && off + 4 <= h->len) {
             bool in = d[2] & USB_DIR_IN;
 
@@ -120,6 +125,7 @@ static void cdj_usbf_host_parse(CdjUsbfHost *h)
                 ep = in ? &h->midi_in : &h->midi_out;
             } else if (class == USB_CLASS_HID) {
                 ep = in ? &h->hid_in : &h->hid_out;
+                h->hid_if = iface;
             }
             if (ep && !*ep) {
                 *ep = d[2];
@@ -143,6 +149,19 @@ static void cdj_usbf_host_tell(CdjUsbfHost *h)
         n = snprintf(msg + 1, sizeof(msg) - 1, "detached");
     }
     (void)send(h->fd, msg, n + 1, 0);
+    if (h->state == HOST_CONFIGURED && h->hid_desc_len) {
+        /* The descriptor is static: same line every time, so a bridge started
+         * later still gets it. */
+        char line[1 + 9 + 2 * HID_DESC_MAX], *p = line + 1 + 9;
+        unsigned i;
+
+        line[0] = 0;
+        memcpy(line + 1, "hid_desc=", 9);
+        for (i = 0; i < h->hid_desc_len; i++) {
+            p += sprintf(p, "%02x", h->hid_desc[i]);
+        }
+        (void)send(h->fd, line, p - line, 0);
+    }
     h->told_ms = qemu_clock_get_ms(QEMU_CLOCK_REALTIME);
 }
 
@@ -170,10 +189,28 @@ static void cdj_usbf_host_next_step(CdjUsbfHost *h)
         cdj_usbf_host_request(h, 0x00, USB_REQ_SET_CONFIGURATION, h->config, 0);
         break;
     case STEP_SET_CONFIG:
+        if (h->hid_in || h->hid_out) {
+            /* GET_DESCRIPTOR(report) for the bridge's virtual device */
+            cdj_usbf_host_request(h, USB_DIR_IN | USB_RECIP_INTERFACE,
+                                  USB_REQ_GET_DESCRIPTOR,
+                                  0x22 << 8, HID_DESC_MAX);
+            stw_le_p(h->setup + 4, h->hid_if);   /* wIndex = the HID interface */
+            break;
+        }
         h->state = HOST_CONFIGURED;
         info_report("usb host: deck %04x:%04x configured, MIDI in 0x%02x "
                     "out 0x%02x, HID in 0x%02x out 0x%02x", h->vid, h->pid,
                     h->midi_in, h->midi_out, h->hid_in, h->hid_out);
+        cdj_usbf_host_tell(h);
+        break;
+    case STEP_HID_DESC:
+        memcpy(h->hid_desc, h->data, MIN(h->len, sizeof(h->hid_desc)));
+        h->hid_desc_len = MIN(h->len, sizeof(h->hid_desc));
+        h->state = HOST_CONFIGURED;
+        info_report("usb host: deck %04x:%04x configured, MIDI in 0x%02x "
+                    "out 0x%02x, HID in 0x%02x out 0x%02x, report "
+                    "descriptor %u bytes", h->vid, h->pid, h->midi_in,
+                    h->midi_out, h->hid_in, h->hid_out, h->hid_desc_len);
         cdj_usbf_host_tell(h);
         break;
     }
@@ -237,6 +274,7 @@ static void cdj_usbf_host_tick(void *opaque)
         if (now - h->since_ms >= 100) {
             cdj_usbf_bus_reset(h->dev);
             h->maxp0 = h->midi_in = h->midi_out = h->hid_in = h->hid_out = 0;
+            h->hid_desc_len = 0;
             h->step = STEP_DEVICE_DESC;
             h->state = HOST_ENUMERATE;
             cdj_usbf_host_request(h, USB_DIR_IN, USB_REQ_GET_DESCRIPTOR,
