@@ -15,15 +15,18 @@
  * What the board models so far is what the boot needs first: the DMAC (the
  * firmware clears bss with DMAC channel 5 and polls TE), the clock register
  * the tick constant is chosen from, the interrupt controller, the timers
- * (the kernel tick is TMU channel 4) and both SCIFs. Every other
+ * (TMU0 is the NORTi tick, TMU4 is Pioneer's periodic) and both SCIFs. Every other
  * SH7763 block is a named unimplemented region, so the bring-up log
  * (scripts/run/boot_main.sh) lists what to model next.
  */
 
-/* The kernel tick is TMU channel 4 at 13500 counts per interrupt: 1 ms at
- * 54 MHz. The firmware picks 13500 over 11250 when FRQCR's top nibble is 3. */
+/* NORTi uses TMU0; Pioneer uses TMU4/5. FRQCR nibble 3 selects 11250
+ * counts (mode 2), nibble 4 selects 13500 (mode 3). SH7764 mode straps,
+ * not software, select the clock. NXS X2 is 26.965 MHz, PLL x12, Pphi /6.
+ * See docs/tmu-underflow.md for stock instruction and hardware evidence. */
 #define SH7763_PERIPH_HZ    54000000
-#define SH7763_FRQCR_BOOT   0x30000000
+#define CDJ2000NXS_PERIPH_HZ 53930000
+#define SH7763_FRQCR_BOOT   0x40320044
 
 #define CDJ2000_USBH_BASE   0xFE400000
 
@@ -50,7 +53,7 @@ static const CdjBoardDesc cdj2000nxs_board = {
      * (0x04368888, 0x04368894) before 0x04368878 first writes it. */
     .sr_seed_slot = 0x04D13694,
     .sr_seed = 0x400000F0,
-    .periph_hz = SH7763_PERIPH_HZ,
+    .periph_hz = CDJ2000NXS_PERIPH_HZ,
     .ccn_trace_lo = 0x640,              /* DMAC DMTE0..DMTE3 */
     .ccn_trace_hi = 0x6A0,
     .exit_report = cdj_sh7763_intc_report,
@@ -142,7 +145,7 @@ void sh7763_board_init(MachineState *machine, const CdjBoardDesc *desc,
                  cdj_count_irq(irq[S63_TMU2], "TMU2"));
     cdj_tmu_init(sysmem, 0x1FDC0000,
                  cdj_count_irq(irq[S63_TMU3], "TMU3"),
-                 cdj_count_irq(irq[S63_TMU4], "TMU4 tick"),
+                 cdj_count_irq(irq[S63_TMU4], "TMU4 Pioneer"),
                  cdj_count_irq(irq[S63_TMU5], "TMU5"));
     cdj_irqcount_exit.notify = cdj_irqcount_dump;
     cdj_add_exit_report(&cdj_irqcount_exit);
