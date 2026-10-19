@@ -2,7 +2,7 @@
 #include "sh7763.h"
 #include "cdj_getenv.h"
 #include "cdj_ether.h"
-#include "cdj_ata.h"
+#include "cdj2000_ata.h"
 #include "usb_r8a66597.h"
 /*
  * Pioneer CDJ-2000 and CDJ-2000NXS MAIN board (Renesas SH7763) -- bring-up.
@@ -204,8 +204,7 @@ void sh7763_board_init(MachineState *machine, const CdjBoardDesc *desc,
      * ATAPI_CONTROL* layout, offset for offset. GPIO/PFC is the next 64 KiB.
      * Its ISR 0x04109180 is registered as INTEVT H'C00 (T_CISR 0x0405D31C),
      * enabled through INT2PRI6 bits 31-24 and INT2MSKCR bit 20. */
-    cdj_ata_init(sysmem, "sh7763.atapi", 0xFFF00000,
-                 cdj_count_irq(irq[S63_ATAPI], "ATAPI"));
+    cdj2000_ata_init(sysmem, cdj_count_irq(irq[S63_ATAPI], "ATAPI"));
     cdj_unimp("sh7763.gpio",  0xFFF10000, 0x10000);
     /* Created after the board's RAM so that the largest RAM block sits at
      * offset 0: a migration's dirty-bitmap sync clears each block's range
