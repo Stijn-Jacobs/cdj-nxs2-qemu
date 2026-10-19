@@ -508,7 +508,6 @@ void cdj_dsp_host_init(CdjDspHost *h, const char *name, const char *env_prefix,
     h->slack_ns = slack ? strtoull(slack, NULL, 0) * 1000 : 0;
     /* The chip's ROM boot loader raises HINT at reset to tell the host it
      * is ready; MAIN waits for that before it loads anything. */
-    cdj_dsp_host_event(h, "reset_assert", 0, 0, 0, 0);
     h->hpic = HPIC_HINT;
     cdj_dsp_host_event(h, "rom_hpi_ready", 0, 0, 1, 0);
     h->set_pins = set_pins;

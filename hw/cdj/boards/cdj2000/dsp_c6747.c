@@ -346,8 +346,16 @@ static uint64_t hpi_read(void *opaque, hwaddr off, unsigned size)
     }
 
     switch (off >> 18) {
-    case 0:
-        return cdj_dsp_host_hpic(&s->host);
+    case 0: {
+        /* UHPI HPIC as the C6747 reads it back (SPRUFL8): reserved bits 6:5=2
+         * and 3=1, HWOB also in HWOBSTAT (bit 8), the half-word mirrored to
+         * both halves. MAIN writes it back, so the transcript shows it.
+         * ponytail: HPIRST/DUALHPIA/HPIASEL not modelled (MAIN never sets them). */
+        uint32_t hpic = cdj_dsp_host_hpic(&s->host);
+        uint32_t v = 0x48 | (hpic & HPIC_HWOB ? 0x101 : 0) |
+                     (hpic & (HPIC_HINT | HPIC_DSPINT));
+        return v | v << 16;
+    }
     case 1:
         return s->hpia;
     default:

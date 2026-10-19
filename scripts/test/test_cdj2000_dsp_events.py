@@ -32,6 +32,7 @@ def main():
 #include <sys/stat.h>
 #define HPIC_HINT 4
 #define HPIC_DSPINT 2
+#define HPIC_HWOB 1
 #define error_report(...) fprintf(stderr, __VA_ARGS__)
 typedef uint64_t hwaddr;
 typedef struct c66x_stats { uint64_t packets, cycles; } c66x_stats;
