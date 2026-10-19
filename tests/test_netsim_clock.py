@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_production_segment_clock_and_delivery(tmp_path):
     cc = shutil.which('cc')
     pkg = shutil.which('pkg-config')
-    if not cc or not pkg:
+    if not cc or not pkg or subprocess.run([pkg, '--exists', 'glib-2.0']).returncode:
         pytest.skip('C compiler and glib required')
     source = (ROOT / 'hw/cdj/common/cdj_netsim.c').read_text()
     source = re.sub(r'^#include "[^\n]+"\n', '', source, flags=re.M)
