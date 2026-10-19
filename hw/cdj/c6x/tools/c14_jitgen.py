@@ -2640,6 +2640,8 @@ def main():
                     help="--only for every address in this file (one per line); a curated "
                          "module's roots plus a new workload's, without re-ranking either")
     ap.add_argument("--no-cc", action="store_true")
+    ap.add_argument("--copy-burst", action="store_true",
+                    help="fuse recognized plain-RAM copy pipelines (experimental; requires --wide-mem and EXACT replay)")
     ap.add_argument("--wide-mem", action="store_true",
                     help="combine paired RAM loads/stores (experimental; verify with an EXACT replay)")
     # 16-17 gcc at once (~0.8 GB each) beside a running deck hung the WSL VM (c16)
@@ -2687,7 +2689,11 @@ def main():
                     help="the busy-wait head regions stop at (the machine's CDJ_C6X_IDLE, 0x80076F00)")
     a = ap.parse_args()
     WIDE_MEM = a.wide_mem
+    if a.copy_burst and not WIDE_MEM:
+        ap.error("--copy-burst requires --wide-mem")
     prelude = PRELUDE + (WIDE_PRELUDE if WIDE_MEM else "")
+    if a.copy_burst:
+        prelude += open(os.path.join(os.path.dirname(__file__), "c14_copy_burst.h")).read()
     for path in a.only_file or []:
         a.only = (a.only or []) + [int(x, 0) for x in open(path).read().split()]
     if a.only:
@@ -2890,6 +2896,10 @@ def main():
             seen.add(k.addr)
             code, nn = lg.generate()
             nodes += nn
+            if a.copy_burst:
+                from c14_copy_fusion import fuse_copy
+                code, fused = fuse_copy(code)
+                print("loop 0x%08x: copy burst %s" % (k.addr, "recognized" if fused else "not applicable"), file=sys.stderr)
             codes.append(code)
             n = lg.name
             deps = sorted(lg.deps)
