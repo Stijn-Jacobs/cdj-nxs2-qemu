@@ -86,6 +86,10 @@ typedef struct CdjDspHost {
     unsigned nposted;
 
     uint32_t hpic;
+    /* Optional NXS JSON-lines transcript; accesses hold @lock. */
+    FILE *event_log;
+    uint64_t event_sequence;
+    unsigned boot_phase;       /* MAIN's command pin level, not a step count */
     int dspint_line;            /* CPU interrupt MAIN's DSPINT raises, 0 = none */
     unsigned command;
     uint64_t commands, hint_edges, react_cycles;
@@ -118,6 +122,11 @@ void cdj_dsp_host_run(CdjDspHost *h, uint32_t entry);
  * cdj_dsp_host_resume() instead of cdj_dsp_host_run(). */
 extern const VMStateDescription vmstate_cdj_dsp_host;
 void cdj_dsp_host_resume(CdjDspHost *h);
+
+/* Open once before host_init; NULL/empty disables recording. */
+void cdj_dsp_host_events_init(CdjDspHost *h, const char *path);
+void cdj_dsp_host_event(CdjDspHost *h, const char *event, uint64_t offset,
+                        uint64_t address, uint64_t value, unsigned size);
 
 /* MAIN's side of @lock, for the chip's host-port handlers. The core's
  * thread steps aside while MAIN waits: a mutex alone lets it take the lock

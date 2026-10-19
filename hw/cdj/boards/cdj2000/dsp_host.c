@@ -51,6 +51,42 @@
 #define GBLCTL_R        0x001Fu
 #define GBLCTL_X        0x1F00u
 
+void cdj_dsp_host_events_init(CdjDspHost *h, const char *path)
+{
+    if (path && *path) {
+        h->event_log = fopen(path, "a");
+        if (!h->event_log) {
+            error_report("nxs-hpi: cannot open DSP event transcript %s", path);
+        }
+    }
+}
+
+void cdj_dsp_host_event(CdjDspHost *h, const char *event, uint64_t offset,
+                        uint64_t address, uint64_t value, unsigned size)
+{
+    c66x_stats st = { 0 };
+
+    if (!h->event_log) {
+        return;
+    }
+    if (h->core) {
+        c66x_get_stats(h->core, &st);
+    }
+    ++h->event_sequence;
+    if (fprintf(h->event_log,
+                "{\"sequence\":%" PRIu64 ",\"event\":\"%s\","
+                "\"offset\":%" PRIu64 ",\"address\":%" PRIu64 ","
+                "\"value\":%" PRIu64 ",\"size\":%u,\"boot_phase\":%u,"
+                "\"hint\":%s,\"dspint\":%s,\"packets\":%" PRIu64 ","
+                "\"cycles\":%" PRIu64 "}\n",
+                h->event_sequence, event, offset, address, value, size,
+                h->boot_phase, h->hpic & HPIC_HINT ? "true" : "false",
+                h->hpic & HPIC_DSPINT ? "true" : "false", st.packets,
+                st.cycles) < 0 || fflush(h->event_log)) {
+        error_report("nxs-hpi: DSP event transcript write failed");
+    }
+}
+
 static bool host_stopped(CdjDspHost *h, c66x_stop stop)
 {
     h->last_stop = stop;
@@ -59,6 +95,12 @@ static bool host_stopped(CdjDspHost *h, c66x_stop stop)
     }
     h->trap_pc = c66x_trap_pc(h->core);
     h->running = false;
+    if (h->event_log) {
+        uint8_t *p = h->ram ? h->ram(h->chip, h->trap_pc & ~3u) : NULL;
+
+        cdj_dsp_host_event(h, "dsp_stop", 0, h->trap_pc,
+                           p ? ldl_le_p(p) : 0, 0);
+    }
     warn_report("%s: core stopped (%s) at 0x%08x", h->name,
                 stop == C66X_STOP_UNDEF ? "undefined instruction" : "fault",
                 h->trap_pc);
@@ -327,6 +369,11 @@ static void host_command(void *opaque, unsigned bits)
     }
     cdj_dsp_host_lock(h);
     h->command = bits;
+    /* The reference's boot_phase is MAIN's pin level, not the number of
+     * completed handshakes. This model carries PH0/PH1 (phases 0..3);
+     * record the drop to zero as well, before the loader reacts. */
+    h->boot_phase = bits;
+    cdj_dsp_host_event(h, "boot_phase", 0, 0, bits, 0);
     h->set_pins(h->chip, bits);
     if (bits) {
         h->commands++;
@@ -461,7 +508,9 @@ void cdj_dsp_host_init(CdjDspHost *h, const char *name, const char *env_prefix,
     h->slack_ns = slack ? strtoull(slack, NULL, 0) * 1000 : 0;
     /* The chip's ROM boot loader raises HINT at reset to tell the host it
      * is ready; MAIN waits for that before it loads anything. */
+    cdj_dsp_host_event(h, "reset_assert", 0, 0, 0, 0);
     h->hpic = HPIC_HINT;
+    cdj_dsp_host_event(h, "rom_hpi_ready", 0, 0, 1, 0);
     h->set_pins = set_pins;
     h->chip = chip;
     h->wires = (CdjDspWires){ h, host_command, host_busy };
@@ -498,6 +547,7 @@ static void host_start_thread(CdjDspHost *h)
 void cdj_dsp_host_run(CdjDspHost *h, uint32_t entry)
 {
     c66x_reset(h->core, entry);
+    cdj_dsp_host_event(h, "dsp_start", 0, entry, 0, 0);
     h->running = true;
     h->dsp_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
     if (cdj_report_enabled()) {
@@ -509,6 +559,7 @@ void cdj_dsp_host_run(CdjDspHost *h, uint32_t entry)
 void cdj_dsp_host_resume(CdjDspHost *h)
 {
     c66x_load(h->core, h->snap->data);
+    h->boot_phase = h->command;
     qatomic_set(&h->paused, !runstate_is_running());
     if (h->running) {
         host_start_thread(h);
