@@ -42,6 +42,15 @@ typedef struct CdjDmacState {
 
 /* For cdj_dmac_dreq(), which peripherals call without a handle. */
 static CdjDmacState *cdj_dmac;
+static hwaddr cdj_fifo_port;
+static bool (*cdj_fifo_transfer)(bool, uint8_t *, unsigned);
+
+void cdj_dmac_fifo_connect(hwaddr port,
+                          bool (*transfer)(bool, uint8_t *, unsigned))
+{
+    cdj_fifo_port = A7ADDR(port);
+    cdj_fifo_transfer = transfer;
+}
 
 /*
  * DMA0_SAR_0 is at 0xFE008020: channel n (0-3) is at +0x20 + 0x10 * n,
@@ -164,6 +173,32 @@ static void cdj_dmac_run(CdjDmacState *s, hwaddr chan, bool from_dreq)
      * the MAIN bootloader's own copy of the flash image is 0x79000 units. */
     if (len == 0 || len > 64 * MiB || tcr > 0xFFFFFF) {
         cdj_dmac_complete(s, chan, from_dreq);             /* claim TE anyway */
+        return;
+    }
+
+    /* SDHI moves one staged block through a fixed FIFO even when the TS
+     * burst is wider than its 16-bit MMIO port. Do not advance along MMIO. */
+    if (cdj_fifo_transfer &&
+        ((sm == 0 && A7ADDR(sar) == cdj_fifo_port) ||
+         (dm == 0 && A7ADDR(dar) == cdj_fifo_port))) {
+        bool writing = dm == 0 && A7ADDR(dar) == cdj_fifo_port;
+        if (len > 512 || (writing ? sm : dm) != 1) {
+            return; /* unsupported burst; never claim a transfer happened */
+        }
+        buf = g_malloc(len);
+        if (writing) {
+            cpu_physical_memory_read(A7ADDR(sar), buf, len);
+        }
+        if (!cdj_fifo_transfer(writing, buf, len)) {
+            return;
+        }
+        if (!writing) {
+            cpu_physical_memory_write(A7ADDR(dar), buf, len);
+        }
+        s->reg[(chan + 0x00) / 4] = sar + (writing ? len : 0);
+        s->reg[(chan + 0x04) / 4] = dar + (writing ? 0 : len);
+        s->reg[(chan + 0x08) / 4] = 0;
+        cdj_dmac_complete(s, chan, false);
         return;
     }
 
