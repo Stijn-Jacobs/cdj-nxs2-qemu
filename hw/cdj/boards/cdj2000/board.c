@@ -231,15 +231,11 @@ void sh7763_board_init(MachineState *machine, const CdjBoardDesc *desc,
     }
     cdj_unimp("sh7763.blk-ffd3", 0xFFD30000, 0x10000);
     cdj_unimp("sh7763.blk-ff2f", 0xFF2F0000, 0x10000);
-    /* The rear USB-B function chip (MIDI/HID/audio class), not the NXS2's
-     * R8A66597 host controller: its register layout past +0x0E does not
-     * match that chip (+0x10 is an interrupt-enable register, not DMA0CFG).
-     * The probe (0x042399C8) writes 1 to +0x000 and polls it for bit 0 up to
-     * 256 times; a plain read-back register file answers that with nothing
-     * behind it, which is enough for the boot (a failed probe only parks the
-     * USB task, it does not stop MAIN). The USB host itself is on-chip at
-     * 0xFE400000 (see below). */
-    cdj_regs(sysmem, "cdj2000.usbf", 0x01000000, 0x1000, NULL);
+    /* The rear USB-B function chip (MIDI/HID/audio class), an M66291GP, not
+     * the NXS2's R8A66597 host controller. Its INT# is the SH7763's GPIO
+     * channel 2 (INTEVT 0xFC0). The USB host itself is on-chip at 0xFE400000
+     * (see above). */
+    cdj2000_usbf_init(sysmem, cdj_count_irq(irq[S63_GPIO2], "USBF"));
 
     cdj_board_load(machine);
     cdj_board_start(cpu);

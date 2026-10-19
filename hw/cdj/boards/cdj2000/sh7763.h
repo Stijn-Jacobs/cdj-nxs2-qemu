@@ -43,6 +43,13 @@ typedef struct CdjDspWires {
     bool (*busy)(void *opaque);
 } CdjDspWires;
 
+/* The rear USB-B function chip (M66291GP) and its host relay. */
+void cdj2000_usbf_init(MemoryRegion *sysmem, qemu_irq irq);
+/* One line of the USB audio log (CDJ_M66291_LOG=<path>); no-op without it. */
+void cdj2000_usbf_log(const char *fmt, ...) G_GNUC_PRINTF(1, 2);
+/* True once the driver has enabled SOF (USB audio started). */
+bool cdj2000_usbf_audio_started(void);
+
 void cdj2000_latch_init(MemoryRegion *sysmem, const CdjDspWires *dsp,
                         bool display);
 /* The 16-bit latch register at off, as MAIN last wrote it. */

@@ -220,16 +220,19 @@ static void s63_count_group_enables(struct intc_desc *desc)
  * reading 0 it acknowledged nothing and DMTE2 re-entered it for good.
  * INT2B4 (0xFFD40050) is the display link, bit n for its interrupt 0x50 + n;
  * all four of its handlers read it first (they test 0x01, 0x02, 0x20, 0x40).
+ * INT2B7 (0xFFD4005C) is the GPIO group: the GPIO channel 2 handler
+ * (0x042C98AA) forwards to the USB function driver when bit 19 is set.
  */
 typedef struct S63Int2b {
     hwaddr addr;
-    intc_enum src[8];
+    intc_enum src[20];
 } S63Int2b;
 
 static const S63Int2b s63_int2b[] = {
     { 0xFFD4004C, { S63_DMTE0, S63_DMTE1, S63_DMTE2, S63_DMTE3 } },
     { 0xFFD40050, { S63_DISP_RX_DMA, S63_DISP_RX_SER, 0, 0, 0,
                     S63_DISP_TX_DMA, S63_DISP_TX_SER } },
+    { 0xFFD4005C, { [19] = S63_GPIO2 } },
 };
 
 static uint64_t s63_int2b_read(void *opaque, hwaddr off, unsigned size)

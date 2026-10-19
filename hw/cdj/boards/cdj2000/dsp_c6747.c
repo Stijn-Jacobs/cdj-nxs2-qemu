@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
+#include "sh7763.h"
 #include "dsp_host.h"
 #include "cdj_getenv.h"
 #include "dsp_edma3.h"
@@ -329,6 +330,22 @@ static void hpi_note_write(CdjC6747 *s, uint32_t addr)
     }
 }
 
+/* USB audio slots (see usbf_m66291.c, CDJ_M66291_LOG): MAIN's HPI accesses
+ * to the two 0x830-byte slots at 0x11837bc0. The DSP's loader uses the same
+ * window at boot, so nothing is logged before the USB audio has started. */
+#define USB_SLOT_BASE   0x11837bc0u
+#define USB_SLOT_SIZE   0x830u
+
+static void hpi_slot_log(char kind, uint32_t addr, uint32_t val)
+{
+    uint32_t o = addr - USB_SLOT_BASE;
+
+    if (o < 2 * USB_SLOT_SIZE && cdj2000_usbf_audio_started()) {
+        cdj2000_usbf_log("SLOT%c s=%u off=%03x val=%08x", kind,
+                         o / USB_SLOT_SIZE, o % USB_SLOT_SIZE, val);
+    }
+}
+
 static uint64_t hpi_read(void *opaque, hwaddr off, unsigned size)
 {
     CdjC6747 *s = opaque;
@@ -341,6 +358,8 @@ static uint64_t hpi_read(void *opaque, hwaddr off, unsigned size)
         return s->hpia;
     default:
         val = cdj_dsp_host_read_word(&s->host, s->hpia);
+        hpi_slot_log('R', s->hpia, val);
+        hpi_slot_log('R', s->hpia, val);
         s->reads++;
         cdj_dsp_count(&s->polls, s->hpia, val);
         if ((off >> 18) == 2) {
@@ -369,6 +388,7 @@ static void hpi_write(void *opaque, hwaddr off, uint64_t val, unsigned size)
         s->hpia = val;
         break;
     default:
+        hpi_slot_log('W', s->hpia, val);
         if (!cdj_dsp_host_write_word(&s->host, s->hpia, val)) {
             s->dropped++;
         }
