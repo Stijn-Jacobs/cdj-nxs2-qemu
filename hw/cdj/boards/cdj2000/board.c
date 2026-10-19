@@ -272,7 +272,7 @@ static void cdj2000_init(MachineState *machine)
  * SH_FEATURE_SH4A, i.e. the SH7785. */
 static void cdj2000nxs_machine_init(MachineClass *mc)
 {
-    mc->desc = "Pioneer CDJ-2000NXS (Renesas SH7763), bring-up";
+    mc->desc = "Pioneer CDJ-2000NXS (Renesas SH7763), bring-up [netsim-wall-v1]";
     mc->init = cdj2000nxs_init;
     mc->default_cpu_type = TYPE_SH7785_CPU;
     mc->default_ram_size = 128 * MiB;
