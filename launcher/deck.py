@@ -53,7 +53,7 @@ def dsp_env(lay, m, env):
         return knobs
     module = dsp_module.check(lay, m)
     if module.path:
-        knobs["C66X_JIT"] = host.native(module.path)
+        knobs["C66X_JIT"] = dsp_module.native_chain(module.path)
     if module.notice:
         warn_banner(*module.notice)
     return knobs
@@ -121,8 +121,9 @@ def plan_snapshot(lay, m, argv, env):
     kernel = argv[argv.index("-kernel") + 1]
     files = [argv[0], kernel] + [env[k] for k in ("CDJ_BF531_UPD", "CDJ_M16C_GUI") if k in env] + [lay.usb_image]
     # The sound device and the DSP module shape the machine as well.
-    if os.path.isfile(env.get("C66X_JIT", "")):
-        files.append(env["C66X_JIT"])
+    for path in env.get("C66X_JIT", "").split(";" if host.is_windows() else ":"):
+        if os.path.isfile(path):
+            files.append(path)
     audio = argv[argv.index("-audio") + 1] if "-audio" in argv else ""
     point_dir = os.path.join(snapshot.root(lay.tmp, files, env.get("MAIN_ARGS", "") + " " + audio), point)
     if snapshot.saved(point_dir, ("main.vm",)):
