@@ -40,6 +40,7 @@ typedef struct CdjDspHost {
     FILE *event_log;
     uint64_t event_sequence, commands;
     unsigned boot_phase, command, hpic;
+    bool phase_logged;
     bool enabled;
     void *core, *chip;
     void (*set_pins)(void *, unsigned);

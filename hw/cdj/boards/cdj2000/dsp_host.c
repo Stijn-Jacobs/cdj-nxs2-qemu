@@ -364,10 +364,16 @@ static void host_command(void *opaque, unsigned bits)
     CdjDspHost *h = opaque;
 
     /* MAIN rewrites the latch for its other bits too. */
-    if (bits == h->command) {
+    if (bits == h->command && h->phase_logged) {
         return;
     }
     cdj_dsp_host_lock(h);
+    h->phase_logged = true;
+    if (bits == h->command) {   /* the reference logs MAIN's initial phase 0 */
+        cdj_dsp_host_event(h, "boot_phase", 0, 0, bits, 0);
+        cdj_dsp_host_unlock(h);
+        return;
+    }
     h->command = bits;
     /* The reference's boot_phase is MAIN's pin level, not the number of
      * completed handshakes. This model carries PH0/PH1 (phases 0..3);

@@ -90,6 +90,7 @@ typedef struct CdjDspHost {
     FILE *event_log;
     uint64_t event_sequence;
     unsigned boot_phase;       /* MAIN's command pin level, not a step count */
+    bool phase_logged;         /* MAIN's first latch write is logged even unchanged */
     int dspint_line;            /* CPU interrupt MAIN's DSPINT raises, 0 = none */
     unsigned command;
     uint64_t commands, hint_edges, react_cycles;
