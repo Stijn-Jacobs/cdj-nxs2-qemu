@@ -6,7 +6,7 @@ pass over that same profile with `MODEL_DSP_SUPPLEMENT_ARGS` in
 `models/cdj2000nxs.conf`:
 
 ```
---roots 100 --min 100000 --nodes 400 --kernels 16 --cold 2000 --idle-head 0xc004cb8c --jobs 6
+--roots 400 --min 100000 --nodes 400 --kernels 16 --cold 2000 --idle-head 0xc004cb8c --jobs 6
 ```
 
 The supplemental pass uses the generator defaults for everything else (no
@@ -26,6 +26,37 @@ less time). All 48,115,851 records were EXACT with identical final state, write
 and RAM hashes against both the interpreter and the curated module. This was
 one timing sample using diagnostic media; Linux and real-library performance
 remain unmeasured.
+
+On 2026-10-13, the `respin-native` checkout at `873cdd7` regenerated the
+supplement with 400 roots and all other options unchanged, using the same
+private trial profile at `/tmp/cdj-dsp-matrix/mac-mp3-320-v2/profile` and its
+`ram_*.bin` images. These inputs and the recording were checked against the
+prior private trial manifests. The output is private under
+`runs/native-dsp-roots400`; nothing was installed into `~/c14gen`.
+
+Sequential offline replays in that session measured:
+
+| Module chain | Replay seconds | Supplemental `m.so` bytes |
+| --- | --- | --- |
+| Curated + regenerated roots 100 | 58.41, 58.80 | 2,289,560 |
+| Curated + regenerated roots 400 | 48.96, 53.53 | 6,941,912 |
+| Curated baseline alone | 98.40 | — |
+| Installed curated + existing supplement | 103.89 | 2,289,560 (`m.extra.so`) |
+
+The curated `m.so` is 23,189,480 bytes. The roots-400 generation and compilation
+together took 26 s with six jobs (the core library was already up to date),
+producing 400 regions, 406 clean entries and 16 kernels. Compared with the fresh
+roots-100 samples from `runs/native-dsp-trial-regenerated`, the two-sample mean
+fell from 58.605 s to 51.245 s: 12.6% less replay time for a 3.03x larger
+supplement. These are timing samples, not a broader performance qualification.
+
+Both roots-400 exact-replay gates passed all 48,115,851 records with identical
+final state, write and RAM hashes against their interpreter runs (148.68 s and
+159.66 s), the fresh curated baseline, both fresh roots-100 runs, the installed
+native chain and the prior trial receipt. Private receipts are under
+`runs/native-dsp-roots400-gate-1` and `runs/native-dsp-roots400-gate-2`; comparison
+receipts are under `runs/native-dsp-measure-*`. No deck or QEMU guest runs were
+used for this regeneration or measurement.
 
 Coverage depends on the supplied profile. The trial used the complete recorded
 MP3/MASTER TEMPO workload's profile with the existing curated module, rather
