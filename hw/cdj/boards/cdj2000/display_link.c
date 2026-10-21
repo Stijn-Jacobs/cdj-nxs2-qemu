@@ -574,7 +574,11 @@ static bool link_fault_configure(const char *name,const char *report)
 
 /* CDJ_LINK_CAPTURE=<path> records MAIN's packets (see link_capture).
  * CDJ_BF531_LINK_LOG=1 logs every packet: direction, length and its first
- * 64 bytes. CDJ_LINK_LOG_FULL=1 logs up to the complete 2048-byte buffer. */
+ * 64 bytes. CDJ_LINK_LOG_FULL=1 logs up to the complete 2048-byte buffer.
+ * CDJ_LINK_TX_DELAY_US=0..50000 is a cold-boot fault injection: each MAIN
+ * packet is copied when sent and delivered that much virtual time later, and
+ * only then do the DMA end and the serial TX_DONE follow, in the usual order.
+ * A restart while a packet is held is refused, and so are snapshots. */
 void cdj2000_display_link_init(MemoryRegion *sysmem, qemu_irq rx, qemu_irq tx,
                                qemu_irq tx_ser)
 {

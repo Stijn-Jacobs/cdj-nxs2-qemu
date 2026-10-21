@@ -383,6 +383,13 @@ int bf531_ppi_delay_json(const bf531 *s, FILE *f)
 }
 
 /* ---- SCLK watchdog (BF53x HRM15-50..54) ------------------------------- */
+
+/* As the ADSP-BF533 Hardware Reference (Rev. 3.6, chapter 15) gives it: the
+ * WDEN disable key, CNT preloaded while disabled and reloaded into STAT while
+ * enabled, a countdown that stops at zero, and WDRO sticky until cleared after
+ * a disable. It counts elapsed time at the current PLL_DIV ratio. Of the
+ * expiry events the general-purpose interrupt and none are modelled; reset
+ * and NMI stop the model (BFIN_STOP_UNDEF) with a diagnostic. */
 #define WDRO 0x8000u
 #define WD_DISABLE 0x0ad0u
 static int wdog_enabled(bf531 *s) { return (s->mmr[WDOG_CTL / 4] & 0xff0) != WD_DISABLE; }
@@ -668,8 +675,8 @@ static uint16_t fl_read16(bf531 *s, uint32_t addr)
 
     if (s->fl_mode == FL_BUSY) {
         s->fl_reads++;
-        /* ponytail: a modelled delay by either clock; polling that never
-         * touches the core clock still terminates. */
+        /* Busy ends by status reads or by model time, whichever comes
+         * first, so polling that never advances the core clock still ends. */
         if (s->fl_reads > s->fl_op * 32u + 4 ||
             bfin_cycles(s->core) >= s->fl_until) {
             if (fl_logging()) {
@@ -751,7 +758,7 @@ static void fl_write16(bf531 *s, uint32_t addr, uint16_t val)
     }
 
     if (s->fl_mode == FL_BUSY) {
-        fl_read16(s, addr);     /* ponytail: busy ends by time as well as reads */
+        fl_read16(s, addr);     /* busy ends by time as well as reads */
         if (s->fl_mode == FL_BUSY) {
             return;             /* writes during a program or erase are ignored */
         }
@@ -1040,7 +1047,7 @@ static void sport1_rx_complete(bf531 *s, int ch)
      * stock GUI arms each receive for the record it expects (32 words for a
      * header, 1024 for a 2 KB update record) and polls with a 100-word probe
      * in between; splitting a 2 KB record across the probe corrupted every
-     * update chunk. Our native GUI arms 2048 bytes, so its bursts always fit. */
+     * update chunk. A GUI that arms the full 2048 bytes always fits. */
     if (s->sport1_rx_len > room) {
         s->sport1_rx_waits++;
         return;

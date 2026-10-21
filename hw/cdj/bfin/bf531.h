@@ -44,7 +44,14 @@ typedef struct bf531_ownership_timing {
     uint64_t overflow;
 } bf531_ownership_timing;
 /* Opt-in, cold-boot host observations only. The caller binds start_pc to its
- * exact firmware ELF. No configured/observed marker means runtime unavailable. */
+ * exact firmware ELF. No configured/observed marker means runtime unavailable.
+ * bf531_timing_json writes them (CDJ_BF531_DUMP's ownership-timing.json): per
+ * phase, boot before the marker and runtime after it, the spans with every
+ * maskable CEC level masked (imask) and with IPEND's global bit set
+ * (ipend_global), in elapsed model cycles at 400 MHz with IDLE included, and
+ * the watchdog's arms, expiries and first STAT reads after expiry. Only
+ * completed spans count; one cut by the marker or the dump is reported as
+ * censored. A snapshot restore makes the runtime phase unavailable. */
 int bf531_timing_enable(bf531 *s, int start_configured, uint32_t start_pc);
 void bf531_timing_read(bf531 *s, bf531_ownership_timing *out);
 int bf531_timing_json(bf531 *s, FILE *out);
@@ -56,6 +63,10 @@ typedef struct bf531_ppi_injection {
     uint32_t delay_us, requested_count, applied_count;
     uint64_t scheduled_cycle, original_due_cycle, delayed_due_cycle;
 } bf531_ppi_injection;
+/* Fault injection (CDJ_BF531_PPI_DELAY_US, _COUNT): once the timing marker has
+ * run in a cold boot, the next count PPI DMA0 schedules finish delay_us later
+ * in model time. Pixels, DONE and the interrupt keep their order; only the
+ * due time moves. bf531_ppi_delay_json writes what was applied. */
 int bf531_ppi_delay_configure(bf531 *s, uint32_t delay_us, uint32_t count);
 void bf531_ppi_delay_read(const bf531 *s, bf531_ppi_injection *out);
 int bf531_ppi_delay_json(const bf531 *s, FILE *out);

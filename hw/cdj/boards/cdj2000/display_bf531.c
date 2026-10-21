@@ -752,6 +752,13 @@ bool cdj2000_display_init(const Cdj2000Display *desc)
     }
 
     s->chip = bf531_new(desc->sdram_size, &host, stderr);
+    /* CDJ_BF531_CLOCK_MODEL=1 and CDJ_BF531_TINT_W0C=1 turn on the models
+     * bfin_set_models describes. Stock firmware never programs SIC_IWR (all
+     * ones from reset) and leaves TIMER0's interrupt latched behind
+     * SIC_IMASK, so under the clock model its core never sleeps. A GUI meant
+     * to sleep under it needs an SCLK wake for its deadlines (the watchdog or
+     * a GP timer) and an explicit SIC_IWR, since the core timer stops in
+     * IDLE. */
     bfin_set_models(bf531_core(s->chip), getenv("CDJ_BF531_CLOCK_MODEL") != NULL,
                     getenv("CDJ_BF531_TINT_W0C") != NULL);
     if (sport1) {

@@ -116,7 +116,7 @@ class LiveTarget:
         self.noack = False
         self.running = False
         self.send("QStartNoAckMode")    # accepted or not, both are handled
-        self.noack = True               # ponytail: assume acceptance (server does)
+        self.noack = True               # assume accepted, as this server does
 
     # framing
     def _put(self, data):

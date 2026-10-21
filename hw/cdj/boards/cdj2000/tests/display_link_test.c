@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
-/* Actual board MMIO/send/timer paths with deterministic memory, time and IRQs. */
+/* Actual board MMIO/send/timer paths with deterministic memory, time and IRQs.
+ * POSIX only (fork, setenv):
+ *   cc -std=gnu11 -O2 -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare  *      hw/cdj/boards/cdj2000/tests/display_link_test.c -o display_link_test */
 #define CDJ_DISPLAY_LINK_TEST 1
 #include "../display_link.c"
 

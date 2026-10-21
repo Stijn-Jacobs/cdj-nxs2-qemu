@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 # Out-of-tree build of the offline runner: make -C hw/cdj/bfin O=~/build/bfin
+# and the host tests: make -C hw/cdj/bfin O=~/build/bfin check
 O      ?= $(HOME)/build/bfin
 CC     ?= gcc
 CFLAGS ?= -O2 -g -Wall -Wextra -Wno-unused-parameter
