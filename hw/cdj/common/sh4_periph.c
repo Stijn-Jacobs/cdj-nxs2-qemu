@@ -284,8 +284,8 @@ void cdj_regs(MemoryRegion *sysmem, const char *name, hwaddr base,
  *
  * The interrupt entry dispatches on INTEVT (0xFF000028), so EXPEVT and INTEVT
  * expose QEMU's env->expevt/intevt; TRA (0xFF000020) exposes env->tra, which
- * an exception handler reads to tell its own TRAPA #imm from a fault. The rest of the block is a plain register
- * file.
+ * an exception handler reads to tell its own TRAPA #imm from a fault. The
+ * rest of the block is a plain register file.
  */
 #define CDJ_CCN_BASE    0xFF000000
 #define CDJ_CCN_SIZE    0x1000
