@@ -2,6 +2,7 @@
 #include "sh7763.h"
 #include "qemu/main-loop.h"
 #include "qemu/sockets.h"
+#include "cdj_getenv.h"
 #include <stdarg.h>
 /*
  * The rear USB-B function chip of the CDJ-2000 / CDJ-2000NXS: a Renesas
@@ -64,7 +65,7 @@
  *   ISO frame=<n> len=<bytes> sum=<CRC-32 of the payload>  delivered to EP1
  *   ISODROP frame=<n> len=<bytes>                          EP1 not armed
  *   SLOTW/SLOTR s=<0|1> off=<hex> val=<hex>                MAIN's HPI write /
- *        read of a DSP audio slot (0x11837bc0 + s * 0x830), from dsp_c6747.c
+ *        read of a DSP audio slot (USB_SLOT_BASE + s * USB_SLOT_SIZE)
  *
  * Not modelled: suspend/resume, NRDY, DMA FIFOs, single-bank FIFOs only, a
  * real frame number (the SOF flag carries none), the host-side audio
@@ -102,6 +103,13 @@
 #define ISO_MAX         1024
 #define SOF_PERIOD_US   1000
 #define ISO_DELAY_US    500
+
+/* The two audio slots MAIN fills through the C6747's host port, as the
+ * CDJ-2000NXS DSP application lays them out; a fixed address, not looked up
+ * in the image. The DSP's loader uses the same window at boot, so nothing is
+ * logged before the USB audio has started. */
+#define USB_SLOT_BASE   0x11837bc0u
+#define USB_SLOT_SIZE   0x830u
 
 typedef struct UsbfEp {
     uint8_t in[1024];
@@ -167,7 +175,7 @@ static uint32_t sum32(const uint8_t *p, unsigned n)
     return ~c;
 }
 
-void cdj2000_usbf_log(const char *fmt, ...)
+static void G_GNUC_PRINTF(1, 2) usbf_log(const char *fmt, ...)
 {
     va_list ap;
 
@@ -182,9 +190,14 @@ void cdj2000_usbf_log(const char *fmt, ...)
     fputc('\n', usbf->log);
 }
 
-bool cdj2000_usbf_audio_started(void)
+static void usbf_slot_log(char kind, uint32_t addr, uint32_t val)
 {
-    return usbf && usbf->log && usbf->iso.sof > 0;
+    uint32_t o = addr - USB_SLOT_BASE;
+
+    if (o < 2 * USB_SLOT_SIZE && usbf->iso.sof > 0) {
+        usbf_log("SLOT%c s=%u off=%03x val=%08x", kind, o / USB_SLOT_SIZE,
+                 o % USB_SLOT_SIZE, val);
+    }
 }
 
 static unsigned ep_pid(CdjUsbf *s, unsigned n)
@@ -283,8 +296,8 @@ static void iso_put(void *opaque)
     if (ep_in(s, 1) || ep_pid(s, 1) != PID_BUF || e->out_full) {
         if (!s->iso.lossless) {
             s->iso.dropped++;
-            cdj2000_usbf_log("ISODROP frame=%" PRIu64 " len=%u", s->iso.sof,
-                             s->iso.n[h]);
+            usbf_log("ISODROP frame=%" PRIu64 " len=%u", s->iso.sof,
+                     s->iso.n[h]);
             s->iso.head = (h + 1) % ISO_Q;
             s->iso.count--;
         }
@@ -295,8 +308,8 @@ static void iso_put(void *opaque)
     e->out_p = 0;
     e->out_full = true;
     s->iso.delivered++;
-    cdj2000_usbf_log("ISO frame=%" PRIu64 " len=%u sum=%08x", s->iso.sof,
-                     e->out_n, sum32(e->out, e->out_n));
+    usbf_log("ISO frame=%" PRIu64 " len=%u sum=%08x", s->iso.sof,
+             e->out_n, sum32(e->out, e->out_n));
     s->iso.head = (h + 1) % ISO_Q;
     s->iso.count--;
     usbf_update(s);
@@ -862,9 +875,6 @@ void cdj2000_usbf_init(MemoryRegion *sysmem, qemu_irq irq)
         }
         qemu_socket_set_nonblock(s->fd);
         qemu_set_fd_handler(s->fd, host_read, NULL, s);
-        s->iso.sof_timer = timer_new_us(QEMU_CLOCK_VIRTUAL, sof_tick, s);
-        s->iso.put_timer = timer_new_us(QEMU_CLOCK_VIRTUAL, iso_put, s);
-        s->timer = timer_new_ms(QEMU_CLOCK_VIRTUAL, ctl_timeout, s);
         timer_mod(s->timer, qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) + 500);
         info_report("usbf: M66291 host relay on udp 127.0.0.1:%s", port);
     }

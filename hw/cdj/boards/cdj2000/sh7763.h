@@ -45,10 +45,6 @@ typedef struct CdjDspWires {
 
 /* The rear USB-B function chip (M66291GP) and its host relay. */
 void cdj2000_usbf_init(MemoryRegion *sysmem, qemu_irq irq);
-/* One line of the USB audio log (CDJ_M66291_LOG=<path>); no-op without it. */
-void cdj2000_usbf_log(const char *fmt, ...) G_GNUC_PRINTF(1, 2);
-/* True once the driver has enabled SOF (USB audio started). */
-bool cdj2000_usbf_audio_started(void);
 
 void cdj2000_latch_init(MemoryRegion *sysmem, const CdjDspWires *dsp,
                         bool display);
@@ -69,6 +65,10 @@ const CdjDspWires *cdj_c6747_init(MemoryRegion *sysmem, hwaddr hpi_base);
  * passes may store to. Per firmware image; none by default. */
 void cdj_c6747_set_idle_loop(uint32_t head, uint32_t stack_lo,
                              uint32_t stack_hi);
+/* Called with every word MAIN reads ('R') or writes ('W') through the
+ * C6747's host port data register, and the DSP address it went to. */
+typedef void CdjHpiWatch(char kind, uint32_t addr, uint32_t val);
+void cdj_c6747_watch_hpi(CdjHpiWatch *watch);
 /* The CDJ-2000's C6727, behind a full-address host port on area 3. */
 const CdjDspWires *cdj_c6727_init(MemoryRegion *sysmem, hwaddr hpi_base);
 /* As cdj_c6747_set_idle_loop, for the C6727. */
