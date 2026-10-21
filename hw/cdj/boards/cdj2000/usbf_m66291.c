@@ -2,8 +2,6 @@
 #include "sh7763.h"
 #include "qemu/main-loop.h"
 #include "qemu/sockets.h"
-#include <arpa/inet.h>
-#include <sys/socket.h>
 #include <stdarg.h>
 /*
  * The rear USB-B function chip of the CDJ-2000 / CDJ-2000NXS: a Renesas
