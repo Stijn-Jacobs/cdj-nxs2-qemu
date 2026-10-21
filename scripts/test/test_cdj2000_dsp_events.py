@@ -60,6 +60,7 @@ static void cdj_dsp_host_lock(CdjDspHost *h)
 static void cdj_dsp_host_unlock(CdjDspHost *h)
 { assert(h->locked); h->locked = false; }
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(CdjDspHost, cdj_dsp_host_unlock)
+#define CDJ_DSP_HOST_EVENT_GUARD(h)     g_autoptr(CdjDspHost) host_guard_ =         (h)->event_log ? (cdj_dsp_host_lock(h), (h)) : NULL
 static uint8_t *dsp_ram(CdjC6747 *s, uint32_t a)
 { return a >= 0x11800000 && a < 0x11800010 ? s->ram + a - 0x11800000 : NULL; }
 static void stl_le_p(uint8_t *p, uint32_t v)
@@ -79,8 +80,9 @@ static bool cdj_dsp_host_write_word(CdjDspHost *h, uint32_t a, uint32_t v)
 static uint32_t cdj_dsp_host_hpic(CdjDspHost *h) { return h->hpic | 8; }
 static bool cdj_dsp_host_main_hpic(CdjDspHost *h, uint32_t v)
 { h->hpic = (h->hpic & ~(v & HPIC_HINT)) | (v & HPIC_DSPINT); return v & 2; }
-static void c66x_invalidate(void *core, uint32_t a, unsigned n)
-{ (void)core; (void)a; (void)n; }
+static bool cdj_dsp_host_write_word_locked(CdjDspHost *h, uint32_t a,
+                                           uint32_t v)
+{ assert(h->locked); return cdj_dsp_host_write_word(h, a, v); }
 static void cdj_dsp_count(unsigned *polls, uint32_t a, uint32_t v)
 { (void)polls; (void)a; (void)v; }
 static void hpi_note_write(CdjC6747 *s, uint32_t a) { (void)s; (void)a; }
