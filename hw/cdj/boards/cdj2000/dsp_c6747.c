@@ -365,7 +365,7 @@ static uint64_t hpi_read(void *opaque, hwaddr off, unsigned size)
         if ((off >> 18) == 2) {
             s->hpia += 4;
         }
-        if (dsp_ram(s, address & ~3u)) {
+        if (s->host.event_log && dsp_ram(s, address & ~3u)) {
             cdj_dsp_host_event(&s->host, "hpi_host_data_read", off,
                                address, val, size);
         }
