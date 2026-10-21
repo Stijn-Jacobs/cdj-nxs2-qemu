@@ -193,7 +193,7 @@ static void lifecycle_test(void)
     SHTimerState s; IRQ irq; init(&s, &irq);
     now = 5000000000LL; run_due(&s);
     assert(underflows == 5000);
-    assert(drain(&s) == 5000); /* no one-second backlog cap */
+    assert(drain(&s) == TIMER_MISSED_MAX + 1); /* a stall replays at most the cap */
     now += 10000000; run_due(&s);
     assert(irq.level);
     sh_timer_start_stop(&s, 0);
@@ -244,8 +244,11 @@ static unsigned stock_tick_rate(uint32_t hz, uint32_t frqcr, bool pioneer)
     sh_timer_write(s, OFFSET_TCNT * 4, reload);
     sh_timer_write(s, OFFSET_TCR * 4, 0x20);
     sh_timer_start_stop(s, 1);
-    now = 1000000000; run_due(s);
-    unsigned ticks = drain(s);
+    unsigned ticks = 0;
+    for (unsigned ms = 10; ms <= 1000; ms += 10) {
+        now = (int64_t)ms * 1000000; run_due(s);
+        ticks += drain(s);
+    }
     assert(ticks == underflows);
     ptimer_free(s->timer); g_free(s);
     return ticks;

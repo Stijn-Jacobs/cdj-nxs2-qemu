@@ -1,5 +1,5 @@
 diff --git a/hw/timer/sh_timer.c b/hw/timer/sh_timer.c
-index 7788939..37fdef5 100644
+index 7788939..0876372 100644
 --- a/hw/timer/sh_timer.c
 +++ b/hw/timer/sh_timer.c
 @@ -15,7 +15,9 @@
@@ -12,7 +12,21 @@ index 7788939..37fdef5 100644
  
  #define TIMER_TCR_TPSC          (7 << 0)
  #define TIMER_TCR_CKEG          (3 << 3)
-@@ -42,6 +44,7 @@ typedef struct {
+@@ -25,6 +27,13 @@
+ #define TIMER_TCR_ICPF          (1 << 9)
+ #define TIMER_TCR_RESERVED      (0x3f << 10)
+ 
++/*
++ * Underflows kept for a guest that has not acknowledged yet: one second of
++ * the 1 kHz kernel tick. A guest held off longer is behind the host, and
++ * replaying every late tick back to back would only keep it there.
++ */
++#define TIMER_MISSED_MAX  1000
++
+ #define TIMER_FEAT_CAPT   (1 << 0)
+ #define TIMER_FEAT_EXTCLK (1 << 1)
+ 
+@@ -42,6 +51,7 @@ typedef struct {
      int freq;
      int int_level;
      int old_level;
@@ -20,7 +34,7 @@ index 7788939..37fdef5 100644
      int feat;
      int enabled;
      qemu_irq irq;
-@@ -53,11 +56,16 @@ static void sh_timer_update(SHTimerState *s)
+@@ -53,11 +63,16 @@ static void sh_timer_update(SHTimerState *s)
  {
      int new_level = s->int_level && (s->tcr & TIMER_TCR_UNIE);
  
@@ -39,7 +53,7 @@ index 7788939..37fdef5 100644
  }
  
  static uint32_t sh_timer_read(void *opaque, hwaddr offset)
-@@ -85,6 +93,7 @@ static void sh_timer_write(void *opaque, hwaddr offset, uint32_t value)
+@@ -85,6 +100,7 @@ static void sh_timer_write(void *opaque, hwaddr offset, uint32_t value)
  {
      SHTimerState *s = opaque;
      int freq;
@@ -47,7 +61,7 @@ index 7788939..37fdef5 100644
  
      switch (offset >> 2) {
      case OFFSET_TCOR:
-@@ -100,8 +109,13 @@ static void sh_timer_write(void *opaque, hwaddr offset, uint32_t value)
+@@ -100,8 +116,13 @@ static void sh_timer_write(void *opaque, hwaddr offset, uint32_t value)
          ptimer_transaction_commit(s->timer);
          break;
      case OFFSET_TCR:
@@ -62,7 +76,7 @@ index 7788939..37fdef5 100644
              /*
               * Pause the timer if it is running. This may cause some inaccuracy
               * due to rounding, but avoids a whole lot of other messiness
-@@ -164,7 +178,11 @@ static void sh_timer_write(void *opaque, hwaddr offset, uint32_t value)
+@@ -164,7 +185,11 @@ static void sh_timer_write(void *opaque, hwaddr offset, uint32_t value)
                            "%s: Reserved ICPE value\n", __func__);
          }
          if ((value & TIMER_TCR_UNF) == 0) {
@@ -75,7 +89,7 @@ index 7788939..37fdef5 100644
          }
  
          value &= ~TIMER_TCR_UNF;
-@@ -181,11 +199,11 @@ static void sh_timer_write(void *opaque, hwaddr offset, uint32_t value)
+@@ -181,11 +206,11 @@ static void sh_timer_write(void *opaque, hwaddr offset, uint32_t value)
                            "%s: Reserved TCR bits set\n", __func__);
          }
          s->tcr = value;
@@ -92,7 +106,7 @@ index 7788939..37fdef5 100644
          }
          ptimer_transaction_commit(s->timer);
          break;
-@@ -214,17 +232,73 @@ static void sh_timer_start_stop(void *opaque, int enable)
+@@ -214,17 +239,74 @@ static void sh_timer_start_stop(void *opaque, int enable)
      if (!s->enabled && enable) {
          ptimer_run(s->timer, 0);
      }
@@ -138,8 +152,9 @@ index 7788939..37fdef5 100644
 +    /* Keep interrupt-enabled expiries that arrive before acknowledgement.
 +     * UNF alone is still a latch for polling channels (UNIE clear).
 +     * Each clear retires one expiry; asserting an already-high line does
-+     * not create an event. No cap: it would silently lose guest ticks. */
-+    if (s->enabled && s->int_level && (s->tcr & TIMER_TCR_UNIE)) {
++     * not create an event. */
++    if (s->enabled && s->int_level && (s->tcr & TIMER_TCR_UNIE) &&
++        s->missed < TIMER_MISSED_MAX) {
 +        s->missed++;
 +    }
      s->int_level = s->enabled;
@@ -167,7 +182,7 @@ index 7788939..37fdef5 100644
  static void *sh_timer_init(uint32_t freq, int feat, qemu_irq irq)
  {
      SHTimerState *s;
-@@ -240,12 +314,16 @@ static void *sh_timer_init(uint32_t freq, int feat, qemu_irq irq)
+@@ -240,12 +322,16 @@ static void *sh_timer_init(uint32_t freq, int feat, qemu_irq irq)
      s->irq = irq;
  
      s->timer = ptimer_init(sh_timer_tick, s, PTIMER_POLICY_LEGACY);
@@ -185,7 +200,7 @@ index 7788939..37fdef5 100644
      return s;
  }
  
-@@ -344,6 +422,56 @@ static const MemoryRegionOps tmu012_ops = {
+@@ -344,6 +430,56 @@ static const MemoryRegionOps tmu012_ops = {
      .endianness = DEVICE_NATIVE_ENDIAN,
  };
  
@@ -242,7 +257,7 @@ index 7788939..37fdef5 100644
  void tmu012_init(MemoryRegion *sysmem, hwaddr base, int feat, uint32_t freq,
                   qemu_irq ch0_irq, qemu_irq ch1_irq,
                   qemu_irq ch2_irq0, qemu_irq ch2_irq1)
-@@ -369,5 +497,6 @@ void tmu012_init(MemoryRegion *sysmem, hwaddr base, int feat, uint32_t freq,
+@@ -369,5 +505,6 @@ void tmu012_init(MemoryRegion *sysmem, hwaddr base, int feat, uint32_t freq,
      memory_region_init_alias(&s->iomem_a7, NULL, "timer-a7",
                               &s->iomem, 0, memory_region_size(&s->iomem));
      memory_region_add_subregion(sysmem, A7ADDR(base), &s->iomem_a7);
