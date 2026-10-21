@@ -141,6 +141,7 @@ config CDJ_COMMON
     select SH_TIMER
     select UNIMP
     select PFLASH_CFI02
+    select SD
 
 config CDJ2000NXS2
     bool

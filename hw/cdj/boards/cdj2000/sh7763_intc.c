@@ -29,7 +29,7 @@ static struct intc_vect s63_vectors[] = {
     INTC_VECT(S63_SCIF0_BRI, 0x740), INTC_VECT(S63_SCIF0_TXI, 0x760),
     INTC_VECT(S63_DMTE4, 0x780), INTC_VECT(S63_DMTE5, 0x7A0),
     INTC_VECT(S63_IIC0, 0x8A0), INTC_VECT(S63_IIC1, 0x8C0),
-    INTC_VECT(S63_CMT, 0x900),
+    INTC_VECT(S63_CMT, 0x900), INTC_VECT(S63_SDHI, 0x9C0),
     INTC_VECT(S63_DISP_RX_DMA, 0xA00), INTC_VECT(S63_DISP_RX_SER, 0xA20),
     INTC_VECT(S63_DISP_TX_DMA, 0xAA0), INTC_VECT(S63_DISP_TX_SER, 0xAC0),
     INTC_VECT(S63_GETHER0, 0x920), INTC_VECT(S63_GETHER1, 0x940),
@@ -90,7 +90,7 @@ static struct intc_mask_reg s63_mask_registers[] = {
     /* INT2MSKCR1 / INT2MSKR1 */
     { 0xFFD400D4, 0xFFD400D0, 32,
       { 0, 0, 0, 0, 0, 0, S63_SCIF2, S63_USBF,
-        0, 0, 0, 0, 0, 0, S63_USBH, S63_GETHER,
+        0, 0, 0, 0, 0, S63_SDHI, S63_USBH, S63_GETHER,
         0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, S63_IIC1, S63_IIC0, 0, 0, 0, 0 } },
     /* INTMSKCLR0 / INTMSK0: the IRQ pins */
@@ -112,7 +112,7 @@ static struct intc_prio_reg s63_prio_registers[] = {
     { INT2PRI8_(9), 0, 32, 8, { 0, 0, S63_IIC1, S63_IIC0 } },
     { INT2PRI8_(10), 0, 32, 8, { 0 } },
     { INT2PRI8_(11), 0, 32, 8, { 0 } },
-    { INT2PRI8_(12), 0, 32, 8, { 0, 0, S63_USBH, S63_GETHER } },
+    { INT2PRI8_(12), 0, 32, 8, { 0, S63_SDHI, S63_USBH, S63_GETHER } },
     { INT2PRI8_(13), 0, 32, 8, { 0 } },
     /* INTPRI: the IRQ pins, 4 bits each */
     { 0xFFD00010, 0, 32, 4,

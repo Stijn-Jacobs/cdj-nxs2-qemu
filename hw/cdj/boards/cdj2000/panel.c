@@ -61,6 +61,10 @@ static void cdj2000_panel_lever(CdjPnlLinkState *s, void *extra,
                                 uint8_t *rx, int64_t now)
 {
     rx[0x0F] ^= 0x02;
+    /* NXS SD lid contact: physical closed pin, only fitted with a card model. */
+    if (cdj2000_sdhi_lid_closed()) {
+        rx[0x11] |= 0x04;
+    }
 }
 
 /*

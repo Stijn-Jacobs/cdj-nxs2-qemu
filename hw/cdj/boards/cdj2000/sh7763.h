@@ -28,6 +28,7 @@ enum {
     /* groups: one mask bit and one priority field each */
     S63_TMU012, S63_TMU345, S63_DMAC, S63_SCIF0, S63_SCIF1, S63_SCIF2,
     S63_GETHER, S63_RTC, S63_USBF, S63_MMCIF, S63_GPIO, S63_DISP_TX,
+    S63_SDHI,
     S63_NR_SOURCES
 };
 
@@ -120,8 +121,12 @@ void sh7763_board_init(MachineState *machine, const CdjBoardDesc *desc,
                        const CdjDspWires *(*dsp_init)(MemoryRegion *, hwaddr),
                        const Cdj2000Display *display_desc, bool auth_chip);
 
-/* The SDHI at 0xFFE40000, with no card in the slot. */
-void cdj2000_sdhi_init(MemoryRegion *sysmem);
+/* Optional SDHI/card; without CDJ_SD_IMAGE preserve the empty-slot stub. */
+void cdj2000_sdhi_init(MemoryRegion *sysmem, qemu_irq irq, qemu_irq dmte5);
+bool cdj2000_sdhi_card_init(MemoryRegion *sysmem, qemu_irq irq,
+                            qemu_irq dmte5);
+bool cdj2000_sdhi_lid_closed(void);
+bool cdj2000_sdhi_dma(bool writing, uint8_t *buf, unsigned len);
 
 /* The I2C master at 0xFFE70000 with the authentication chip on it; answers
  * is the chip's per-model reply table (see cdj_auth_chip.h). */
