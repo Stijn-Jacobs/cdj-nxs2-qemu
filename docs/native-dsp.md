@@ -27,7 +27,7 @@ and RAM hashes against both the interpreter and the curated module. This was
 one timing sample using diagnostic media; Linux and real-library performance
 remain unmeasured.
 
-On 2026-10-13, the `respin-native` checkout at `873cdd7` regenerated the
+On 2026-10-13, a local checkout regenerated the
 supplement with 400 roots and all other options unchanged, using the same
 private trial profile at `/tmp/cdj-dsp-matrix/mac-mp3-320-v2/profile` and its
 `ram_*.bin` images. These inputs and the recording were checked against the
