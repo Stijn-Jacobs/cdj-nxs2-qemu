@@ -315,12 +315,22 @@ bool cdj_dsp_host_write_word(CdjDspHost *h, uint32_t addr, uint32_t val)
         }
         qemu_mutex_unlock(&h->posted_lock);
     }
-    cdj_dsp_host_lock(h);
-    stl_le_p(h->ram(h->chip, addr), val);
-    if (h->core) {
-        c66x_invalidate(h->core, addr, 4);
+    CDJ_DSP_HOST_GUARD(h);
+    return cdj_dsp_host_write_word_locked(h, addr, val);
+}
+
+bool cdj_dsp_host_write_word_locked(CdjDspHost *h, uint32_t addr,
+                                    uint32_t val)
+{
+    uint8_t *p = h->ram(h->chip, addr & ~3u);
+
+    if (!p) {
+        return false;
     }
-    cdj_dsp_host_unlock(h);
+    stl_le_p(p, val);
+    if (h->core) {
+        c66x_invalidate(h->core, addr & ~3u, 4);
+    }
     return true;
 }
 
@@ -393,15 +403,17 @@ static void host_command(void *opaque, unsigned bits)
     }
     cdj_dsp_host_lock(h);
     h->phase_logged = true;
-    if (bits == h->command) {   /* the reference logs MAIN's initial phase 0 */
+    /* The transcript starts with MAIN's first latch write, phase 0 included,
+     * so it names the phase MAIN booted the DSP from. */
+    if (bits == h->command) {
         cdj_dsp_host_event(h, "boot_phase", 0, 0, bits, 0);
         cdj_dsp_host_unlock(h);
         return;
     }
     h->command = bits;
-    /* The reference's boot_phase is MAIN's pin level, not the number of
-     * completed handshakes. This model carries PH0/PH1 (phases 0..3);
-     * record the drop to zero as well, before the loader reacts. */
+    /* boot_phase is MAIN's pin level (PH0/PH1, phases 0..3), not the number
+     * of completed handshakes; the drop to zero is recorded too, before the
+     * loader reacts. */
     h->boot_phase = bits;
     cdj_dsp_host_event(h, "boot_phase", 0, 0, bits, 0);
     h->set_pins(h->chip, bits);

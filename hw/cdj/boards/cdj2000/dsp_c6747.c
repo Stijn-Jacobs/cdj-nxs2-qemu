@@ -336,21 +336,15 @@ static uint64_t hpi_read(void *opaque, hwaddr off, unsigned size)
     CdjC6747 *s = opaque;
     uint32_t val;
     uint32_t address = s->hpia;
-    g_autoptr(CdjDspHost) event_guard = NULL;
-
-    /* The normal data path is lock-free. A transcript needs a consistent
-     * snapshot of the core counters and HPIC, ordered with DSP events. */
-    if (s->host.event_log) {
-        cdj_dsp_host_lock(&s->host);
-        event_guard = &s->host;
-    }
+    CDJ_DSP_HOST_EVENT_GUARD(&s->host);
 
     switch (off >> 18) {
     case 0: {
         /* UHPI HPIC as the C6747 reads it back (SPRUFL8): reserved bits 6:5=2
          * and 3=1, HWOB also in HWOBSTAT (bit 8), the half-word mirrored to
          * both halves. MAIN writes it back, so the transcript shows it.
-         * ponytail: HPIRST/DUALHPIA/HPIASEL not modelled (MAIN never sets them). */
+         * HPIRST, DUALHPIA and HPIASEL are not modelled: MAIN never sets
+         * them. */
         uint32_t hpic = cdj_dsp_host_hpic(&s->host);
         uint32_t v = 0x48 | (hpic & HPIC_HWOB ? 0x101 : 0) |
                      (hpic & (HPIC_HINT | HPIC_DSPINT));
@@ -396,39 +390,21 @@ static void hpi_write(void *opaque, hwaddr off, uint64_t val, unsigned size)
         break;
     }
     case 1: {
-        g_autoptr(CdjDspHost) event_guard = NULL;
+        CDJ_DSP_HOST_EVENT_GUARD(&s->host);
 
-        if (s->host.event_log) {
-            cdj_dsp_host_lock(&s->host);
-            event_guard = &s->host;
-        }
         s->hpia = val;
         cdj_dsp_host_event(&s->host, "hpi_host_address_write", off,
                            address, val, size);
         break;
     }
     default: {
-        g_autoptr(CdjDspHost) event_guard = NULL;
-        bool written;
-        uint8_t *p;
+        CDJ_DSP_HOST_EVENT_GUARD(&s->host);
+        /* Under the lock the store cannot be posted: it lands in order with
+         * the event. */
+        bool written = s->host.event_log ?
+            cdj_dsp_host_write_word_locked(&s->host, address, val) :
+            cdj_dsp_host_write_word(&s->host, address, val);
 
-        if (s->host.event_log) {
-            cdj_dsp_host_lock(&s->host);
-            event_guard = &s->host;
-            /* Already under the core lock: avoid write_word's fallback
-             * taking it again when booting or when the posted queue fills. */
-            p = dsp_ram(s, address & ~3u);
-
-            written = p != NULL;
-            if (p) {
-                stl_le_p(p, val);
-                if (s->host.core) {
-                    c66x_invalidate(s->host.core, address & ~3u, 4);
-                }
-            }
-        } else {
-            written = cdj_dsp_host_write_word(&s->host, address, val);
-        }
         if (!written) {
             s->dropped++;
         }

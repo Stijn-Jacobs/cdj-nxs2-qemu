@@ -90,7 +90,8 @@ typedef struct CdjDspHost {
     unsigned nposted;
 
     uint32_t hpic;
-    /* Optional NXS JSON-lines transcript; accesses hold @lock. */
+    /* Optional NXS JSON-lines transcript; accesses hold @lock. Its state
+     * is not in the snapshot: a restored run starts a new transcript. */
     FILE *event_log;
     uint64_t event_sequence;
     unsigned boot_phase;       /* MAIN's command pin level, not a step count */
@@ -141,6 +142,11 @@ void cdj_dsp_host_unlock(CdjDspHost *h);
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(CdjDspHost, cdj_dsp_host_unlock)
 #define CDJ_DSP_HOST_GUARD(h) \
     g_autoptr(CdjDspHost) host_guard_ = (cdj_dsp_host_lock(h), (h))
+/* The same, but only while a transcript is open, which needs the core's
+ * counters and HPIC consistent with the event; otherwise lock-free. */
+#define CDJ_DSP_HOST_EVENT_GUARD(h) \
+    g_autoptr(CdjDspHost) host_guard_ = \
+        (h)->event_log ? (cdj_dsp_host_lock(h), (h)) : NULL
 
 /* MAIN's data access to the core's RAM without stopping the core: the chip
  * sets @ram to the host pointer behind a DSP address (NULL when there is no
@@ -150,6 +156,9 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC(CdjDspHost, cdj_dsp_host_unlock)
  * write outside RAM returns false. */
 uint32_t cdj_dsp_host_read_word(CdjDspHost *h, uint32_t addr);
 bool cdj_dsp_host_write_word(CdjDspHost *h, uint32_t addr, uint32_t val);
+/* The same store, unposted, for a caller that already holds @lock. */
+bool cdj_dsp_host_write_word_locked(CdjDspHost *h, uint32_t addr,
+                                    uint32_t val);
 
 uint32_t cdj_dsp_host_hpic(const CdjDspHost *h);
 /* The HPIC as MAIN writes it (clears HINT, raises DSPINT) and as the DSP
