@@ -65,6 +65,9 @@ class DeckView:
         self.surf = None
         self.dirty = []                 # pixel rects of self.surf to redraw
 
+    def close(self):
+        self.jog.stop()
+
     def send(self, datagram):
         """One panel datagram to this deck, through the relay."""
         self.relay.send(self.tag, datagram)

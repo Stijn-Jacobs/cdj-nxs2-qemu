@@ -35,10 +35,13 @@ import pygame  # noqa: E402
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
+import face as FACE  # noqa: E402
 import gfx  # noqa: E402
 import layout as L  # noqa: E402
 from deck_view import DeckView  # noqa: E402
+from face_view import FaceDeckView  # noqa: E402
 from frames import FrameFile, Screen  # noqa: E402
+from panel_link import PanelLink  # noqa: E402
 from screen_view import LCD_H, LCD_W, DockView, ScreenWindow  # noqa: E402
 from relay_link import RelayLink  # noqa: E402
 from rfb import RfbClient  # noqa: E402
@@ -55,6 +58,7 @@ RESCALE_S = 0.06
 # What the window's frame takes, for the first layout.
 TITLE_BAR = 32
 TITLE = "NXS2 Virtual Deck"
+NXS2 = "cdj2000nxs2"
 
 
 log = logging.getLogger("app")
@@ -127,10 +131,17 @@ class App:
         fine_timer()
         pygame.display.init()
         self.args = args
-        self.window = pygame.Window(TITLE, (640, 480), allow_high_dpi=True,
-                                    resizable=True, hidden=True)
-        host, _, port = args.relay.partition(":")
-        self.relay = RelayLink(host, int(port))
+        # The NXS2's face is drawn in layout.py; every other player has a
+        # face file (face.py), a screen of its own and no relay.
+        self.face = None if args.model == NXS2 else FACE.load(args.model)
+        self.face_w, self.face_h = self.face.size if self.face else (L.W, L.H)
+        self.window = pygame.Window(self.face.title + " Virtual Deck" if self.face else TITLE,
+                                    (640, 480), allow_high_dpi=True, resizable=True, hidden=True)
+        if self.face:
+            self.relay = PanelLink(args.panel_port)
+        else:
+            host, _, port = args.relay.partition(":")
+            self.relay = RelayLink(host, int(port))
         self.decks = []
         self.focus = None
         self.hover_text = ""
@@ -156,8 +167,11 @@ class App:
                          if args.frame_dir else None)
             screen = Screen(RfbClient(args.vnc_host, args.vnc_base + n, f"deck{n}",
                                       port_file), frames)
-            self.decks.append(DeckView(n, tag, self.relay, screen, self._hover,
-                                       self.toggle_window))
+            if self.face:
+                self.decks.append(FaceDeckView(self.face, n, tag, self.relay, screen, self._hover))
+            else:
+                self.decks.append(DeckView(n, tag, self.relay, screen, self._hover,
+                                           self.toggle_window))
         self.focus = self.decks[0]
         self.status = StatusBar()
         self.views = []                 # (view, origin in points), left to right
@@ -165,7 +179,7 @@ class App:
         # The first size: most of the work area, the frame and status included.
         wx, wy, ww, wh = work_area()
         self.room = (int(ww * 0.94), int(wh * 0.94) - TITLE_BAR - StatusBar.H)
-        self.mode = args.screen
+        self.mode = "face" if self.face else args.screen
         if self.mode == "auto":
             self.mode = "dock" if self._dock_fits(*self.room) else "face"
         self.ratio = self._ratio()
@@ -178,7 +192,7 @@ class App:
             self.window.show()
         # Keys are keys here, not text: no input method, no accent pop-up.
         pygame.key.stop_text_input()
-        if args.screen == "window":
+        if args.screen == "window" and not self.face:
             for d in self.decks:
                 self.toggle_window(d)
 
@@ -205,7 +219,7 @@ class App:
         if self.args.scale and self.mode != "dock":
             return self.args.scale, 0
         if self.mode != "dock":
-            s = min(h / L.H, (w - gaps) / (n * L.W))
+            s = min(h / self.face_h, (w - gaps) / (n * self.face_w))
             return max(0.3, min(1.6, s)), 0
         # The dock's bezels and padding are in face units, so they scale with
         # s; its screens get whatever height the faces leave them.
@@ -261,6 +275,8 @@ class App:
     def toggle_mode(self):
         """Dock or undock the screens, the window growing or shrinking to the
         new layout: laid out for the room the first window had."""
+        if self.face:
+            return
         self.mode = "face" if self.mode == "dock" else "dock"
         self.arrange(self.room)
         w, h = self.content_size
@@ -268,6 +284,8 @@ class App:
 
     def toggle_window(self, deck):
         """Open this deck's screen in a window of its own, or close it."""
+        if self.face:
+            return
         win = self.windows.pop(deck.number, None)
         if win:
             win.close()
@@ -527,7 +545,7 @@ class App:
 
     def close(self):
         for d in self.decks:
-            d.jog.stop()
+            d.close()
             d.screen.close()
         self.relay.close()
         for win in list(self.windows.values()):
@@ -540,6 +558,13 @@ def parse_args(argv=None):
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--decks", type=int, default=int(os.environ.get("CDJ_DECKS", "1")),
                     choices=(1, 2), help="how many decks (env CDJ_DECKS)")
+    ap.add_argument("--model", default=os.environ.get("CDJ_APP_MODEL", NXS2),
+                    choices=[NXS2] + FACE.available(),
+                    help="the player to draw: the NXS2, or one with a face file "
+                         "in app/faces/ (env CDJ_APP_MODEL)")
+    ap.add_argument("--panel-port", type=int, default=int(os.environ.get("CDJ_PANEL_KEYSOCK", "0") or 0),
+                    help="an older player's panel key port, where its keys go "
+                         "(env CDJ_PANEL_KEYSOCK)")
     ap.add_argument("--prefix", default=os.environ.get("CDJ_NAME", "show"),
                     help="machine tag prefix; deck N is <prefix>N (env CDJ_NAME)")
     ap.add_argument("--relay",

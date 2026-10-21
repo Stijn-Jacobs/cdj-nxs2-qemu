@@ -6,8 +6,9 @@
 # ~/c14gen/curated[-<model>]/m.so and leave the run-time auto-JIT off.
 #
 # About half an hour, no recording. One headless deck boots, loads a track and
-# plays PLAY_S (default 30; 45 for the rig player, whose play also sweeps MASTER TEMPO
-# and the tempo fader) seconds with no module; its machine writes the
+# plays PLAY_S (default 60; 45 for the rig player, whose play also sweeps MASTER TEMPO
+# and the tempo fader; a one-window player's play turns MASTER TEMPO on, MODEL_PROFILE_STEPS)
+# seconds with no module; its machine writes the
 # profile at exit. After the instrumented build a second such run, with that
 # module loaded, collects the profile-guided counts. A short play is enough
 # because the hot code is the decoder every play runs: on the CDJ-2000 fw 4.33 a
@@ -29,7 +30,7 @@
 #                  ~/c14gen/curated[-<id>]/m.so
 #          WORK=<dir>   profile and generated C (default extract/dsp-module)
 #          JOBS=<n>     parallel generator/gcc jobs (min(14, threads); ~0.8 GB RAM each)
-#          PLAY_S=30|45 seconds the deck plays, each time
+#          PLAY_S=60|45 seconds the deck plays, each time
 #          DSP_MODULE_DIR=<dir>   install there instead of ~/c14gen/<module>
 #          C66X_JIT_LIBDIR   where the DSP core is built (~/build/c6x)
 #
@@ -51,7 +52,7 @@ export CDJ_MODEL="$MODEL_ID"
 IDLE_SPEC="${MODEL_DSP_IDLE:-}"
 IDLE_HEAD="${IDLE_SPEC%%:*}"; IDLE_HEAD="${IDLE_HEAD:-0x80076F00}"
 # A one-window deck's machine profiles differently from the rig's;
-# a rig player with its own DSP program (the CDJ-TOUR1) names the main loop it
+# a rig player with its own DSP program names the main loop it
 # skips in the same field and is built the way the default player is.
 OLDER=0; [ -z "$IDLE_SPEC" ] || [ "${MODEL_LAUNCH:-rig}" = rig ] || OLDER=1
 WORK="${WORK:-$CDJ_ROOT/extract/dsp-module${CURATED#curated}}"
@@ -62,7 +63,7 @@ DEST="${DSP_MODULE_DIR:-$HOME/c14gen/$CURATED}"
 # The rig player's profile play also sweeps MASTER TEMPO and the tempo fader
 # (scripts/run/warm_jit.py), which takes longer than the plain play of a
 # one-window model.
-if [ "$OLDER" = 1 ]; then PLAY_S="${PLAY_S:-30}"; else PLAY_S="${PLAY_S:-45}"; fi
+if [ "$OLDER" = 1 ]; then PLAY_S="${PLAY_S:-60}"; else PLAY_S="${PLAY_S:-45}"; fi
 NEED_MB=2000
 CORES="$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
 JOBS="${JOBS:-$(( CORES < 14 ? CORES : 14 ))}"

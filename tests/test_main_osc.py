@@ -11,6 +11,8 @@ import pytest
 
 import patch_main
 import sigpatch
+from players import cdj2000nxs2 as nxs2
+from helpers import mod_row, stock_mods
 
 WRAPPER = 0x085113EC
 PORT = 50010
@@ -231,7 +233,7 @@ def build_image():
     their spans load (the serialiser's and the send wrapper's address) and an
     erased cave for every registered routine."""
     d = bytearray(0x5000)
-    for off, site in ((STATUS_OFF, patch_main.STATUS_SEND), (BEAT_OFF, patch_main.BEAT_SEND)):
+    for off, site in ((STATUS_OFF, nxs2.STATUS_SEND), (BEAT_OFF, nxs2.BEAT_SEND)):
         for k, op in enumerate(site['sig']):
             struct.pack_into('<H', d, off + 2 * k, op)
     struct.pack_into('<I', d, ((STATUS_OFF + 8) & ~3) + 4 + 0x3E * 4, SERIALISER)
@@ -245,7 +247,7 @@ def build_image():
 
 def patched(names):
     profile, data = build_image()
-    out = bytearray(sigpatch.patch(profile, patch_main.blob_path, data, patch_main.MODS, names))
+    out = bytearray(sigpatch.patch(profile, patch_main.blob_path, data, stock_mods(patch_main.MODS), names))
     for real, low in FIXED.items():
         pat = struct.pack('<I', real)
         at = out.find(pat, CAVE[0])
@@ -256,20 +258,17 @@ def patched(names):
 
 
 def test_registered_for_main_as_hooks_on_the_status_call_and_the_beat_send():
-    for name, site in (('osc', patch_main.STATUS_SEND), ('oscbeat', patch_main.BEAT_SEND)):
+    for name, site in (('osc', nxs2.STATUS_SEND), ('oscbeat', nxs2.BEAT_SEND)):
         mod = patch_main.MODS[name]
         assert mod.target == 'main' and mod.hook and not mod.literal
         assert dict(sig=mod.sig, start=mod.start, end=mod.end) == site
 
 
 def test_the_registry_row_enables_both_mods_and_defaults_off():
-    path = os.path.join(os.path.dirname(patch_main.__file__), 'mods.conf')
-    rows = [line.split('|') for line in open(path, encoding='utf-8')
-            if line.strip() and not line.startswith('#')]
-    (row,) = [r for r in rows if r[0] == 'osc']
-    assert row[1].split('+') == ['CDJ_MAIN_OSC', 'CDJ_MAIN_OSCBEAT']
-    assert row[2:5] == ['1', '0', 'off']
-    assert not [r for r in rows if r[0] == 'osc_beat']
+    row = mod_row('osc')
+    assert row.env.split('+') == ['CDJ_MAIN_OSC', 'CDJ_MAIN_OSCBEAT']
+    assert (row.on, row.off, row.default) == ('1', '0', 'off')
+    assert not os.path.exists(os.path.join(os.path.dirname(patch_main.__file__), 'osc_beat'))
 
 
 REAL_MAIN = os.path.join(os.path.dirname(__file__), '..', '..', 'extract', 'main_unpacked.bin')
@@ -279,7 +278,7 @@ REAL_MAIN = os.path.join(os.path.dirname(__file__), '..', '..', 'extract', 'main
 def test_real_main_has_each_signature_exactly_once_and_patches_in_any_order():
     with open(REAL_MAIN, 'rb') as f:
         data = f.read()
-    img = sigpatch.Image(patch_main.MAIN_PROFILE, data)
+    img = sigpatch.Image(nxs2.MAIN_PROFILE, data)
     for name, span in (('osc', 0x084B4540), ('oscbeat', 0x082DB248)):
         mod = patch_main.MODS[name]
         assert img.addr_of(sigpatch.find_sig(img, mod) + 2 * mod.start) == span

@@ -26,7 +26,7 @@
 #   6 your setup      one deck or two, Pro DJ Link, audio, a MIDI controller,
 #                     saved to cdj.conf -- which ./start.sh then uses
 #   7 mods            small on/off tweaks to how the deck behaves (see
-#                     mods/mods.conf), all defaults in one answer or one
+#                     mods/<mod>/mod.conf), all defaults in one answer or one
 #                     at a time, saved alongside your setup
 #
 # options:

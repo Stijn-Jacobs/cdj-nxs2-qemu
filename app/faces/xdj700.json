@@ -1,0 +1,68 @@
+{
+  "title": "XDJ-700",
+  "size": [238.0, 305.1],
+  "panel": [3.0, 3.0, 235.0, 112.5],
+  "screen": [42.55, 24.0, 195.25, 105.2],
+  "standby": [217.1, 10.0],
+  "standby_icon": [-7.7, -0.6],
+  "touch": {"size": [800, 480], "via": "panel"},
+  "usb_label": {"text": "5V = 1A", "y": 42.5},
+  "name": [217.6, 95.6, 24.0],
+  "rotary": {"center": [216.4, 64.5], "radius": 14.5},
+  "jog": {"center": [119.1, 213.2], "radius": 74.1, "platter": 30.0, "counter": {"pulses_per_tick": 72, "nominal_tps": 25}},
+  "slider": {"x": 217.5, "top": 184.4, "bottom": 276.4, "cap": [18.0, 20.0], "zero_mark": false, "report": "0x04"},
+  "print": [
+    [24.0, 54.4, "USB STOP", 8.5],
+    [16.9, 121.1, "• IN/— 4BEAT", 8.5],
+    [41.6, 121.1, "OUT", 9],
+    [72.0, 121.1, "RELOOP/EXIT", 9],
+    [57.1, 128.4, "LOOP", 9],
+    [24.0, 153.5, "TRACK SEARCH", 9],
+    [24.0, 179.1, "SEARCH", 9],
+    [24.0, 258.3, "PLAY/PAUSE", 9],
+    [64.3, 278.3, "–\nREV", 9],
+    [173.6, 278.3, "+\nFWD", 9],
+    [210.0, 27.4, "BACK", 7.5],
+    [227.5, 27.4, "TAG TRACK\n/ REMOVE", 6.5],
+    [225.7, 11.4, "STANDBY", 7],
+    [191.5, 121.3, "VINYL MODE", 8.5],
+    [217.5, 121.3, "TEMPO", 9],
+    [217.5, 125.2, "±6/±10/±16/WIDE", 6],
+    [217.5, 142.0, "MASTER TEMPO", 9],
+    [203.7, 180.3, "–", 9],
+    [203.7, 230.3, "0", 9],
+    [203.7, 280.3, "+", 9],
+    [217.6, 287.5, "TEMPO", 9]
+  ],
+  "slots": [
+    [12.55, 28.5, 30.65, 41.3]
+  ],
+  "pills": [
+    [16.0, 145.0, "IN ADJUST"],
+    [41.5, 145.0, "OUT ADJUST"]
+  ],
+  "badges": [],
+  "frames": [],
+  "rules": [
+    [[26.0, 132.4], [31.5, 132.4]],
+    [[51.6, 132.4], [62.0, 132.4]]
+  ],
+  "keys": [
+    {"name": "USB STOP", "label": "", "circle": [21.7, 64.7, 6.5], "kind": "cdome", "font": 9},
+    {"name": "BACK", "label": "", "circle": [207.4, 36.0, 5.0], "off": "0x14", "mask": 16, "kind": "ring", "font": 9},
+    {"name": "TAG TRACK", "label": "", "circle": [225.3, 36.0, 3.9], "off": "0x14", "mask": 32, "kind": "dome", "font": 9},
+    {"name": "ROTARY PUSH", "label": "", "circle": [216.4, 64.5, 9.0], "off": "0x11", "mask": 1, "keycap": "Enter", "kind": "dome", "font": 9},
+    {"name": "LOOP IN", "label": "", "circle": [15.9, 132.8, 8.8], "off": "0x10", "mask": 16, "kind": "loop", "font": 9, "color": "orange"},
+    {"name": "LOOP OUT", "label": "", "circle": [41.3, 132.8, 8.8], "off": "0x10", "mask": 8, "kind": "loop", "font": 9, "color": "orange"},
+    {"name": "RELOOP/EXIT", "label": "", "circle": [71.9, 132.8, 7.75], "off": "0x10", "mask": 4, "kind": "ring", "font": 9, "color": "orange"},
+    {"name": "VINYL MODE", "label": "", "circle": [191.5, 132.8, 7.75], "off": "0x15", "mask": 1, "kind": "ring", "font": 9, "color": "blue"},
+    {"name": "TEMPO RANGE", "label": "", "circle": [217.5, 132.7, 4.8], "off": "0x15", "mask": 8, "kind": "dome", "font": 9},
+    {"name": "MASTER TEMPO", "label": "", "circle": [217.5, 149.7, 4.8], "off": "0x15", "mask": 16, "kind": "dome", "font": 9, "color": "red"},
+    {"name": "TRACK -", "label": "", "circle": [15.5, 164.6, 5.8], "off": "0x12", "mask": 4, "kind": "chrome", "font": 9, "symbol": "track_rev"},
+    {"name": "TRACK +", "label": "", "circle": [32.5, 164.6, 5.8], "off": "0x12", "mask": 8, "kind": "chrome", "font": 9, "symbol": "track_fwd"},
+    {"name": "SEARCH -", "label": "", "circle": [15.5, 190.3, 5.8], "off": "0x12", "mask": 16, "kind": "chrome", "font": 9, "symbol": "scan_rev"},
+    {"name": "SEARCH +", "label": "", "circle": [32.5, 190.3, 5.8], "off": "0x12", "mask": 32, "kind": "chrome", "font": 9, "symbol": "scan_fwd"},
+    {"name": "CUE", "label": "CUE", "circle": [24.1, 237.3, 15.4], "off": "0x10", "mask": 2, "kind": "big", "font": 13, "color": "orange"},
+    {"name": "PLAY/PAUSE", "label": "", "circle": [24.1, 277.3, 15.4], "off": "0x10", "mask": 1, "keycap": "Space", "kind": "big", "font": 13, "color": "green", "symbol": "play"}
+  ]
+}

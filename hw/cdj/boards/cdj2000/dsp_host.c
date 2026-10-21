@@ -44,6 +44,7 @@
 /* Stepping to a quiet point gives up after this much DSP time: 10 ms. */
 #define QUIET_STEP      16
 #define QUIET_MAX_NS    (10 * 1000 * 1000)
+#define REPORT_NS       (5 * NANOSECONDS_PER_SECOND)
 
 #define MCASP_GBLCTL    0x44
 #define MCASP_RGBLCTL   0x60
@@ -131,6 +132,7 @@ static void *host_thread(void *opaque)
 {
     CdjDspHost *h = opaque;
     uint64_t done, run;
+    int64_t t0;
 
     while (qatomic_read(&h->running)) {
         int64_t virt = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
@@ -154,6 +156,8 @@ static void *host_thread(void *opaque)
             continue;
         }
         h->lag_max_ns = MAX(h->lag_max_ns, virt - h->dsp_ns);
+        h->report_lag_ns = MAX(h->report_lag_ns, virt - h->dsp_ns);
+        t0 = get_clock();
         for (run = 0; run < h->cycles_per_chunk
                       && !qatomic_read(&h->host_waiting);
              run += h->slice_cycles) {
@@ -177,12 +181,32 @@ static void *host_thread(void *opaque)
                 break;
             }
         }
+        h->report_busy_ns += get_clock() - t0;
         qemu_mutex_unlock(&h->lock);
         /* An idle core has waited out the rest of its slices. */
         qemu_mutex_lock(&h->progress_lock);
         h->dsp_ns += CHUNK_NS * run / h->cycles_per_chunk;
         qemu_cond_broadcast(&h->progress);
         qemu_mutex_unlock(&h->progress_lock);
+        if (h->dsp_ns - h->report_ns >= REPORT_NS && cdj_report_enabled()) {
+            uint64_t span = h->cycles_per_chunk * ((h->dsp_ns - h->report_ns) / CHUNK_NS);
+            uint64_t cycle = c66x_get_cycle(h->core), jit = c66x_jit_cycles(h->core);
+            uint64_t ran = cycle - h->report_cycle - (h->idle_skipped - h->report_skipped);
+
+            info_report("%s: at most %" PRId64 " ms behind in the last 5 s, "
+                        "%.0f %% of its cycles idle, %.0f %% of the rest compiled, "
+                        "%" PRId64 " ms of host time running", h->name,
+                        h->report_lag_ns / SCALE_MS,
+                        span ? 100.0 * (h->idle_skipped - h->report_skipped) / span : 0.0,
+                        ran ? 100.0 * (jit - h->report_jit) / ran : 0.0,
+                        h->report_busy_ns / SCALE_MS);
+            h->report_ns = h->dsp_ns;
+            h->report_lag_ns = 0;
+            h->report_busy_ns = 0;
+            h->report_skipped = h->idle_skipped;
+            h->report_cycle = cycle;
+            h->report_jit = jit;
+        }
         if (h->after_chunk) {
             qemu_mutex_lock(&h->lock);
             if (!qatomic_read(&h->paused)) {
@@ -555,6 +579,7 @@ void cdj_dsp_host_run(CdjDspHost *h, uint32_t entry)
     cdj_dsp_host_event(h, "dsp_start", 0, entry, 0, 0);
     h->running = true;
     h->dsp_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    h->report_ns = h->dsp_ns;
     if (cdj_report_enabled()) {
         info_report("%s: started at 0x%08x", h->name, entry);
     }
@@ -673,6 +698,14 @@ void cdj_dsp_host_report(CdjDspHost *h)
                 h->idle_skipped);
     if (h->trap_pc) {
         info_report("%s: trap at 0x%08x", h->name, h->trap_pc);
+    }
+    {
+        char jr[256];
+
+        c66x_jit_report(h->core, jr, sizeof jr);
+        if (jr[0]) {
+            info_report("%s: jit: %s", h->name, jr);
+        }
     }
     info_report("%s: %" PRIu64 " commands from MAIN, %" PRIu64
                 " HINT edges, HPIC 0x%08x, %" PRIu64 " cycles run to answer",

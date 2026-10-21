@@ -1,5 +1,5 @@
 diff --git a/target/sh4/cpu.h b/target/sh4/cpu.h
-index d928bcf..1e46b75 100644
+index d928bcf..4cf5f37 100644
 --- a/target/sh4/cpu.h
 +++ b/target/sh4/cpu.h
 @@ -130,6 +130,13 @@ typedef struct tlb_t {
@@ -16,7 +16,7 @@ index d928bcf..1e46b75 100644
  };
  
  typedef struct memory_content {
-@@ -201,12 +208,62 @@ typedef struct CPUArchState {
+@@ -201,12 +208,72 @@ typedef struct CPUArchState {
      /* The features that we should emulate. See sh_features above.  */
      uint32_t features;
  
@@ -71,6 +71,16 @@ index d928bcf..1e46b75 100644
 +    CDJ_EXIT_NKINDS
 +};
 +
++/* The firmware routines CDJ_NATIVE_LIBC and CDJ_NATIVE_COPY run as host code. */
++enum {
++    CDJ_NC_MEMCMP,
++    CDJ_NC_STRLEN,
++    CDJ_NC_MEMCPY,
++    CDJ_NC_MEMSET,
++    CDJ_NC_MOVMEM,
++    CDJ_NC_N
++};
++
 +/*
 + * CDJ_IOPROF / CDJ_IOSPLIT: note one cpu_io_recompile() at env->pc. Called from the io_recompile_replay_branch hook; see translate.c.
 + */
@@ -79,7 +89,7 @@ index d928bcf..1e46b75 100644
  /**
   * SuperHCPU:
   * @env: #CPUSH4State
-@@ -372,12 +429,19 @@ static inline target_ulong cpu_read_sr(CPUSH4State *env)
+@@ -372,12 +439,19 @@ static inline target_ulong cpu_read_sr(CPUSH4State *env)
                       (env->sr_t << SR_T);
  }
  
@@ -99,7 +109,7 @@ index d928bcf..1e46b75 100644
  }
  
  static inline void cpu_get_tb_cpu_state(CPUSH4State *env, vaddr *pc,
-@@ -395,4 +459,44 @@ static inline void cpu_get_tb_cpu_state(CPUSH4State *env, vaddr *pc,
+@@ -395,4 +469,44 @@ static inline void cpu_get_tb_cpu_state(CPUSH4State *env, vaddr *pc,
  #endif
  }
  

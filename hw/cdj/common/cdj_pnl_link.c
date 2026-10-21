@@ -472,7 +472,7 @@ static int cdj_pnl_link_pre_load(void *opaque)
 
 static const VMStateDescription vmstate_cdj_pnl_link = {
     .name = "cdj-pnl-link",
-    .version_id = 1,
+    .version_id = 2,
     .minimum_version_id = 1,
     .pre_load = cdj_pnl_link_pre_load,
     .fields = (const VMStateField[]) {
@@ -494,6 +494,9 @@ static const VMStateDescription vmstate_cdj_pnl_link = {
         },
         VMSTATE_UINT8(rot_val, CdjPnlLinkState),
         VMSTATE_BOOL(rot_live, CdjPnlLinkState),
+        /* The byte the knob counts in: without it a restored deck writes the
+         * counter into byte 0 and the firmware sees the knob jump back. */
+        VMSTATE_UINT32_V(rot_off, CdjPnlLinkState, 2),
         VMSTATE_VBUFFER_UINT32(lvl_val, CdjPnlLinkState, 0, NULL, payload_len),
         VMSTATE_VBUFFER_UINT32(lvl_live, CdjPnlLinkState, 0, NULL, payload_len),
         VMSTATE_END_OF_LIST()

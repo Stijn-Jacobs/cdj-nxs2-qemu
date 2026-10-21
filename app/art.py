@@ -439,8 +439,8 @@ class Art:
         p.rrect((843, 504, 958, 554), 4, fill=(16, 16, 17), outline=(70, 72, 76),
                 width=1)
 
-    def _jog_surround(self, p):
-        cx, cy, r = L.JOG
+    def _jog_surround(self, p, jog=L.JOG):
+        cx, cy, r = jog
         p.circle(cx, cy, r + 10, fill=(10, 10, 11), outline=(80, 82, 88), width=1)
         for a0, a1, head in ((120, 148, 120), (32, 60, 60)):
             p.d.arc(p.c(cx, cy, r + 24), a0, a1, fill=PRINT, width=p.w(1.2))
