@@ -143,17 +143,41 @@ def save(main_mon, gui_mon, out_dir):
     return ok
 
 
+def parse_steps(text):
+    """MODEL_LOAD_STEPS as ("wait", seconds), ("key", payload) and
+    ("sendkey", key, ms) tuples; ValueError names a step it cannot read."""
+    steps = []
+    for words in (s.split() for s in text.split(";") if s.strip()):
+        step = None
+        try:
+            if words[0] == "wait" and len(words) == 2:
+                step = ("wait", float(words[1]))
+            elif words[0] == "key" and len(words) == 2:
+                step = ("key", words[1])
+            elif words[0] == "sendkey" and len(words) in (2, 3):
+                step = ("sendkey", words[1], int(words[2]) if len(words) == 3 else 100)
+        except ValueError:
+            pass
+        if step is None:
+            raise ValueError("MODEL_LOAD_STEPS: cannot read step '%s'" % " ".join(words))
+        steps.append(step)
+    return steps
+
+
+def do_step(mon, step, keysock):
+    """Carry out one step of parse_steps."""
+    if step[0] == "wait":
+        time.sleep(step[1])
+    elif step[0] == "sendkey":
+        _command(mon, "sendkey %s %d" % (step[1], step[2]), time.time() + 10)
+    elif step[0] == "key":
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.sendto(step[1].encode(), ("127.0.0.1", keysock))
+
+
 def run_steps(mon, steps, keysock):
-    for step in (s.split() for s in steps.split(";") if s.strip()):
-        if step[0] == "wait":
-            time.sleep(float(step[1]))
-        elif step[0] == "sendkey":
-            _command(mon, "sendkey %s %s" % (step[1], step[2] if len(step) > 2 else "100"), time.time() + 10)
-        elif step[0] == "key":
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-                s.sendto(step[1].encode(), ("127.0.0.1", keysock))
-        else:
-            raise ValueError("MODEL_LOAD_STEPS: unknown step '%s'" % step[0])
+    for step in parse_steps(steps):
+        do_step(mon, step, keysock)
 
 
 def reach(point, mon, out_dir):

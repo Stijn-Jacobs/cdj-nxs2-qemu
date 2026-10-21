@@ -70,6 +70,32 @@ def test_a_player_with_no_launcher_sites_is_warned_about_none_of_them(tmp_path):
     assert found.switched_off(xdj700) == [sites.UNPINNED_DSP_IDLE]
 
 
+def test_an_image_run_in_place_of_the_installed_one_is_pinned_by_its_own_hash(tmp_path, monkeypatch):
+    m = model.load()
+    lay = layout_with(tmp_path, bytes(0x40000))
+    other = tmp_path / "under_test.bin"
+    other.write_bytes(bytes(0x40000) + b"\x01")
+    assert not sites.find(lay, m, str(other)).pinned
+    stock = sites.firmware.stock_main_sha256(m)
+    real = sites.firmware.installed_sha256
+    monkeypatch.setattr(sites.firmware, "installed_sha256", lambda path: stock if path == str(other) else real(path))
+    found = sites.find(lay, m, str(other))
+    assert found.pinned and found.board_image
+    assert not sites.find(lay, m).pinned
+
+
+def test_an_image_run_in_place_of_the_installed_one_gets_its_own_sites(tmp_path, monkeypatch):
+    m = model.load()
+    lay = layout_with(tmp_path, bytes(0x40000))
+    other = tmp_path / "under_test.bin"
+    other.write_bytes(bytes(0x40000) + b"\x01")
+    seen = []
+    monkeypatch.setattr(sites, "_found", lambda path, *rest: seen.append(path) or dict.fromkeys(NXS2_187))
+    sites.find(lay, m)
+    sites.find(lay, m, str(other))
+    assert seen[0].endswith("main_unpacked.bin") and seen[1] == str(other)
+
+
 def test_the_load_driver_waits_for_the_ready_word_only_where_it_is_found(tmp_path, monkeypatch):
     lay = layout_with(tmp_path, bytes(0x40000))
     lay.run = str(tmp_path)

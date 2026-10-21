@@ -85,6 +85,17 @@ def test_each_player_wires_its_own_bits():
     assert (older.key_named("MASTER TEMPO").off, older.key_named("MASTER TEMPO").mask) == (0x13, 0x40)
 
 
+def test_the_cdj900nxs_top_row_and_select_knob_send_what_the_cdj2000nxs_ones_do():
+    # The same four keys over the screen, at the CDJ-2000NXS's places (INFO and
+    # MENU print LINK INFO and UTILITY above them), and the same knob byte.
+    nxs, older = FACE.load("cdj900nxs"), FACE.load("cdj2000nxs")
+    for name in ("BROWSE", "TAG LIST", "INFO", "MENU"):
+        a, b = nxs.key_named(name), older.key_named(name)
+        assert (a.off, a.mask) == (b.off, b.mask)
+        assert abs(a.rect[0] - b.rect[0]) < 3 * FACE.UNITS_PER_MM
+    assert nxs.turn_datagram(1) == older.turn_datagram(1) == "0x0e:1:0:rot"
+
+
 def test_every_face_file_loads_with_its_controls_inside_it():
     for name in FACE.available():
         face = FACE.load(name)

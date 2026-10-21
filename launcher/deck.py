@@ -43,12 +43,13 @@ def missing_images(lay, m):
     return [m.extract + "/" + n for n in m.images if not os.path.isfile(os.path.join(folder, n))]
 
 
-def dsp_env(lay, m, env):
+def dsp_env(lay, m, env, found=None):
     """The DSP knobs a model's profile sets: the busy-wait loop the core skips,
     the interrupt fast path, and the module built by build_dsp_module.sh (when its
-    stamp fits) unless MODULE=none or C66X_JIT names one by hand."""
+    stamp fits) unless MODULE=none or C66X_JIT names one by hand. `found` is the
+    sites of the MAIN image that runs (sites.find), the installed one's when None."""
     knobs = {}
-    if sites.find(lay, m).pinned:
+    if (found or sites.find(lay, m)).pinned:
         knobs[m.dsp_idle_knob] = nonempty(env, m.dsp_idle_knob, m.dsp_idle)
         if m.dsp_isr_fast:
             knobs["C66X_IDLE_ISR_FAST"] = nonempty(env, "C66X_IDLE_ISR_FAST", m.dsp_isr_fast)
@@ -86,24 +87,26 @@ def patched_kernel(lay, m, env, kernel):
     return patched
 
 
-def command(lay, m, env):
+def command(lay, m, env, main=None):
     """(argv, env) of the player's QEMU. The stick is a snapshot, so the
-    firmware's writes to it never reach the image."""
+    firmware's writes to it never reach the image. `main` runs another MAIN
+    image in place of the installed one, with the sites found in it."""
     folder = model.extract_dir(lay, m)
     env = dict(env)
     env["CDJ_ATA"] = "1"
-    sr_seed_slot = sites.find(lay, m).sr_seed_slot()
+    found = sites.find(lay, m, main)
+    sr_seed_slot = found.sr_seed_slot()
     if sr_seed_slot is not None:
         env["CDJ_SR_SEED_SLOT"] = sr_seed_slot
     if m.has_dsp_module:
-        env.update(dsp_env(lay, m, env))
+        env.update(dsp_env(lay, m, env, found))
     if m.display_upd:
         env["CDJ_BF531_UPD"] = host.native(os.path.join(folder, model.DISPLAY_UPD_IMAGE))
     if m.display_flash:
         env["CDJ_M16C_GUI"] = host.native(os.path.join(folder, m.display_flash))
     env["CDJ_PANEL_KEYSOCK"] = nonempty(env, "CDJ_PANEL_KEYSOCK", str(host.pick_udp_port(PANEL_KEY_PORT)))
     argv = [main_qemu(lay, env), "-M", m.main_machine, "-name", m.title,
-            "-kernel", host.native(patched_kernel(lay, m, env, os.path.join(folder, "main_unpacked.bin"))),
+            "-kernel", host.native(patched_kernel(lay, m, env, main or os.path.join(folder, "main_unpacked.bin"))),
             "-serial", "file:" + os.path.join(lay.logs, m.id + ".log"),
             "-drive", "if=none,id=usbstk,file=%s,format=raw,snapshot=on" % host.native(lay.usb_image),
             "-device", "usb-storage,drive=usbstk,port=1"]
@@ -130,6 +133,19 @@ def command(lay, m, env):
     return argv, env
 
 
+def point_dir(tmp, argv, env, media, point, left_out=()):
+    """Where a deck started with (argv, env) from command() keeps a saved
+    point: keyed by its QEMU, MAIN and display images, stick, DSP module,
+    MAIN_ARGS and sound device, and the knobs of command() a caller left out."""
+    kernel = argv[argv.index("-kernel") + 1]
+    files = [argv[0], kernel] + [env[k] for k in ("CDJ_BF531_UPD", "CDJ_M16C_GUI") if k in env] + [media]
+    # The sound device and the DSP module shape the machine as well.
+    files += dsp_module.chain_files(env)
+    audio = argv[argv.index("-audio") + 1] if "-audio" in argv else ""
+    options = env.get("MAIN_ARGS", "") + " " + audio + "".join(" -" + k for k in sorted(left_out))
+    return os.path.join(snapshot.root(tmp, files, options), point)
+
+
 def plan_snapshot(lay, m, argv, env):
     """Adds what SNAPSHOT asks for to argv. Returns the argv of the driver that
     reaches and saves the point, or None when there is nothing to save."""
@@ -140,22 +156,16 @@ def plan_snapshot(lay, m, argv, env):
         raise SystemExit("SNAPSHOT point %r: known points are %s" % (point, ", ".join(snapshot.POINTS)))
     if not (m.idle_s and m.load_steps):
         raise SystemExit("SNAPSHOT: models/%s.conf sets no MODEL_IDLE_S and MODEL_LOAD_STEPS to reach a point" % m.id)
-    kernel = argv[argv.index("-kernel") + 1]
-    files = [argv[0], kernel] + [env[k] for k in ("CDJ_BF531_UPD", "CDJ_M16C_GUI") if k in env] + [lay.usb_image]
-    # The sound device and the DSP module shape the machine as well.
-    files += dsp_module.chain_files(env)
-    audio = argv[argv.index("-audio") + 1] if "-audio" in argv else ""
-    point_dir = os.path.join(snapshot.root(lay.tmp, files, env.get("MAIN_ARGS", "") + " " + audio), point)
-    if snapshot.saved(point_dir, ("main.vm",)):
-        argv += ["-incoming", "file:%s/main.vm" % host.native(point_dir)]
-        say("starting from the saved '%s' point %s" % (point, host.native(point_dir)))
+    where = point_dir(lay.tmp, argv, env, lay.usb_image, point)
+    if snapshot.saved(where, ("main.vm",)):
+        argv += snapshot.restore_args(where)
+        say("starting from the saved '%s' point %s" % (point, host.native(where)))
         return None
     mon = "%s/cdj-deck-%s-mon.sock" % (lay.tmp, m.id)
-    # A state that records "paused" comes back paused: the save stops the deck.
-    argv += ["-monitor", _monsock(lay).spec(mon), "-global", "migration.store-global-state=off"]
+    argv += ["-monitor", _monsock(lay).spec(mon)] + snapshot.SAVE_ARGS
     env.update({"MODEL_IDLE_S": m.idle_s, "MODEL_LOAD_STEPS": m.load_steps})
     say("no saved '%s' point yet: the deck boots and saves it on the way" % point)
-    return host.python_argv() + [os.path.join(lay.run, "snapshot_deck.py"), "--reach", point, mon, point_dir]
+    return host.python_argv() + [os.path.join(lay.run, "snapshot_deck.py"), "--reach", point, mon, where]
 
 
 def start(m, env, dry, app_cmd=()):
