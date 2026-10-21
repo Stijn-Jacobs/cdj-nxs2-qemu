@@ -3,7 +3,7 @@
 # Replay-only regeneration of the model's extra regions from a private profile.
 # usage: CDJ_MODEL=cdj2000nxs scripts/build/build_dsp_supplement.sh PROFILE OUT
 # OUT must be a new directory; generated C and m.so stay there, never in git.
-# C66X_JIT_LIBDIR selects the core build. JOBS overrides the model's six jobs.
+# C66X_JIT_LIBDIR selects the core build; JOBS (default 6) the parallel jobs.
 set -euo pipefail
 E="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 . "$E/scripts/cdj_model.sh"
@@ -26,7 +26,8 @@ JOBS="${JOBS:-6}"
 t0=$SECONDS
 make -C "$C6X" -j"$JOBS" "O=$LIBDIR" "$LIBDIR/libc66x.so"
 python3 "$C6X/tools/c14_jitgen.py" "$(native "$PROF")" "$(native "$OUT")/m" \
-    --lib "$(native "$LIBDIR/libc66x.so")" "${ARGS[@]}" --jobs "$JOBS" --no-cc
+    --lib "$(native "$LIBDIR/libc66x.so")" "${ARGS[@]}" --idle-head "${MODEL_DSP_IDLE%%:*}" \
+    --jobs "$JOBS" --no-cc
 FLAGS=(-O2 -std=gnu11 -fPIC -fvisibility=hidden -ffp-contract=off -frounding-math
        -march=native -w -I "$(native "$C6X")")
 for f in "$OUT"/m.*.c; do printf '%s\n' "$(native "$f")"; done |

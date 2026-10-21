@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-or-later
-# Adapted from cdj-2000nxs-mods tools/linux/compare_dsp_replay.py at fadfefef.
 """Compare a complete NXS DSP recording under interpreter and native module.
 
 Both runs must replay every record EXACT and have identical final state,
-write and RAM hashes. This proves only the recorded workload. Outputs stay
-private beside the recording and are never treated as library qualification.
+write and RAM hashes. This proves only the recorded workload. Without
+--module it checks the installed m.so and m.extra.so; --out must be new and
+keeps the logs and receipt.json.
 """
 import argparse
 import hashlib
@@ -13,8 +13,13 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from launcher import model  # noqa: E402
+from launcher.layout import Layout  # noqa: E402
 
 
 def sha(path):
@@ -34,8 +39,9 @@ def main():
                    help='native module; repeat for an ordered supplemental module chain')
     p.add_argument('--out', type=Path, default=root / 'runs/dsp-native-replay')
     a = p.parse_args()
+    m = model.load('cdj2000nxs')
     if a.module is None:
-        folder = Path.home() / 'c14gen/curated-cdj2000nxs'
+        folder = Path(Layout().jit_cache) / m.module_dir
         a.module = [folder / 'm.so', folder / 'm.extra.so']
     missing = [str(f) for f in [a.runner, a.record, *a.module] if not f.is_file()]
     if missing:
@@ -47,7 +53,7 @@ def main():
                'modules': [{'path': str(m.resolve()), 'sha256': sha(m)} for m in a.module],
                'scope': 'complete recorded NXS workload', 'runs': {}}
     base = {k: v for k, v in os.environ.items() if not k.startswith(('C66X_', 'CDJ_', 'REPLAY_'))}
-    base.update(REPLAY_IDLE='0xc004cb8c:0x11804ae0:0x11805c00:0', C66X_IDLE_ISR_FAST='1')
+    base.update(REPLAY_IDLE=m.dsp_idle + ':0', C66X_IDLE_ISR_FAST=m.dsp_isr_fast)
     for label in ('interpreter', 'native'):
         env = dict(base)
         if label == 'native':
