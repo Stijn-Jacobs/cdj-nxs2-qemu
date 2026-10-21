@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""launcher/mods.py against the real mods/mods.conf: parsing, the registry
+"""launcher/mods.py against the real mods/<mod>/mod.conf files: parsing, the registry
 default, the cdj.conf key a knob is saved under, and apply()'s precedence
 (a caller's own environment beats cdj.conf beats the registry default)."""
 

@@ -17,7 +17,7 @@ import subprocess
 import sys
 import time
 
-from . import chain, host, snapshot
+from . import chain, host, sites, snapshot
 from . import model as cdj_model
 from .chain import export_default, ifset, nonempty
 from .layout import Layout
@@ -108,17 +108,21 @@ class Deck:
         # (default: the deck number), OWNMAC=0 leaves it; with CDJ_ETHER_MAC
         # set and OWNMAC unset the whole address is held to the wire MAC. Only
         # non-zero bytes and byte 5 are poked: CDJ_MPOKE has 8 slots.
+        own_mac = None
         if env.get("CDJ_NETDEV") and nonempty(env, "OWNMAC", n) != "0":
+            own_mac = sites.find(lay, profile).get("own_mac")
+        if own_mac is not None:
             if not env.get("OWNMAC") and env.get("CDJ_ETHER_MAC"):
                 for i, b in enumerate(env["CDJ_ETHER_MAC"].split(":")):
                     if i == 5 or int(b, 16) != 0:
-                        _append_mpoke(env, "0x%08X:0x%s:1" % (0x0A35F754 + i, b))
-                self.notes.append((1, "[%s] own MAC 0x0A35F754 held to the wire address %s (OWNMAC=0 to leave it)"
-                                   % (tag, env["CDJ_ETHER_MAC"])))
+                        _append_mpoke(env, "0x%08X:0x%s:1" % (own_mac + i, b))
+                self.notes.append((1, "[%s] own MAC 0x%08X held to the wire address %s (OWNMAC=0 to leave it)"
+                                   % (tag, own_mac, env["CDJ_ETHER_MAC"])))
             else:
                 om = nonempty(env, "OWNMAC", n)
-                _append_mpoke(env, "0x0A35F759:%s:1" % om)
-                self.notes.append((1, "[%s] own MAC byte 0x0A35F759 held at %s (OWNMAC=0 to leave it)" % (tag, om)))
+                _append_mpoke(env, "0x%08X:%s:1" % (own_mac + 5, om))
+                self.notes.append((1, "[%s] own MAC byte 0x%08X held at %s (OWNMAC=0 to leave it)"
+                                   % (tag, own_mac + 5, om)))
         if env.get("CDJ_AUDIODEV"):
             env["CDJ_AUDIODEV"] = env["CDJ_AUDIODEV"].replace("%TAG%", tag)
 
@@ -256,15 +260,15 @@ class Deck:
         # bootloader reads it from.
         main_kernel = model_extract_n + "/main_unpacked.bin"
         main_base = main_kernel
-        main_mods = [m for m in self._main_mod_names() if env.get("CDJ_MAIN_" + m.upper()) == "1"]
+        main_mods = [m for m in self._main_mod_names(profile) if env.get("CDJ_MAIN_" + m.upper()) == "1"]
         if main_mods:
             if env.get("MAIN_BOOT") == "flash":
                 patched_flash = host.native("%s/cdj-%s-flash.bin" % (nonempty(env, "LOGDIR", tmp), tag))
-                self.main_patch = host.python_argv() + [self._patch_main(), "--flash", flash, patched_flash] + main_mods
+                self.main_patch = host.python_argv() + [self._patch_main(), "--model", profile.id, "--flash", flash, patched_flash] + main_mods
                 flash = patched_flash
             else:
                 patched_main = host.native("%s/cdj-%s-main.bin" % (nonempty(env, "LOGDIR", tmp), tag))
-                self.main_patch = host.python_argv() + [self._patch_main(), main_kernel, patched_main] + main_mods
+                self.main_patch = host.python_argv() + [self._patch_main(), "--model", profile.id, main_kernel, patched_main] + main_mods
                 main_kernel = patched_main
 
         # MAIN_BOOT=flash: MAIN resets into Pioneer's bootloader in the flash
@@ -279,10 +283,10 @@ class Deck:
         # each patch_gui.py mod <name> is on when CDJ_GUI_<NAME>=1.
         gui_image = model_extract_n + "/gui_unpacked.bin"
         gui_base = gui_image
-        gui_mods = [m for m in self._gui_mod_names() if env.get("CDJ_GUI_" + m.upper()) == "1"]
+        gui_mods = [m for m in self._gui_mod_names(profile) if env.get("CDJ_GUI_" + m.upper()) == "1"]
         if gui_mods:
             patched = host.native("%s/cdj-%s-gui.bin" % (nonempty(env, "LOGDIR", tmp), tag))
-            self.gui_patch = host.python_argv() + [self._patch_gui(), gui_image, patched] + gui_mods
+            self.gui_patch = host.python_argv() + [self._patch_gui(), "--model", profile.id, gui_image, patched] + gui_mods
             gui_image = patched
 
         self.gui_env = dict(env)
@@ -348,16 +352,16 @@ class Deck:
     def _patch_gui(self):
         return os.path.join(self.lay.emu, "mods", "patch_gui.py")
 
-    def _gui_mod_names(self):
-        out = subprocess.run(host.python_argv() + [self._patch_gui(), "--list"],
+    def _gui_mod_names(self, profile):
+        out = subprocess.run(host.python_argv() + [self._patch_gui(), "--model", profile.id, "--list"],
                              capture_output=True, text=True, check=True).stdout
         return [line.split()[0] for line in out.splitlines() if line.strip()]
 
     def _patch_main(self):
         return os.path.join(self.lay.emu, "mods", "patch_main.py")
 
-    def _main_mod_names(self):
-        out = subprocess.run(host.python_argv() + [self._patch_main(), "--list"],
+    def _main_mod_names(self, profile):
+        out = subprocess.run(host.python_argv() + [self._patch_main(), "--model", profile.id, "--list"],
                              capture_output=True, text=True, check=True).stdout
         return [line.split()[0] for line in out.splitlines() if line.strip()]
 
@@ -661,7 +665,7 @@ def main(argv):
     if os.environ.get("MAIN_BOOT") == "flash" and not flash_has_bootloader(
             os.path.join(cdj_model.extract_dir(lay, profile), "flash.bin")):
         chain.err("[%s] %s/flash.bin holds no bootloader (made by an older setup); run "
-                  "./setup.sh --firmware <C2KNXS2.UPD> again, or leave MAIN_BOOT unset" % (tag, profile.extract))
+                  "./setup.sh --firmware <%s> again, or leave MAIN_BOOT unset" % (tag, profile.extract, profile.upd[0]))
         return 1
     deck = Deck(tag, dict(os.environ), lay, profile)
     if not deck.start():

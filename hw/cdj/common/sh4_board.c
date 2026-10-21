@@ -184,10 +184,16 @@ void cdj_board_load(MachineState *machine)
 
     /* Done after the image load so the image cannot overwrite it. The
      * bootloader does not write there either. */
-    if (d->sr_seed_slot) {
+    /* The slot is a global in the firmware, so it moves with the build:
+     * CDJ_SR_SEED_SLOT names where this image keeps it (0 = seed nothing). */
+    const char *slot_env = getenv("CDJ_SR_SEED_SLOT");
+    hwaddr sr_seed_slot = slot_env && *slot_env ? strtoul(slot_env, NULL, 0)
+                                                : d->sr_seed_slot;
+
+    if (sr_seed_slot) {
         uint32_t sr_seed = cpu_to_le32(d->sr_seed);
 
-        cpu_physical_memory_write(d->sr_seed_slot, &sr_seed, sizeof(sr_seed));
+        cpu_physical_memory_write(sr_seed_slot, &sr_seed, sizeof(sr_seed));
     }
 }
 

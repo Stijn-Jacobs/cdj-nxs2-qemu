@@ -14,8 +14,9 @@ Points are cached per build, firmware, medium and MAIN_ARGS (snapshot.py).
 import os
 import shlex
 import subprocess
+import time
 
-from . import chain, dsp_module, host, model, snapshot
+from . import chain, dsp_module, host, model, mods, sites, snapshot
 from .boot_deck import _monsock, window_display
 from .chain import nonempty, say, warn_banner
 from .layout import Layout
@@ -46,9 +47,13 @@ def dsp_env(lay, m, env):
     """The DSP knobs a model's profile sets: the busy-wait loop the core skips,
     the interrupt fast path, and the module built by build_dsp_module.sh (when its
     stamp fits) unless MODULE=none or C66X_JIT names one by hand."""
-    knobs = {m.dsp_idle_knob: nonempty(env, m.dsp_idle_knob, m.dsp_idle)}
-    if m.dsp_isr_fast:
-        knobs["C66X_IDLE_ISR_FAST"] = nonempty(env, "C66X_IDLE_ISR_FAST", m.dsp_isr_fast)
+    knobs = {}
+    if sites.find(lay, m).pinned:
+        knobs[m.dsp_idle_knob] = nonempty(env, m.dsp_idle_knob, m.dsp_idle)
+        if m.dsp_isr_fast:
+            knobs["C66X_IDLE_ISR_FAST"] = nonempty(env, "C66X_IDLE_ISR_FAST", m.dsp_isr_fast)
+    if m.dsp_mhz:
+        knobs["CDJ_C6747_MHZ"] = nonempty(env, "CDJ_C6747_MHZ", m.dsp_mhz)
     if env.get("C66X_JIT") or env.get("MODULE") == "none":
         return knobs
     module = dsp_module.check(lay, m)
@@ -67,12 +72,29 @@ def link_group(env):
     return "%s:%d" % (ip, host.pick_udp_port(int(port)))
 
 
+def patched_kernel(lay, m, env, kernel):
+    """MAIN with the mods cdj.conf switched on patched in, as a copy under tmp;
+    the image itself when none is on."""
+    names = [knob[len("CDJ_MAIN_"):].lower() for row in mods.load(lay, m.id)
+             for knob in mods.env_names(row.env)
+             if knob.startswith("CDJ_MAIN_") and env.get(knob) == "1"]
+    if not names:
+        return kernel
+    patched = os.path.join(lay.tmp, "cdj-%s-main.bin" % m.id)
+    subprocess.run(host.python_argv() + [os.path.join(lay.emu, "mods", "patch_main.py"),
+                                         "--model", m.id, kernel, patched] + names, check=True)
+    return patched
+
+
 def command(lay, m, env):
     """(argv, env) of the player's QEMU. The stick is a snapshot, so the
     firmware's writes to it never reach the image."""
     folder = model.extract_dir(lay, m)
     env = dict(env)
     env["CDJ_ATA"] = "1"
+    sr_seed_slot = sites.find(lay, m).sr_seed_slot()
+    if sr_seed_slot is not None:
+        env["CDJ_SR_SEED_SLOT"] = sr_seed_slot
     if m.has_dsp_module:
         env.update(dsp_env(lay, m, env))
     if m.display_upd:
@@ -81,7 +103,7 @@ def command(lay, m, env):
         env["CDJ_M16C_GUI"] = host.native(os.path.join(folder, m.display_flash))
     env["CDJ_PANEL_KEYSOCK"] = nonempty(env, "CDJ_PANEL_KEYSOCK", str(host.pick_udp_port(PANEL_KEY_PORT)))
     argv = [main_qemu(lay, env), "-M", m.main_machine, "-name", m.title,
-            "-kernel", host.native(os.path.join(folder, "main_unpacked.bin")),
+            "-kernel", host.native(patched_kernel(lay, m, env, os.path.join(folder, "main_unpacked.bin"))),
             "-serial", "file:" + os.path.join(lay.logs, m.id + ".log"),
             "-drive", "if=none,id=usbstk,file=%s,format=raw,snapshot=on" % host.native(lay.usb_image),
             "-device", "usb-storage,drive=usbstk,port=1"]
@@ -137,8 +159,10 @@ def plan_snapshot(lay, m, argv, env):
     return host.python_argv() + [os.path.join(lay.run, "snapshot_deck.py"), "--reach", point, mon, point_dir]
 
 
-def start(m, env, dry):
-    """Run the player until its window closes."""
+def start(m, env, dry, app_cmd=()):
+    """Run the player until its window closes. With app_cmd, the virtual deck
+    app is the window (the player's screen is on VNC) and closing it stops the
+    player."""
     lay = Layout()
     missing = missing_images(lay, m)
     if missing:
@@ -150,13 +174,16 @@ def start(m, env, dry):
         return 1
     argv, env = command(lay, m, env)
     reach = plan_snapshot(lay, m, argv, env)
-    say("%s: one window with the USB stick. A second deck, MIDI controllers, mods and the virtual "
-        "deck app are CDJ-2000NXS2 features and are skipped." % m.title)
+    skipped = "A second deck, MIDI controllers and mods" if app_cmd else (
+        "A second deck, MIDI controllers, mods and the virtual deck app")
+    say("%s: one window with the USB stick. %s are CDJ-2000NXS2 features and are skipped." % (m.title, skipped))
     if dry:
         knobs = ["CDJ_ATA", "CDJ_BF531_UPD", "CDJ_M16C_GUI", "CDJ_PANEL_KEYSOCK", "CDJ_DSP_AUDIO", "CDJ_C6747_IDLE",
                  "CDJ_C6727_IDLE", "C66X_IDLE_ISR_FAST", "C66X_JIT"]
         say("would run:  %s %s" % (" ".join("%s=%s" % (k, env[k]) for k in knobs if k in env),
                                    " ".join(shlex.quote(a) for a in argv)))
+        if app_cmd:
+            say("with:       GUI_DISPLAY=%s, then %s" % (env["GUI_DISPLAY"], " ".join(shlex.quote(a) for a in app_cmd)))
         return 0
     os.makedirs(lay.logs, exist_ok=True)
     say("the first boot takes a minute; close the window or press Ctrl-C to stop.")
@@ -168,12 +195,17 @@ def start(m, env, dry):
                                                           env["GROUP"]], stdout=log, stderr=subprocess.STDOUT)
     qemu = subprocess.Popen(argv, env=env)
     driver = subprocess.Popen(reach, env=env) if reach else None
+    window = subprocess.Popen(app_cmd, env=env) if app_cmd else None
     try:
+        while window and window.poll() is None and qemu.poll() is None:
+            time.sleep(0.5)
+        if window and qemu.poll() is None:
+            qemu.terminate()
         qemu.wait()
     except KeyboardInterrupt:
         qemu.terminate()
         qemu.wait()
-    for helper in (driver, dhcp):
+    for helper in (driver, dhcp, window):
         if helper:
             helper.terminate()
     say("stopped.")

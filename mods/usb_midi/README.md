@@ -29,7 +29,7 @@ MIDI task in PC control mode, so once the host has configured the rear port the
 patch posts the task's own "configured" event to the MIDI interface (and only
 to that one, which leaves audio and the other classes alone), once per
 connection. The knob selects both patches (`usbmidi` and `usbmiditick` in
-`patch_main.py`); `python mods/patch_update.py C2KNXS2.UPD out.UPD
+`cdj2000nxs2/patch.py`); `python mods/patch_update.py C2KNXS2.UPD out.UPD
 usb_midi` writes both into a real update (firmware 1.87).
 
 **Status: the 1 ms clock has not run yet, in the emulator or on a deck.** The

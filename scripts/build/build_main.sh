@@ -63,7 +63,7 @@ esac
 # at "none, dbus". Reconfigure when the requested UI backend is not in the
 # existing config, or when QEMU_RECONFIGURE=1 is set.
 # --disable-fuse: macFUSE 5 headers break QEMU 9.1 block/export/fuse.c, and nothing here exports block devices.
-CFG_ARGS="--target-list=sh4-softmmu --disable-werror --disable-docs --disable-tools --disable-fuse"
+CFG_ARGS="--target-list=sh4-softmmu --disable-werror --disable-docs --disable-tools --disable-libnfs --disable-fuse"
 # Ask explicitly for the UI and sound backends, so a missing dependency fails
 # loudly instead of quietly producing a binary with no window or no sound. On
 # macOS they are Cocoa and Core Audio, which need nothing beyond the SDK.

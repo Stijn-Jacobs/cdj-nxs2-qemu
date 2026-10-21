@@ -1,5 +1,5 @@
 diff --git a/target/sh4/op_helper.c b/target/sh4/op_helper.c
-index 99394b7..ac98235 100644
+index 99394b7..8357721 100644
 --- a/target/sh4/op_helper.c
 +++ b/target/sh4/op_helper.c
 @@ -22,6 +22,8 @@
@@ -80,7 +80,7 @@ index 99394b7..ac98235 100644
      env->fpscr = val & FPSCR_MASK;
      if ((val & FPSCR_RM_MASK) == FPSCR_RM_ZERO) {
          set_float_rounding_mode(float_round_to_zero, &env->fp_status);
-@@ -497,3 +554,1182 @@ void helper_ftrv(CPUSH4State *env, uint32_t n)
+@@ -497,3 +554,1175 @@ void helper_ftrv(CPUSH4State *env, uint32_t n)
          env->fregs[bank_vector + i] = r[i];
      }
  }
@@ -846,8 +846,8 @@ index 99394b7..ac98235 100644
 +}
 +
 +/*
-+ * CDJ_NATIVE_LIBC=1 -- the MAIN firmware's memcmp (0x085336B0) and strlen
-+ * (0x085341C0) run as host code. In steady playback a large share of MAIN's
++ * CDJ_NATIVE_LIBC=<memcmp>:<strlen> -- the MAIN firmware's memcmp and strlen
++ * run as host code. In steady playback a large share of MAIN's
 + * vCPU thread sits in their byte-at-a-time loops, each byte a chained TB with
 + * two softmmu loads. The translator replaces the entry
 + * instruction with one of these helpers and an immediate return through PR;
@@ -883,9 +883,6 @@ index 99394b7..ac98235 100644
 +    return probe_access(env, addr, 1, MMU_DATA_LOAD,
 +                        cpu_mmu_index(env_cpu(env), false), ra);
 +}
-+
-+enum { CDJ_NC_MEMCMP, CDJ_NC_STRLEN, CDJ_NC_MEMCPY, CDJ_NC_MEMSET,
-+       CDJ_NC_MOVMEM, CDJ_NC_N };
 +
 +static struct {
 +    uint64_t calls, bytes, slow, insns;
@@ -994,10 +991,10 @@ index 99394b7..ac98235 100644
 +}
 +
 +/*
-+ * CDJ_NATIVE_COPY=1 (default off), the tier after CDJ_NATIVE_LIBC: MAIN's
-+ * memcpy (0x085336DC), memset (0x08533D50) and the compiler's block-copy
-+ * helper (0x08531F88, a non-standard ABI: r0 = length, r1 = dst, r2 = src,
-+ * returning r0 and r1) run as host code.
++ * CDJ_NATIVE_COPY=<memcpy>:<memset>:<movmem> (default off), the tier after
++ * CDJ_NATIVE_LIBC: MAIN's memcpy, memset and the compiler's block-copy helper
++ * (a non-standard ABI: r0 = length, r1 = dst, r2 = src, returning r0 and r1)
++ * run as host code.
 + *
 + * Unlike memcmp/strlen these WRITE guest memory, so the helper first decides
 + * whether it can reproduce the guest routine exactly, and touches nothing if it
@@ -1179,7 +1176,7 @@ index 99394b7..ac98235 100644
 +
 +/* Returns 1 with the routine's effect and result registers in place, or 0 to
 + * run the guest routine instead (nothing has been written). */
-+uint32_t helper_cdj_native_copy(CPUSH4State *env, uint32_t pc)
++uint32_t helper_cdj_native_copy(CPUSH4State *env, uint32_t which)
 +{
 +    uintptr_t ra = GETPC();
 +    uint32_t *r = env->gregs;
@@ -1187,12 +1184,10 @@ index 99394b7..ac98235 100644
 +    CdjSpan d, s;
 +    uint32_t dst, src, n, off, k;
 +    uint64_t insns;
-+    int which;
 +
 +    cdj_nc_report_on = true;
-+    switch (pc) {
-+    case 0x085336DCu:                               /* memcpy(r4, r5, r6) */
-+        which = CDJ_NC_MEMCPY;
++    switch (which) {
++    case CDJ_NC_MEMCPY:                             /* memcpy(r4, r5, r6) */
 +        dst = r[4 ^ b];
 +        src = r[5 ^ b];
 +        n = r[6 ^ b];
@@ -1216,8 +1211,7 @@ index 99394b7..ac98235 100644
 +        r[0 ^ b] = dst;
 +        insns = cdj_memcpy_insns(dst, src, n);
 +        break;
-+    case 0x08533D50u:                               /* memset(r4, r5, r6) */
-+        which = CDJ_NC_MEMSET;
++    case CDJ_NC_MEMSET:                             /* memset(r4, r5, r6) */
 +        dst = r[4 ^ b];
 +        n = r[6 ^ b];
 +        if (n > CDJ_NC_MAX || !cdj_span(env, &d, dst, n, MMU_DATA_STORE, ra)) {
@@ -1232,8 +1226,7 @@ index 99394b7..ac98235 100644
 +        r[0 ^ b] = dst;
 +        insns = cdj_memset_insns(dst, n);
 +        break;
-+    case 0x08531F88u:                   /* block copy: r0 = n, r1 = dst, r2 = src */
-+        which = CDJ_NC_MOVMEM;
++    case CDJ_NC_MOVMEM:                 /* block copy: r0 = n, r1 = dst, r2 = src */
 +        n = r[0 ^ b];
 +        dst = r[1 ^ b];
 +        src = r[2 ^ b];

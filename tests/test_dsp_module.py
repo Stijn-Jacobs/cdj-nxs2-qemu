@@ -16,7 +16,8 @@ from launcher import deck, dsp_module, model  # noqa: E402
 
 @pytest.fixture
 def lay(tmp_path):
-    return SimpleNamespace(emu=EMU, jit_cache=str(tmp_path / "c14gen"), packaged=False)
+    return SimpleNamespace(emu=EMU, jit_cache=str(tmp_path / "c14gen"), packaged=False,
+                           extract=str(tmp_path / "extract"), root=str(tmp_path))
 
 
 def _install(lay, m, **changed):
@@ -75,6 +76,15 @@ def test_start_up_leaves_a_stale_module_out(lay, capsys):
 def test_dsp_stamp_writes_the_stamp_the_check_reads(tmp_path, monkeypatch):
     monkeypatch.setenv("CDJ_MODEL", "xdj1000")
     assert dsp_module.main([str(tmp_path)]) == 0
-    lay = SimpleNamespace(emu=EMU)
+    lay = SimpleNamespace(emu=EMU, extract=str(tmp_path / "extract"), root=str(tmp_path))
     assert dsp_module.differences(str(tmp_path), dsp_module.current(lay, model.load("xdj1000"))) == []
     assert dsp_module.differences(str(tmp_path / "nowhere"), {}) is None
+
+
+def test_the_stamp_follows_the_installed_firmware_image(lay):
+    m = model.load()
+    official = dsp_module.current(lay, m)["firmware"]
+    os.makedirs(lay.extract)
+    with open(os.path.join(lay.extract, "main_unpacked.bin"), "wb") as f:
+        f.write(b"a modded kernel")
+    assert dsp_module.current(lay, m)["firmware"] != official

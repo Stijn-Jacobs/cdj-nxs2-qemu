@@ -24,6 +24,7 @@ import make_flash
 import patch_main
 import patch_update
 import sigpatch
+from players import cdj2000nxs2 as nxs2
 from sigpatch import Mod
 from helpers import path, run_script
 
@@ -73,8 +74,10 @@ def test_xip_profile_refuses_when_the_cave_is_too_small(tmp_path):
     profile = profile._replace(ram_end=profile.ram_base + 2)   # smaller than any routine
     blob = tmp_path / 'xip.bin'
     blob.write_bytes(b'\x01\x02\x03\x04')
-    with pytest.raises(SystemExit, match='no erased span'):
-        sigpatch.patch(profile, lambda name: str(blob), data, mods, ['xip'])
+    report = {}
+    out = sigpatch.patch(profile, lambda name: str(blob), data, mods, ['xip'], report=report)
+    assert out == data
+    assert report['xip'][0] == 'skipped' and 'no erased span' in report['xip'][1]
 
 
 # -- sigpatch.py: the literal-pool safety check ----------------------------------
@@ -111,8 +114,10 @@ def test_patch_refuses_to_overwrite_a_literal_pool_still_read_elsewhere(tmp_path
     profile, data, mods = build_image_with_literal_pool(pool_inside_span=True)
     blob = tmp_path / 'm.bin'
     blob.write_bytes(b'\x00\x09' * 2)
-    with pytest.raises(SystemExit, match='would overwrite a literal pool'):
-        sigpatch.patch(profile, lambda name: str(blob), data, mods, ['m'])
+    report = {}
+    out = sigpatch.patch(profile, lambda name: str(blob), data, mods, ['m'], report=report)
+    assert out == data
+    assert 'would overwrite a literal pool' in report['m'][1]
 
 
 def test_patch_allows_a_literal_pool_outside_the_replaced_span(tmp_path):
@@ -240,7 +245,7 @@ def test_registry_includes_main_once_it_has_mods(monkeypatch):
     dummy = Mod(what='registry test', target='main', fw_versions=('1.87',),
                sig=[0x1234], start=0, end=1, args=[], literal=False)
     monkeypatch.setitem(patch_main.MODS, 'regtest', dummy)
-    reg = patch_update.registry()
+    reg = patch_update.registry('cdj2000nxs2')
     assert reg['regtest'] == ('main', patch_main)
 
 
@@ -298,9 +303,10 @@ def test_real_main_dummy_mod_lands_in_the_confirmed_code_cave(tmp_path, monkeypa
     blob = tmp_path / 'dummy.bin'
     blob.write_bytes(b'\x00\x09' * 2)
 
-    patched = sigpatch.patch(patch_main.MAIN_PROFILE, lambda n: str(blob), image, {'dummy': dummy}, ['dummy'])
+    patched = sigpatch.patch(nxs2.MAIN_PROFILE, lambda n: str(blob), image, {'dummy': dummy}, ['dummy'])
     assert patched != image
-    cave_off = patch_main.MAIN_PROFILE.ram_base - patch_main.MAIN_PROFILE.flash_base
+    run = sigpatch.largest_erased_run(sigpatch.Image(nxs2.MAIN_PROFILE, image))
+    cave_off = (run.start() + 15) & ~15
     assert patched[cave_off:cave_off + 4] == b'\x00\x09\x00\x09'
     assert patched[off:off + 16] != image[off:off + 16]
 
@@ -340,11 +346,13 @@ def test_patch_flash_erases_its_window_and_leaves_everything_else_alone(tmp_path
     sig = list(struct.unpack_from('<8H', image, off))
     dummy = Mod(what='test-only dummy', target='main', fw_versions=('1.87',),
                sig=sig, start=0, end=len(sig), args=[], literal=False)
-    # patch_flash() goes through patch_main.patch(), which looks the routine
-    # up with patch_main.blob_path(), so point that at tmp_path.
+    # patch_flash() goes through patch_main.patch(), which looks every routine
+    # up with patch_main.blob_path(), so point the dummy's at tmp_path.
     blob = tmp_path / 'dummy.bin'
     blob.write_bytes(b'\x00\x09' * 2)
-    monkeypatch.setattr(patch_main, 'blob_path', lambda name: str(blob))
+    real_blob_path = patch_main.blob_path
+    monkeypatch.setattr(patch_main, 'blob_path',
+                        lambda name, model: str(blob) if name == 'dummy' else real_blob_path(name, model))
     monkeypatch.setitem(patch_main.MODS, 'dummy', dummy)
     new_flat = patch_main.patch_flash(orig_flat, ['dummy'])
 

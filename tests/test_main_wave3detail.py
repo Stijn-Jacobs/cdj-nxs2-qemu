@@ -10,12 +10,17 @@ import struct
 
 import pytest
 
+import modelfw
 import patch_main
 import sigpatch
+from players import cdj2000nxs2 as nxs2
 from test_main_wave3data import FirmwareSh4
+from helpers import stock_mods
+
+THREE_BAND = modelfw.mod_patch('three_band', 'cdj2000nxs2')
 
 SIG_AT = 0x202                  # puts the span at 2 mod 4, like the firmware's
-SPAN = SIG_AT + 2 * patch_main.DETAIL_CONVERTED['start']
+SPAN = SIG_AT + 2 * THREE_BAND.DETAIL_CONVERTED['start']
 RESUME = SPAN + 24
 CAVE = (0x1000, 0x5000)
 FRAME = 0xF000
@@ -30,7 +35,7 @@ N = 64
 
 def build_image():
     d = bytearray(0x10000)
-    for k, op in enumerate(patch_main.DETAIL_CONVERTED['sig']):
+    for k, op in enumerate(THREE_BAND.DETAIL_CONVERTED['sig']):
         struct.pack_into('<H', d, SIG_AT + 2 * k, op)
     # the span's three literal loads: the shared context, the free call, the context again
     for k, value in zip((0, 1, 4), (CTX, FREE, CTX)):
@@ -44,7 +49,7 @@ def build_image():
 
 def patched_image():
     profile, data = build_image()
-    out = bytearray(sigpatch.patch(profile, patch_main.blob_path, data, patch_main.MODS,
+    out = bytearray(sigpatch.patch(profile, patch_main.blob_path, data, stock_mods(patch_main.MODS),
                                    ['wave3detail']))
     for real, low in ((0x0B531EB8, CTX + 28), (WORDS_FIXED, WORDS)):
         at = out.find(struct.pack('<I', real), CAVE[0])
@@ -90,7 +95,7 @@ def entries(cpu):
 def test_registered_for_main_as_a_hook_on_the_converted_record():
     mod = patch_main.MODS['wave3detail']
     assert mod.target == 'main' and mod.hook and not mod.literal
-    assert dict(sig=mod.sig, start=mod.start, end=mod.end) == patch_main.DETAIL_CONVERTED
+    assert dict(sig=mod.sig, start=mod.start, end=mod.end) == THREE_BAND.DETAIL_CONVERTED
 
 
 REAL_MAIN = os.path.join(os.path.dirname(__file__), '..', '..', 'extract', 'main_unpacked.bin')
@@ -99,7 +104,7 @@ REAL_MAIN = os.path.join(os.path.dirname(__file__), '..', '..', 'extract', 'main
 @pytest.mark.skipif(not os.path.exists(REAL_MAIN), reason='extract/main_unpacked.bin not present')
 def test_real_main_has_the_signature_once():
     with open(REAL_MAIN, 'rb') as f:
-        img = sigpatch.Image(patch_main.MAIN_PROFILE, f.read())
+        img = sigpatch.Image(nxs2.MAIN_PROFILE, f.read())
     mod = patch_main.MODS['wave3detail']
     assert img.addr_of(sigpatch.find_sig(img, mod) + 2 * mod.start) == 0x0849F83A
 

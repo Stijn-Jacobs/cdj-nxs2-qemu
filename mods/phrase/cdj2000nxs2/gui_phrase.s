@@ -36,7 +36,7 @@
 ! r2/r8 are the only things read after this point by the surviving code;
 ! everything else (r0,r1,r6,r7,r9,r10) is free to clobber.
 !
-! Verified against v1.81 only, like the other mods in this file's registry:
+! Verified against v1.81 only, like the other display mods:
 ! the two resume addresses and the record pool below are this build's own.
 
         .text

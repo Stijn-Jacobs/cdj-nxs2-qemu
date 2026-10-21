@@ -270,6 +270,65 @@ def compilable(dec, pk):
     return None
 
 
+def fill_store(ins):
+    """(base, size, writeback mode, offset, source, source high half) of an
+    unconditional store of a register by the inline RAM path, or None."""
+    ops = ins.ops
+    dw = ins.mfast & 0x40
+    if ins.fop != "store" or ins.cond_reg >= 0 or not ins.mfast or ops[0].kind != (OPK_PAIR if dw else OPK_REG):
+        return None
+    return (ops[1].reg, 8 if dw else ins.mfast & 7, (ins.mfast >> 4) & 3, ins.ea_delta, ops[0].reg,
+            ops[0].reg_hi if dw else None)
+
+
+def fill_ok(stores, counter=None):
+    """At most two stores, of registers the loop never writes."""
+    if not 0 < len(stores) <= 2:
+        return False
+    written = ([counter] if counter is not None else []) + [st[0] for st in stores if st[2]]
+    sources = [st[4] for st in stores] + [st[5] for st in stores if st[5] is not None]
+    return len(set(written)) == len(written) and RET_REG not in written and not set(sources) & set(written)
+
+
+@functools.lru_cache(maxsize=None)
+def _store_loop(dec, pc):
+    pk = dec.packet(pc)
+    if pk is None or pk.load or pk.xnops:
+        return None
+    counter, stores, branches = None, [], []
+    for ins in pk.insns:
+        ops = ins.ops
+        if ins.fop == "nop":
+            continue
+        if ins.fop == "branch" and ops[0].kind == OPK_ADDR and ops[0].val & 0xffffffff == pc and ins.cond_z == 0:
+            branches.append(ins.cond_reg)
+            continue
+        if ins.fop == "add" and ops[0].kind == OPK_CONST and ops[0].val == -1:
+            src, dst = ops[1], ops[2]
+        elif ins.fop == "sub" and ops[1].kind == OPK_CONST and ops[1].val == 1:
+            src, dst = ops[0], ops[2]
+        elif fill_store(ins):
+            stores.append(fill_store(ins))
+            continue
+        else:
+            return None
+        if (counter is not None or src.kind != OPK_REG or src.reg != dst.reg or ins.cond_reg != dst.reg
+                or ins.cond_z != 0):
+            return None
+        counter = dst.reg
+    if counter is None or branches != [counter] or not fill_ok(stores, counter):
+        return None
+    return counter, stores
+
+
+def store_loop(dec, pk):
+    """(counter, stores) when the packet is a whole loop that only stores
+    registers it never writes, through pointers it steps by a constant, and
+    branches back to itself while it counts a register down -- a fill. Each
+    store is fill_store's tuple."""
+    return _store_loop(dec, pk.pc)
+
+
 # --------------------------------------------------------------------------
 # static pipeline state
 #
@@ -512,6 +571,8 @@ class RegionGen:
                     e("    if (__builtin_expect(%s, 0)) { c->jit_exit[%d]++; goto P%d; }"
                       % (" || ".join(w["flag"] for w in hits), EXIT_STALL, label))
                     post_used = True
+                elif not st.pre and not ring:
+                    self.fill_batch(pk, st, known)
         pre = max(st.pre - 1, 0)
         new_ring, new_imm = [], []
         queue = [dict(q) for q in st.queue]
@@ -542,6 +603,45 @@ class RegionGen:
             q["rem"] -= 1
         self.land(queue, ring, new_imm, next_pc, mcnop, pre, self.trim(known), "    ", ret)
         self.stubs(label, st, post_used)
+
+    def fill_batch(self, pk, st, known):
+        """In the steady state of a store_loop packet -- five taken branches back to
+        it in flight, nothing else pending -- run as many of its cycles as the
+        counter and the budget allow in one go. The cycle itself then runs as
+        compiled."""
+        loop = store_loop(self.dec, pk)
+        if (loop is None or [q["rem"] for q in st.queue] != [1, 2, 3, 4, 5]
+                or any(q["tconst"] != pk.pc for q in st.queue)):
+            return
+        counter, stores = loop
+        if counter in known:
+            return
+        self.emit_fill([q["flag"] for q in st.queue if q["flag"]], "c->reg[%d]" % counter, stores, known, "")
+
+    def emit_fill(self, flags, count, stores, known, after):
+        """Run fn_ cycles of a fill at once, fn_ no more than the count register
+        allows (each cycle decrements it and needs it nonzero first) and short of
+        the budget. Every cycle in between would have passed the same checks:
+        nothing a fill does can raise an interrupt, change code or reach another
+        unit, so the checks at the next cycle stand for all of them."""
+        if any(st[0] in known for st in stores if st[2]):
+            return
+        e = self.emit
+        e("    %s{" % ("if (%s) " % " && ".join(flags) if flags else ""))
+        ind = "        "
+        e(ind + "uint64_t fn_ = end - c->cycle - 1;")
+        e(ind + "if (%s < fn_) fn_ = %s;" % (count, count))
+        sts = []
+        for b, n, wb, d, src, hi in stores:
+            first = "c->reg[%d]" % b if wb == 2 else "c->reg[%d] + %s" % (b, u32(d))
+            sts.append("{ %s, %s, c->reg[%d], %s, %d }" % (first, u32(d if wb else 0), src,
+                                                          "c->reg[%d]" % hi if hi is not None else "0", n))
+        e(ind + "if (fn_ >= 8 && jit_fill(c, fn_, (const jit_fill_st[]){ %s }, %d)) {" % (", ".join(sts), len(sts)))
+        ups = ["%s -= (uint32_t)fn_;" % count]
+        ups += ["c->reg[%d] += (uint32_t)fn_ * %s;" % (st[0], u32(st[3])) for st in stores if st[2]]
+        e(ind + "    " + " ".join(ups) + " c->cycle += fn_;" + after)
+        e(ind + "}")
+        e("    }")
 
     @staticmethod
     def trim(known):
@@ -1850,6 +1950,12 @@ class LoopGen(KernelGen):
                 e("    if (__builtin_expect(%s, 0)) { c->jit_exit[%d]++; goto P%d; }"
                   % (" || ".join(tests), EXIT_STUB, label))
                 post_used = True
+            if phase == "S" and ii == 1 and buf and not st.pre and all(w["land"] == 0 for w in st.ring):
+                # a one-cycle kernel of stores alone: each cycle is an iteration
+                stores = [fill_store(ins) for ins in buf]
+                if all(stores) and fill_ok(stores):
+                    self.emit_fill([], "c->cr[CR_ILC]", stores, known,
+                                   " c->spl.last_iter = (int)(c->cycle - c->spl.t0);")
         ring = [dict(w) for w in st.ring if (root or w["land"] > 0)]
         new_ring, new_imm = [], []
         dummy = Rec()
@@ -2369,6 +2475,61 @@ static inline void jit_store(c66x_core *c, uint32_t ea, uint32_t v, unsigned n)
         return;
     }
     JIT_API(c)->store_defer(c, ea, v, n);
+}
+
+/* One store of a fill loop: first address, step per iteration, value (a
+ * doubleword's high half in hi), size. */
+typedef struct { uint32_t ea, step, v, hi, n; } jit_fill_st;
+
+static inline void jit_fill_put(uint8_t *d, const jit_fill_st *s)
+{
+    d[0] = s->v;
+    if (s->n > 1) d[1] = s->v >> 8;
+    if (s->n > 2) { d[2] = s->v >> 16; d[3] = s->v >> 24; }
+    if (s->n > 4) { d[4] = s->hi; d[5] = s->hi >> 8; d[6] = s->hi >> 16; d[7] = s->hi >> 24; }
+}
+
+/* n iterations of a fill loop's stores, when every one of them would take
+ * the inline RAM path without touching a code page: then nothing else can
+ * see them happen one by one. Returns 0, having written nothing, otherwise. */
+static inline int jit_fill(c66x_core *c, uint64_t n, const jit_fill_st *s, unsigned ns)
+{
+    ramreg *rr = &c->ram[c->last_ram];
+    if (c->npst || c->watch_fn || (c->idle_armed && !c->idle_fx))
+        return 0;
+    int64_t off[2];
+    for (unsigned k = 0; k < ns; k++) {
+        int64_t span = (int64_t)(int32_t)s[k].step * (int64_t)(n - 1);
+        off[k] = (int64_t)s[k].ea - rr->base;
+        int64_t lo = off[k] + (span < 0 ? span : 0), hi = off[k] + (span > 0 ? span : 0) + s[k].n;
+        if (lo < 0 || hi > rr->size)
+            return 0;
+        for (int64_t p = lo >> FP_PAGE_SHIFT; p <= (hi - 1) >> FP_PAGE_SHIFT; p++)
+            if (rr->codepage[p])
+                return 0;
+    }
+    uint8_t *m = rr->host;
+    if (ns == 2 && s[0].n == s[1].n && s[0].step == 2 * s[0].n && s[1].step == s[0].step
+        && s[0].v == s[1].v && s[0].hi == s[1].hi && (off[1] == off[0] + s[0].n || off[0] == off[1] + s[0].n)) {
+        /* two streams interleaved into one run of the same value */
+        uint8_t *d = m + (off[0] < off[1] ? off[0] : off[1]);
+        uint8_t img[8];
+        unsigned same = 1;
+        jit_fill_put(img, &s[0]);
+        for (unsigned b = 1; b < s[0].n; b++)
+            same &= img[b] == img[0];
+        if (same) {
+            memset(d, img[0], n * 2 * s[0].n);
+            return 1;
+        }
+        for (uint64_t i = 0; i < 2 * n; i++)
+            jit_fill_put(d + i * s[0].n, &s[0]);
+        return 1;
+    }
+    for (uint64_t i = 0; i < n; i++)
+        for (unsigned k = 0; k < ns; k++)
+            jit_fill_put(m + off[k] + (int64_t)(int32_t)s[k].step * (int64_t)i, &s[k]);
+    return 1;
 }
 
 /* A captured handler wrote a different shape than the generator saw: the

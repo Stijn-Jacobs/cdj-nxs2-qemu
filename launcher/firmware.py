@@ -18,7 +18,7 @@ repository (extract/ for the CDJ-2000NXS2, extract/<model>/ for the others).
 It refuses if any of them already exists, unless --force is also given, and
 it installs nothing unless every image passed.
 
-  usage: scripts/firmware/prepare_firmware.sh [--model <id>] [--install [--force]] <update> [outdir]
+  usage: scripts/firmware/prepare_firmware.sh [--model <id>] [--install [--force]] [--any-firmware] <update> [outdir]
 
   update     the .UPD file, or for a model whose update is several files
              (the CDJ-2000) the folder holding them
@@ -26,14 +26,22 @@ it installs nothing unless every image passed.
   outdir     must not exist yet, or be empty; default: a new mktemp dir.
              It may not be the repository root or lie inside its extract/,
              fw/ or notes/ -- use --install for that.
+  --any-firmware
+             accept an update that is not the supported version (another
+             version, or one already modded). A different sha256 or image
+             becomes a warning, a file that cannot be unpacked still fails,
+             and start says which installed image is not the supported one.
   PYTHON=    interpreter to use (default: the one running this).
              Only the standard library is needed.
 
-Exit status: 0 when every image matches, 1 on any mismatch or error.
+Exit status: 0 when every image matches (with --any-firmware: when every
+image was produced), 1 on any mismatch or error.
 """
 
+import functools
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -67,6 +75,7 @@ STEPS = {
 }
 
 
+
 class FirmwareError(Exception):
     pass
 
@@ -79,10 +88,50 @@ def sha256(path):
     return h.hexdigest()
 
 
+def stock_main_sha256(m):
+    """The sha256 of the MAIN image the supported update unpacks to."""
+    return next(sha for rel, sha in m.expected if rel.endswith("main_unpacked.bin"))
+
+
 def installed(extract, model_id=None):
     # A profile with no MODEL_EXPECTED names no images; that is not "installed".
     images = _model.load(model_id).images
     return bool(images) and all(os.path.isfile(os.path.join(extract, f)) for f in images)
+
+
+@functools.lru_cache(maxsize=None)
+def _installed_sha256(path, mtime_ns, size):
+    return sha256(path)
+
+
+def installed_sha256(path):
+    st = os.stat(path)
+    return _installed_sha256(path, st.st_mtime_ns, st.st_size)
+
+
+def differing_images(folder, m):
+    """The images installed in `folder` that are not the ones the supported
+    update of `m` unpacks to (installed with --any-firmware); an image that is
+    not installed is not a difference."""
+    differ = []
+    for rel, want in m.expected:
+        path = os.path.join(folder, os.path.basename(rel))
+        if os.path.isfile(path):
+            if installed_sha256(path) != want:
+                differ.append(os.path.basename(rel))
+    return differ
+
+
+def version_labels(path):
+    """The VerN.NN labels the file carries, in file order, without repeats."""
+    with open(path, "rb") as f:
+        data = f.read()
+    seen = []
+    for m in re.finditer(rb"Ver(\d+\.\d+)", data):
+        label = m.group(1).decode()
+        if label not in seen:
+            seen.append(label)
+    return seen
 
 
 def _python():
@@ -125,23 +174,32 @@ def _do_sections(py, tools, out, upd_files, log):
     return True
 
 
-def prepare(upd, out=None, install_to=None, force=False, root=None, model=None, say=print, prog=None):
+def prepare(upd, out=None, install_to=None, force=False, root=None, model=None, say=print, prog=None,
+            any_firmware=False):
     """Unpack and verify `upd` for `model` (the default profile when None)
     into `out` (a new temporary directory when None); with install_to, copy
-    the verified images there. Raises FirmwareError with the script's message
-    on any failure."""
+    the verified images there. With any_firmware, an update that is not the
+    supported one is unpacked and installed anyway, with warnings. Raises FirmwareError with the script's message on any
+    failure."""
     m = model or _model.load(None)
     tools = os.path.join(Layout().scripts, "firmware")
     if len(m.upd) != len(m.upd_sha256):
         raise FirmwareError("models/%s.conf: MODEL_UPD and MODEL_UPD_SHA256 differ in length" % m.id)
     upd_files = _upd_files(m, upd)
+    unofficial = []
     for f, want in zip(upd_files, m.upd_sha256):
         got = sha256(f)
-        if got != want:
+        if got == want:
+            continue
+        if not any_firmware:
             raise FirmwareError(
                 "%s is not the %s v%s update (sha256 %s, want %s).\n"
-                "Only v%s is supported: every address in the model and the harness is for it."
+                "Only v%s is supported: every address in the model and the harness is for it.\n"
+                "To try this file anyway: --any-firmware (unsupported)."
                 % (f, m.title, m.fw_version, got, want, m.fw_version))
+        labels = ", ".join("Ver" + v for v in version_labels(f)) or "no version label"
+        unofficial.append("%s is not the %s v%s update (sha256 %s; labels in the file: %s)"
+                          % (os.path.basename(f), m.title, m.fw_version, got[:12], labels))
     if out:
         outc = os.path.realpath(out)
         if root:
@@ -171,7 +229,11 @@ def prepare(upd, out=None, install_to=None, force=False, root=None, model=None, 
     for f in upd_files:
         say("update : %s" % f)
     say("outdir : %s" % out)
-    say("update : sha256 ok (v%s)" % m.fw_version)
+    if unofficial:
+        for line in unofficial:
+            say("WARNING: " + line)
+    else:
+        say("update : sha256 ok (v%s)" % m.fw_version)
     say("")
     say("steps:")
     for name in m.fw_steps:
@@ -196,6 +258,7 @@ def prepare(upd, out=None, install_to=None, force=False, root=None, model=None, 
     say("")
     say("verify:")
     fail = False
+    differ = []
     for rel, want in m.expected:
         p = os.path.join(out, rel)
         if not os.path.isfile(p):
@@ -205,14 +268,24 @@ def prepare(upd, out=None, install_to=None, force=False, root=None, model=None, 
         got = sha256(p)
         if got == want:
             say("  PASS  %-26s %s" % (rel, got))
+        elif any_firmware:
+            say("  DIFF  %-26s %s (supported: %s)" % (rel, got, want[:12]))
+            differ.append(os.path.basename(rel))
         else:
             say("  FAIL  %-26s %s (want %s)" % (rel, got, want))
             fail = True
     say("")
     if fail:
-        raise FirmwareError("at least one image does not match; nothing installed.")
+        raise FirmwareError("at least one image %s; nothing installed."
+                            % ("is missing" if any_firmware else "does not match"))
+    if differ:
+        unofficial.append("images that differ from the supported update: %s" % " ".join(differ))
+        say("WARNING: " + unofficial[-1])
+        say("")
     if not install_to:
-        say("all images match. To use them:  %s --model %s --install %s" % (prog or "prepare_firmware", m.id, upd))
+        say("%s. To use them:  %s --model %s --install%s %s"
+            % ("all images produced" if unofficial else "all images match", prog or "prepare_firmware", m.id,
+               " --any-firmware" if unofficial else "", upd))
         say("(or copy the images from %s/extract/ into the repository's %s/ by hand)" % (out, m.extract))
         return out
     # Check every destination before copying anything, so a refusal leaves
@@ -236,7 +309,7 @@ def prepare(upd, out=None, install_to=None, force=False, root=None, model=None, 
 def main(argv):
     """scripts/firmware/prepare_firmware.sh"""
     usage = __doc__[__doc__.index("  usage:"):].rstrip()
-    install = force = False
+    install = force = any_firmware = False
     model_id = os.environ.get("CDJ_MODEL")
     args = []
     a_iter = iter(argv)
@@ -245,6 +318,8 @@ def main(argv):
             install = True
         elif a == "--force":
             force = True
+        elif a == "--any-firmware":
+            any_firmware = True
         elif a == "--model":
             try:
                 model_id = next(a_iter)
@@ -274,7 +349,8 @@ def main(argv):
     try:
         prepare(args[0], args[1] if len(args) == 2 else None,
                 install_to=_model.extract_dir(lay, m) if install else None, force=force, root=lay.root,
-                model=m, say=lambda s: print(s, flush=True), prog=os.environ.get("LAUNCHER_PROG"))
+                model=m, say=lambda s: print(s, flush=True), prog=os.environ.get("LAUNCHER_PROG"),
+                any_firmware=any_firmware)
     except FirmwareError as e:
         if e.args and e.args[0]:
             sys.stderr.write("prepare_firmware: %s\n" % e.args[0])

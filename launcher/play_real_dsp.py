@@ -15,12 +15,12 @@ C6X=0 is the control: the same arm on the stand-in peer, which does not play.
 import os
 import subprocess
 
-from . import chain, host
+from . import chain, host, sites
 from .chain import export_default, nonempty
 from .layout import Layout
 
 
-def batch_env(env):
+def batch_env(env, found):
     chain.unset(env, "CDJ_AUDIO_DRAIN", "CDJ_DSP_ENGINE", "CDJ_DSP_ENGINE_GATE", "CDJ_DSP_ENGINE_POS",
                 "CDJ_CUEKEY", "CDJ_JOGDRIVE", "CDJ_BEATDRIVE", "CDJ_BEATGRID", "CDJ_PITCHDRIVE",
                 "CDJ_PSTORE", "CDJ_DMA1_COPY", "CDJ_PCALL")
@@ -55,8 +55,9 @@ def batch_env(env):
     env["CDJ_SPILINK_THIN3"] = nonempty(env, "THIN", "8")
     env["SPILINK_KEEP_FRAMES"] = nonempty(env, "KEEPF", "1024")
     env["CDJ_SPILINK_DEDUP"] = "1"
-    holds0 = nonempty(env, "HOLDS", "0") == "0"
-    ladder = nonempty(env, "LADDER", "1") == "1"
+    # The ladder and the play-key holds poke addresses of the CDJ-2000NXS2 1.87 MAIN.
+    holds0 = nonempty(env, "HOLDS", "0") == "0" or not found.board_image
+    ladder = nonempty(env, "LADDER", "1") == "1" and found.board_image
     # LADDER=1: MAIN-side transport forces -- the edge RPOKEs and the start-arm
     # hold anchored at the edge detector's load 0x0844323A, armed once the
     # waveform publisher 0x084E294E has run. No CDJ_PCALL: the load poke is the
@@ -66,7 +67,7 @@ def batch_env(env):
         env["CDJ_PPOKE_ARM"] = nonempty(env, "ARM", "0x084E294E")
         env["PPOKEX"] = nonempty(env, "PPOKEX", "%s:0x0B058C10:0x00010000:0xFF00FFFF:0:1"
                                  % nonempty(env, "EDGEPC", "0x0844323A"))
-    elif c6x and holds0:
+    elif (c6x and holds0) or not found.board_image:
         # With the real DSP the deck mode reaches 3 unforced.
         export_default(env, "CDJ_RPOKE", "none")
     else:
@@ -75,18 +76,24 @@ def batch_env(env):
     # panel PLAY handler down its MAIN-only arm and the Player never sees the
     # key. The real deck starts playing at the end of the load, so PLAY would
     # pause it: the no-holds real-DSP arm presses nothing by default.
-    pokex = "," + env["POKEX"] if env.get("POKEX") else ""
+    pokes = []
+    if found.has("colour_capability"):
+        pokes.append("0x%08X:3:1" % found.get("colour_capability"))
     if c6x and holds0 and not ladder:
-        env["MPOKE"] = nonempty(env, "MPOKE", "0x0A35FAAA:3:1" + pokex)
         env["KEYBITS"] = nonempty(env, "KEYBITS", "0x00")
-    else:
-        env["MPOKE"] = nonempty(env, "MPOKE", "0x0A35FAAA:3:1,0x0B056E38:1:4,0x0B058C00:1:4" + pokex)
+    elif found.board_image:
+        pokes += ["0x0B056E38:1:4", "0x0B058C00:1:4"]
+    if env.get("POKEX"):
+        pokes.append(env["POKEX"])
+    env["MPOKE"] = nonempty(env, "MPOKE", ",".join(pokes))
     export_default(env, "KEYBYTE", "0x10")
     export_default(env, "KEYBITS", "0x01")
     export_default(env, "KEYDUR", "150")
-    export_default(env, "TAPS", "0x08443252,0x08443276,0x0842A160,0x084E294E")
-    export_default(env, "WORDS", "0x0B054D44 0x0B5125E8 0x09944170 0x09947478")
-    export_default(env, "SNAP", "0x09944000:0x01C40000")
+    if found.board_image:
+        export_default(env, "TAPS", "0x08443252,0x08443276,0x0842A160,0x084E294E")
+        export_default(env, "WORDS", "0x0B054D44 0x0B5125E8 0x09944170 0x09947478")
+    if found.board_image:
+        export_default(env, "SNAP", "0x09944000:0x01C40000")
     export_default(env, "FILMN", "8")
     export_default(env, "MOTION_MS", "1500")
     # What load_track.py sees as the settings modal here is first the real MY
@@ -108,7 +115,7 @@ def main(argv):
     n = int(argv[1]) if len(argv) > 1 else 4
     lay = Layout()
     env = dict(os.environ)
-    batch_env(env)
+    batch_env(env, sites.find(lay))
     chain.say("=== %s  C6X=%s MHZ=%s LOCKSTEP=%s ICOUNT=%s  qemu before: %d  load: %s" % (
         prefix, nonempty(env, "C6X", "1"), env.get("CDJ_C6X_MHZ", ""), nonempty(env, "LOCKSTEP", "1"),
         env.get("ICOUNT", ""), chain.pgrep_count("qemu-system"), chain.loadavg()))

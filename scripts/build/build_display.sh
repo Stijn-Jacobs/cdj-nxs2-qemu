@@ -27,7 +27,7 @@ case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*) EXESUF=".exe" ;;
 esac
 
-CFG_ARGS="--target-list=sh4eb-softmmu --disable-werror --disable-docs --disable-tools"
+CFG_ARGS="--target-list=sh4eb-softmmu --disable-werror --disable-docs --disable-tools --disable-libnfs"
 # The display board's window: Cocoa on macOS, GTK elsewhere (see build_main.sh).
 case "$(uname -s)" in
     Darwin)
