@@ -158,9 +158,11 @@ static void scratch_loader(void)
 int main(void)
 {
     uint8_t *img = malloc(SIZE);
-    char tmp[] = "/tmp/flash_test_XXXXXX";
+    char tmp[512];
     int fd;
 
+    /* Windows has no /tmp, but always sets TEMP. */
+    snprintf(tmp, sizeof(tmp), "%s/flash_test_XXXXXX", getenv("TEMP") ? getenv("TEMP") : "/tmp");
     memset(img, 0xFF, SIZE);
 
     /* array mode is ROM-mapped; reset with nothing pending is harmless */
