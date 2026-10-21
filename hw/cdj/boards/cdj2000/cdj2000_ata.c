@@ -49,6 +49,7 @@
 #include "exec/memory.h"
 
 #include "cdj2000_ata.h"
+#include "cdj_getenv.h"
 #include "hw/boards.h"
 #include "qapi/error.h"
 #include "qemu/module.h"
@@ -424,6 +425,7 @@ static void cdj_disc_q(CdjDisc *d, uint32_t lba, uint8_t *q)
 #define CTL_INT_EN      (0x08 / 4)
 #define CTL_DMA_ADDR    (0x1c / 4)
 #define CTL_DMA_COUNT   (0x20 / 4)
+#define CTL_BYTE_SWAP   (0x3c / 4)
 
 #define CS_ACTIVE       0x001
 #define CS_DMA_DONE     0x002
@@ -1295,6 +1297,10 @@ static void ata_chip_write(void *opaque, hwaddr offset, uint64_t value,
         return;
     }
     s->reg[i] = value;
+    if (i == CTL_BYTE_SWAP && value) {
+        qemu_log_mask(LOG_UNIMP, "cdj2000-ata: BYTE_SWAP %#" PRIx64
+                      " not modelled, DMA data stays in bus order\n", value);
+    }
     if (i == CTL_COMMAND) {
         if (value & 0x80) {
             /* Device hard reset, held while bit 7 is set (atapi_reset). */
