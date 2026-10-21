@@ -76,7 +76,12 @@
 
 #define R_ADDR          0x08
 #define R_INTENB0       0x10
+#define R_INTENB1       0x12
+#define R_INTENB3       0x16
 #define R_INTSTS0       0x18
+#define R_INTSTS1       0x1a
+#define R_INTSTS2       0x1c
+#define R_INTSTS3       0x1e
 #define R_SETUP         0x20
 #define R_E0SEL         0x30
 #define R_E0CTL         0x32
@@ -239,10 +244,10 @@ static uint16_t sts0(CdjUsbf *s)
     if (s->vbus) {
         v |= 0x80;
     }
-    if (s->l3 & s->reg[0x16 / 2]) {
+    if (s->l3 & s->reg[R_INTENB3 / 2]) {
         v |= 0x400;
     }
-    if (sts1(s) & s->reg[0x12 / 2]) {
+    if (sts1(s) & s->reg[R_INTENB1 / 2]) {
         v |= 0x100;
     }
     return v;
@@ -257,7 +262,7 @@ static bool sof_wanted(CdjUsbf *s)
 
 static void sof_kick(CdjUsbf *s)
 {
-    if (s->iso.sof_timer && sof_wanted(s) && !timer_pending(s->iso.sof_timer)) {
+    if (sof_wanted(s) && !timer_pending(s->iso.sof_timer)) {
         timer_mod(s->iso.sof_timer, qemu_clock_get_us(QEMU_CLOCK_VIRTUAL) +
                   SOF_PERIOD_US);
     }
@@ -464,7 +469,6 @@ static void ep_in_commit(CdjUsbf *s, unsigned n)
     }
 }
 
-
 /* Take up to one access of bytes from a FIFO buffer (low byte first). */
 static uint32_t fifo_pop(const uint8_t *buf, unsigned *p, unsigned n,
                          unsigned size, bool octl)
@@ -503,13 +507,13 @@ static uint64_t usbf_read(void *opaque, hwaddr off, unsigned size)
     case R_INTSTS0:
         v = sts0(s);
         break;
-    case 0x1a:
+    case R_INTSTS1:
         v = sts1(s);
         break;
-    case 0x1c:
+    case R_INTSTS2:
         v = 0;
         break;
-    case 0x1e:
+    case R_INTSTS3:
         v = s->l3;
         break;
     case R_E0CTL:
@@ -576,10 +580,10 @@ static void usbf_write(void *opaque, hwaddr off, uint64_t val, unsigned size)
             s->valid = false;
         }
         break;
-    case 0x1a:
-    case 0x1c:
+    case R_INTSTS1:
+    case R_INTSTS2:
         return;
-    case 0x1e:
+    case R_INTSTS3:
         s->l3 &= v;
         break;
     case R_E0CTL:
@@ -746,7 +750,7 @@ static void host_packet(CdjUsbf *s, const uint8_t *b, size_t n)
                     r[2] = 0;
                 }
             } else if (ep_pid(s, ep) != PID_BUF || e->out_full
-                       || !(s->reg[0x12 / 2] & 1u << ep)
+                       || !(s->reg[R_INTENB1 / 2] & 1u << ep)
                        || n - 2 > MIN(ep_maxp(s, ep), sizeof(e->out))) {
                 r[2] = 1;
             } else {
@@ -795,8 +799,9 @@ static void host_packet(CdjUsbf *s, const uint8_t *b, size_t n)
                          " iso_delivered=%" PRIu64 " iso_dropped=%" PRIu64
                          " iso_empty=%" PRIu64 " iso_pending=%u",
                          s->vbus, s->dvsq, s->ctsq, s->addr, sts0(s),
-                         s->reg[R_INTENB0 / 2], sts1(s), s->reg[0x12 / 2],
-                         s->l3, s->reg[0x16 / 2], s->ctl, s->stage,
+                         s->reg[R_INTENB0 / 2], sts1(s),
+                         s->reg[R_INTENB1 / 2], s->l3, s->reg[R_INTENB3 / 2],
+                         s->ctl, s->stage,
                          s->iso.sof, s->iso.queued, s->iso.delivered,
                          s->iso.dropped, s->iso.empty, s->iso.count);
         usbf_reply(s, (uint8_t *)q, k);
@@ -822,10 +827,52 @@ static void host_read(void *opaque)
     }
 }
 
-static const VMStateDescription vmstate_usbf = {
-    .name = "cdj2000-usbf-m66291",
+static const VMStateDescription vmstate_usbf_ep = {
+    .name = "cdj2000-usbf-m66291/ep",
     .version_id = 1,
     .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT8_ARRAY(in, UsbfEp, 1024),
+        VMSTATE_UINT32(in_n, UsbfEp),
+        VMSTATE_BOOL(in_commit, UsbfEp),
+        VMSTATE_UINT8_ARRAY(out, UsbfEp, 1024),
+        VMSTATE_UINT32(out_n, UsbfEp),
+        VMSTATE_UINT32(out_p, UsbfEp),
+        VMSTATE_BOOL(out_full, UsbfEp),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
+/* The counters below index fixed buffers; refuse a stream that overruns one. */
+static int usbf_post_load(void *opaque, int version_id)
+{
+    CdjUsbf *s = opaque;
+    unsigned n;
+
+    if (s->e0tx_n > sizeof(s->e0tx) || s->e0rx_n > sizeof(s->e0rx) ||
+        s->o_n > sizeof(s->odata) || s->resp_n > sizeof(s->resp) ||
+        s->iso.head >= ISO_Q || s->iso.count > ISO_Q) {
+        return -EINVAL;
+    }
+    for (n = 0; n < ARRAY_SIZE(s->ep); n++) {
+        if (s->ep[n].in_n > sizeof(s->ep[n].in) ||
+            s->ep[n].out_n > sizeof(s->ep[n].out)) {
+            return -EINVAL;
+        }
+    }
+    for (n = 0; n < ISO_Q; n++) {
+        if (s->iso.n[n] > ISO_MAX) {
+            return -EINVAL;
+        }
+    }
+    return 0;
+}
+
+static const VMStateDescription vmstate_usbf = {
+    .name = "cdj2000-usbf-m66291",
+    .version_id = 2,
+    .minimum_version_id = 1,
+    .post_load = usbf_post_load,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT16_ARRAY(reg, CdjUsbf, USBF_SIZE / 2),
         VMSTATE_UINT16(l0, CdjUsbf),
@@ -837,6 +884,37 @@ static const VMStateDescription vmstate_usbf = {
         VMSTATE_UINT8(addr, CdjUsbf),
         VMSTATE_UINT8(e0pid, CdjUsbf),
         VMSTATE_UINT8(cpu_ep, CdjUsbf),
+        VMSTATE_UINT8_ARRAY_V(e0tx, CdjUsbf, 512, 2),
+        VMSTATE_UINT8_ARRAY_V(e0rx, CdjUsbf, 64, 2),
+        VMSTATE_UINT32_V(e0tx_n, CdjUsbf, 2),
+        VMSTATE_UINT32_V(e0rx_n, CdjUsbf, 2),
+        VMSTATE_UINT32_V(e0rx_p, CdjUsbf, 2),
+        VMSTATE_BOOL_V(e0commit, CdjUsbf, 2),
+        VMSTATE_BOOL_V(e0end, CdjUsbf, 2),
+        VMSTATE_STRUCT_ARRAY(ep, CdjUsbf, 7, 2, vmstate_usbf_ep, UsbfEp),
+        VMSTATE_BOOL_V(ctl, CdjUsbf, 2),
+        VMSTATE_UINT32_V(stage, CdjUsbf, 2),
+        VMSTATE_UINT8_ARRAY_V(setup, CdjUsbf, 8, 2),
+        VMSTATE_UINT8_ARRAY_V(odata, CdjUsbf, 1024, 2),
+        VMSTATE_UINT32_V(o_n, CdjUsbf, 2),
+        VMSTATE_UINT32_V(o_p, CdjUsbf, 2),
+        VMSTATE_UINT8_ARRAY_V(resp, CdjUsbf, 4096, 2),
+        VMSTATE_UINT32_V(resp_n, CdjUsbf, 2),
+        VMSTATE_INT64_V(ctl_since, CdjUsbf, 2),
+        VMSTATE_TIMER_PTR_V(timer, CdjUsbf, 2),
+        VMSTATE_UINT8_2DARRAY_V(iso.d, CdjUsbf, ISO_Q, ISO_MAX, 2),
+        VMSTATE_UINT16_ARRAY_V(iso.n, CdjUsbf, ISO_Q, 2),
+        VMSTATE_UINT32_V(iso.head, CdjUsbf, 2),
+        VMSTATE_UINT32_V(iso.count, CdjUsbf, 2),
+        VMSTATE_BOOL_V(iso.lossless, CdjUsbf, 2),
+        VMSTATE_BOOL_V(iso.started, CdjUsbf, 2),
+        VMSTATE_UINT64_V(iso.sof, CdjUsbf, 2),
+        VMSTATE_UINT64_V(iso.queued, CdjUsbf, 2),
+        VMSTATE_UINT64_V(iso.delivered, CdjUsbf, 2),
+        VMSTATE_UINT64_V(iso.dropped, CdjUsbf, 2),
+        VMSTATE_UINT64_V(iso.empty, CdjUsbf, 2),
+        VMSTATE_TIMER_PTR_V(iso.sof_timer, CdjUsbf, 2),
+        VMSTATE_TIMER_PTR_V(iso.put_timer, CdjUsbf, 2),
         VMSTATE_END_OF_LIST()
     }
 };
@@ -854,10 +932,16 @@ void cdj2000_usbf_init(MemoryRegion *sysmem, qemu_irq irq)
         s->log = fopen(getenv("CDJ_M66291_LOG"), "w");
         if (s->log) {
             setvbuf(s->log, NULL, _IOLBF, 0);
+            cdj_c6747_watch_hpi(usbf_slot_log);
         } else {
             warn_report("usbf: cannot write %s", getenv("CDJ_M66291_LOG"));
         }
     }
+    /* Made whether or not the relay runs, so the vmstate always has them;
+     * without the relay nothing ever arms them. */
+    s->iso.sof_timer = timer_new_us(QEMU_CLOCK_VIRTUAL, sof_tick, s);
+    s->iso.put_timer = timer_new_us(QEMU_CLOCK_VIRTUAL, iso_put, s);
+    s->timer = timer_new_ms(QEMU_CLOCK_VIRTUAL, ctl_timeout, s);
     vmstate_register_any(NULL, &vmstate_usbf, s);
     memory_region_init_io(&s->iomem, NULL, &usbf_ops, s, "cdj2000.usbf",
                           USBF_SIZE);
