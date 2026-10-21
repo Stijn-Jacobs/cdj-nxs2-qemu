@@ -2641,7 +2641,8 @@ def main():
                          "module's roots plus a new workload's, without re-ranking either")
     ap.add_argument("--no-cc", action="store_true")
     ap.add_argument("--copy-burst", action="store_true",
-                    help="fuse recognized plain-RAM copy pipelines (experimental; requires --wide-mem and EXACT replay)")
+                    help="fuse recognized plain-RAM copy pipelines (experimental: check with an EXACT replay; "
+                         "requires --wide-mem, which every model's MODEL_DSP_GEN_ARGS passes)")
     ap.add_argument("--wide-mem", action="store_true",
                     help="combine paired RAM loads/stores (experimental; verify with an EXACT replay)")
     # 16-17 gcc at once (~0.8 GB each) beside a running deck hung the WSL VM (c16)
