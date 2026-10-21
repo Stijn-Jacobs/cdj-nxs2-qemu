@@ -347,6 +347,18 @@ static bool netsim_drain(void)
     return ns.active;
 }
 
+/* FNV-1a over the frame padded to the Ethernet minimum of 60 bytes, so a
+   frame hashes the same in its sender's record and its receiver's. */
+static uint64_t netsim_frame_hash(const uint8_t *data, unsigned len)
+{
+    uint64_t hash = UINT64_C(14695981039346656037);
+
+    for (unsigned i = 0; i < MAX(len, 60); i++) {
+        hash = (hash ^ (i < len ? data[i] : 0)) * UINT64_C(1099511628211);
+    }
+    return hash;
+}
+
 static void netsim_deliver(int64_t now)
 {
     NetDue *due;
@@ -356,14 +368,10 @@ static void netsim_deliver(int64_t now)
         ns.max_late = MAX(ns.max_late, now - due->due);
         ns.late += now > due->due;
         if (ns.trace) {
-            uint64_t hash = UINT64_C(14695981039346656037);
-            for (unsigned i = 0; i < MAX(due->len, 60); i++) {
-                hash = (hash ^ (i < due->len ? due->data[i] : 0)) *
-                       UINT64_C(1099511628211);
-            }
             fprintf(ns.trace, "{\"event\":\"rx\",\"due\":%" PRId64
                     ",\"now\":%" PRId64 ",\"len\":%u,\"hash\":\"%016"
-                    PRIx64 "\"}\n", due->due, now, due->len, hash);
+                    PRIx64 "\"}\n", due->due, now, due->len,
+                    netsim_frame_hash(due->data, due->len));
             fflush(ns.trace);
         }
         ns.sink(ns.opaque, due->data, due->len);
@@ -527,13 +535,10 @@ void cdj_netsim_send(const uint8_t *frame, unsigned len)
     now = netsim_now();
     ns.promise_violations += now < ns.promised;
     if (ns.trace) {
-        uint64_t hash = UINT64_C(14695981039346656037);
-        for (unsigned i = 0; i < MAX(len, 60); i++) {
-            hash = (hash ^ (i < len ? frame[i] : 0)) * UINT64_C(1099511628211);
-        }
         fprintf(ns.trace, "{\"event\":\"tx\",\"now\":%" PRId64
                 ",\"promise\":%" PRId64 ",\"len\":%u,\"hash\":\"%016"
-                PRIx64 "\"}\n", now, ns.promised, len, hash);
+                PRIx64 "\"}\n", now, ns.promised, len,
+                netsim_frame_hash(frame, len));
         fflush(ns.trace);
     }
     netsim_send_msg(NET_FRAME, now, frame, len);
