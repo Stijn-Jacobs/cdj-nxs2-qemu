@@ -15,9 +15,9 @@
  * What the board models so far is what the boot needs first: the DMAC (the
  * firmware clears bss with DMAC channel 5 and polls TE), the clock register
  * the tick constant is chosen from, the interrupt controller, the timers
- * (TMU0 is the NORTi tick, TMU4 is Pioneer's periodic) and both SCIFs. Every other
- * SH7763 block is a named unimplemented region, so the bring-up log
- * (scripts/run/boot_main.sh) lists what to model next.
+ * (TMU0 is the NORTi tick, TMU4 is Pioneer's periodic) and both SCIFs.
+ * Every other SH7763 block is a named unimplemented region, so the bring-up
+ * log (scripts/run/boot_main.sh) lists what to model next.
  */
 
 /* NORTi uses TMU0; Pioneer uses TMU4/5. The stock MAIN reads FRQCR at
