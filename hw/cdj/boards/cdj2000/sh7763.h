@@ -28,6 +28,7 @@ enum {
     /* groups: one mask bit and one priority field each */
     S63_TMU012, S63_TMU345, S63_DMAC, S63_SCIF0, S63_SCIF1, S63_SCIF2,
     S63_GETHER, S63_RTC, S63_USBF, S63_MMCIF, S63_GPIO, S63_DISP_TX,
+    S63_SDHI,
     S63_NR_SOURCES
 };
 
@@ -42,6 +43,9 @@ typedef struct CdjDspWires {
     void (*command)(void *opaque, unsigned bits);
     bool (*busy)(void *opaque);
 } CdjDspWires;
+
+/* The rear USB-B function chip (M66291GP) and its host relay. */
+void cdj2000_usbf_init(MemoryRegion *sysmem, qemu_irq irq);
 
 void cdj2000_latch_init(MemoryRegion *sysmem, const CdjDspWires *dsp,
                         bool display);
@@ -62,6 +66,10 @@ const CdjDspWires *cdj_c6747_init(MemoryRegion *sysmem, hwaddr hpi_base);
  * passes may store to. Per firmware image; none by default. */
 void cdj_c6747_set_idle_loop(uint32_t head, uint32_t stack_lo,
                              uint32_t stack_hi);
+/* Called with every word MAIN reads ('R') or writes ('W') through the
+ * C6747's host port data register, and the DSP address it went to. */
+typedef void CdjHpiWatch(char kind, uint32_t addr, uint32_t val);
+void cdj_c6747_watch_hpi(CdjHpiWatch *watch);
 /* The CDJ-2000's C6727, behind a full-address host port on area 3. */
 const CdjDspWires *cdj_c6727_init(MemoryRegion *sysmem, hwaddr hpi_base);
 /* As cdj_c6747_set_idle_loop, for the C6727. */
@@ -113,8 +121,12 @@ void sh7763_board_init(MachineState *machine, const CdjBoardDesc *desc,
                        const CdjDspWires *(*dsp_init)(MemoryRegion *, hwaddr),
                        const Cdj2000Display *display_desc, bool auth_chip);
 
-/* The SDHI at 0xFFE40000, with no card in the slot. */
-void cdj2000_sdhi_init(MemoryRegion *sysmem);
+/* Optional SDHI/card; without CDJ_SD_IMAGE preserve the empty-slot stub. */
+void cdj2000_sdhi_init(MemoryRegion *sysmem, qemu_irq irq, qemu_irq dmte5);
+bool cdj2000_sdhi_card_init(MemoryRegion *sysmem, qemu_irq irq,
+                            qemu_irq dmte5);
+bool cdj2000_sdhi_lid_closed(void);
+bool cdj2000_sdhi_dma(bool writing, uint8_t *buf, unsigned len);
 
 /* The I2C master at 0xFFE70000 with the authentication chip on it; answers
  * is the chip's per-model reply table (see cdj_auth_chip.h). */

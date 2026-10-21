@@ -87,6 +87,8 @@ static void cdj_dsp_count(unsigned *polls, uint32_t a, uint32_t v)
 { (void)polls; (void)a; (void)v; }
 static void hpi_note_write(CdjC6747 *s, uint32_t a) { (void)s; (void)a; }
 static void dsp_start(CdjC6747 *s) { (void)s; assert(false); }
+typedef void CdjHpiWatch(char kind, uint32_t addr, uint32_t val);
+static CdjHpiWatch *hpi_watch;
 static void host_react(CdjDspHost *h) { (void)h; }
 static void set_pins(void *chip, unsigned bits) { (void)chip; (void)bits; }
 ''' + writer + handlers + command + r'''

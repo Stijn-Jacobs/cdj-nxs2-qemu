@@ -331,6 +331,13 @@ static void hpi_note_write(CdjC6747 *s, uint32_t addr)
     }
 }
 
+static CdjHpiWatch *hpi_watch;
+
+void cdj_c6747_watch_hpi(CdjHpiWatch *watch)
+{
+    hpi_watch = watch;
+}
+
 static uint64_t hpi_read(void *opaque, hwaddr off, unsigned size)
 {
     CdjC6747 *s = opaque;
@@ -354,6 +361,9 @@ static uint64_t hpi_read(void *opaque, hwaddr off, unsigned size)
         return s->hpia;
     default:
         val = cdj_dsp_host_read_word(&s->host, s->hpia);
+        if (hpi_watch) {
+            hpi_watch('R', s->hpia, val);
+        }
         s->reads++;
         cdj_dsp_count(&s->polls, s->hpia, val);
         if ((off >> 18) == 2) {
@@ -399,9 +409,14 @@ static void hpi_write(void *opaque, hwaddr off, uint64_t val, unsigned size)
     }
     default: {
         CDJ_DSP_HOST_EVENT_GUARD(&s->host);
+        bool written;
+
+        if (hpi_watch) {
+            hpi_watch('W', address, val);
+        }
         /* Under the lock the store cannot be posted: it lands in order with
          * the event. */
-        bool written = s->host.event_log ?
+        written = s->host.event_log ?
             cdj_dsp_host_write_word_locked(&s->host, address, val) :
             cdj_dsp_host_write_word(&s->host, address, val);
 
