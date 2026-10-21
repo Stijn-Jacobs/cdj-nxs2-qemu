@@ -20,10 +20,11 @@
  * (scripts/run/boot_main.sh) lists what to model next.
  */
 
-/* NORTi uses TMU0; Pioneer uses TMU4/5. FRQCR nibble 3 selects 11250
- * counts (mode 2), nibble 4 selects 13500 (mode 3). SH7764 mode straps,
- * not software, select the clock. NXS X2 is 26.965 MHz, PLL x12, Pphi /6.
- * See docs/tmu-underflow.md for stock instruction and hardware evidence. */
+/* NORTi uses TMU0; Pioneer uses TMU4/5. The stock MAIN reads FRQCR at
+ * 0x042C5B7E and never writes it: top nibble 3 (mode 2) gives TMU0 a period
+ * of 11250 counts, anything else 13500. The mode straps set FRQCR, and the
+ * NXS strap is mode 3 (reset value 0x40320044, SH7764 hardware manual
+ * table 10.2). NXS X2 is 26.965 MHz, PLL x12, Pphi /6: 53.93 MHz. */
 #define SH7763_PERIPH_HZ    54000000
 #define CDJ2000NXS_PERIPH_HZ 53930000
 #define SH7763_FRQCR_BOOT   0x40320044
