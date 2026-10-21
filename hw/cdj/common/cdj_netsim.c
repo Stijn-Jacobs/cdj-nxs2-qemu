@@ -212,7 +212,8 @@ static void netsim_lost(const char *why)
     error_report("cdj2000-netsim: %s at guest t=%.6f; the player is off the "
                  "segment", why, netsim_now() / 1e9);
     if (ns.wall_clock) {
-        /* Continuing with an unbounded clock would invalidate Link timing. */
+        /* The wall clock stops at the last barrier and only this link
+           moves the barrier on, so without the hub the deck cannot run. */
         exit(1);
     }
     ns.active = false;
@@ -470,7 +471,11 @@ static void netsim_step(void *opaque)
              * over a peer wait starves MAIN, even though its clock is clamped:
              * catching up timers can then coalesce TMU IRQs and skip beats.
              * Keep the ceiling fixed while letting the vCPU service work.
-             * All segment state/queued frames remain protected after relock. */
+             * Nothing here touches ns until the BQL is back: the wait works
+             * on a copy of the fd, and the only other writer of ns,
+             * cdj_netsim_send, runs from the EtherMAC's MMIO handler and so
+             * holds the BQL itself.  If that send loses the hub, the drain
+             * below finds ns.active clear. */
             bql_unlock();
             ready = poll(&wait, 1, 1000);
             bql_lock();
