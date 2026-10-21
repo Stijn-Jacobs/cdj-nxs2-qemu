@@ -272,6 +272,8 @@ static void cdj2000_init(MachineState *machine)
  * SH_FEATURE_SH4A, i.e. the SH7785. */
 static void cdj2000nxs_machine_init(MachineClass *mc)
 {
+    /* The tag tells a launcher, from -M help alone, that this binary has
+     * CDJ_NETSIM_CLOCK=wall (see cdj_netsim.c). */
     mc->desc = "Pioneer CDJ-2000NXS (Renesas SH7763), bring-up [netsim-wall-v1]";
     mc->init = cdj2000nxs_init;
     mc->default_cpu_type = TYPE_SH7785_CPU;

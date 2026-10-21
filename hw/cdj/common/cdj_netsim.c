@@ -1,20 +1,19 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Pioneer CDJ-2000: two or more players on one Pro DJ Link segment, in one
  * guest time.
  *
- * Under --cosim every player keeps a guest time of its own (MAIN under
- * -icount, see cdj2000_cosim.c), and each runs at whatever speed its host
- * threads manage, about a third of real time on this project's machines.  Two
- * such players on a plain hub drift apart: one's beat packets reach the other
- * early or late by however far their clocks have wandered, and a second of one
- * deck's time is not a second of the other's.  Presence, player numbers and
- * status survive that; beat phase, MASTER and SYNC do not.
+ * Under -icount every player keeps a guest time of its own, and each runs at
+ * whatever speed its host threads manage, about a third of real time on this
+ * project's machines.  Two such players on a plain hub drift apart: one's
+ * beat packets reach the other early or late by however far their clocks
+ * have wandered, and a second of one deck's time is not a second of the
+ * other's.  Presence, player numbers and status survive that; beat phase,
+ * MASTER and SYNC do not.
  *
  * With CDJ_NETSIM=HOST:PORT or unix:PATH the player's Ethernet goes to a
- * synchronising hub (tools.cdj_main.link_hub --sync) instead of a QEMU
- * netdev, and the hub keeps
- * every player on one guest timeline, conservatively, exactly as the MAIN/GUI
- * link does:
+ * synchronising hub over a stream socket instead of a QEMU netdev, and the
+ * hub keeps every player on one guest timeline, conservatively:
  *
  *  - the segment has a latency, CDJ_NETSIM_QUANTUM_US (1000 us): a frame sent
  *    at guest time t reaches the other players at t + quantum, never earlier;
@@ -31,24 +30,32 @@
  * the rest have joined.
  *
  * CDJ_NETSIM_CLOCK=wall opts into a local, bounded host-time clock instead
- * of -icount. CDJ_NETSIM_CLOCK_FILE names a fresh mmap file shared by the
- * decks on ONE host. Each clock is min(host_monotonic - shared_epoch,
- * next_barrier). The barrier remains no later than peer_promise + quantum,
- * or the next queued frame. Wall-mode promises are always the current time,
- * including when idle: thus clocks differ by at most one quantum, and no
- * frame can arrive in a player's past. Delayed timer dispatch cannot advance
- * the clock past its barrier. TCG runs normally inside each interval; this
- * preserves network causality, not instruction-count reproducibility.
- * This live socket segment/host epoch is not a migration or replay clock.
+ * of -icount (run without -icount then).  CDJ_NETSIM_CLOCK_FILE names a fresh
+ * file, mapped by every deck on ONE host, that holds the shared epoch (eight
+ * bytes; the first deck to map it writes it).  Each clock is
+ * min(host_monotonic - shared_epoch, next_barrier).  The barrier remains no
+ * later than peer_promise + quantum, or the next queued frame.  Wall-mode
+ * promises are always the current time, including when idle: with Pi <= Ti a
+ * peer's clock satisfies Tj <= Pi + Q <= Ti + Q, so clocks differ by at most
+ * one quantum, and no frame can arrive in a player's past.  Delayed timer
+ * dispatch cannot advance the clock past its barrier, and a paused VM freezes
+ * its clock.  TCG runs normally inside each interval; this preserves network
+ * causality, not instruction-count reproducibility, and it is not a migration
+ * or replay clock.
  *
- * The wire is cdj2000_cosim.c's: a 20-byte header -- "CDJC", the type, three
- * zero bytes, the guest time in ns (u64), the payload length (u32), little
- * endian -- and the payload.  Types: TIME (1; payload the promise, u64: the
- * sender sends nothing stamped before it), FRAME (5; an Ethernet frame sent at
- * the stamped time) and HELLO (4).
+ * CDJ_NETSIM_CENSUS=<s> reports barrier waits, delivery lateness and sends
+ * before a declared promise every <s> guest seconds (default 10, 0 = off).
+ * CDJ_NETSIM_TRACE=<file> writes one JSON line per frame sent or received,
+ * with its stamps and a hash that matches a sender's record to its
+ * receiver's.
+ *
+ * The wire: a 20-byte header -- "CDJC", the type, three zero bytes, the guest
+ * time in ns (u64), the payload length (u32), little endian -- and the
+ * payload.  Types: TIME (1; payload the promise, u64: the sender sends nothing
+ * stamped before it), FRAME (5; an Ethernet frame sent at the stamped time)
+ * and HELLO (4).
  *
  * Copyright (C) 2026 RaftTone
- * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #include "qemu/osdep.h"
 #include "qemu/bswap.h"
@@ -62,7 +69,7 @@
 #include "sysemu/runstate.h"
 
 #ifdef _WIN32
-/* The wire is BSD sockets and poll(), like cdj2000_cosim.c's. */
+/* The wire is BSD sockets and poll(). */
 bool cdj_netsim_active(void)
 {
     return false;
@@ -364,7 +371,7 @@ static void netsim_deliver(int64_t now)
     }
 }
 
-/* As cosim_promise: now while MAIN runs, else its next event. */
+/* Now while MAIN runs, else its next event. */
 static int64_t netsim_promise(int64_t now)
 {
     CPUState *cpu;
