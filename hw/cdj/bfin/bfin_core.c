@@ -33,7 +33,9 @@
 static uint64_t awake_cycles(const bfin_core *c) { return c->cycles - c->idle_cycles; }
 static uint64_t cycle_counter(const bfin_core *c)
 {
-    return c->cycle_base + ((c->syscfg & 2) ? awake_cycles(c) - c->cycle_stamp : 0);
+    int ccen = !c->clock_model || (c->syscfg & 2);
+
+    return c->cycle_base + (ccen ? awake_cycles(c) - c->cycle_stamp : 0);
 }
 
 static void timing_add(bfin_ownership_timing *t, uint64_t *field, uint64_t n)
@@ -512,8 +514,14 @@ void bfin_wake(bfin_core *c)
 
 void bfin_set_wake(bfin_core *c, int level)
 {
-    c->wake_level = !!level;
-    if (level) { c->idle = 0; }
+    c->wake_level = c->clock_model && level;
+    if (c->wake_level) { c->idle = 0; }
+}
+
+void bfin_set_models(bfin_core *c, int clock_model, int tint_w0c)
+{
+    c->clock_model = clock_model;
+    c->tint_w0c = tint_w0c;
 }
 
 void bfin_set_ivg(bfin_core *c, int ivg, int level)
@@ -558,7 +566,7 @@ static void timer_expire(bfin_core *c)
 
 uint64_t bfin_timer_due(const bfin_core *c)
 {
-    return c->idle || c->tzero == UINT64_MAX ? UINT64_MAX :
+    return (c->idle && c->clock_model) || c->tzero == UINT64_MAX ? UINT64_MAX :
            c->tzero > c->cycles ? c->tzero - c->cycles : 0;
 }
 
@@ -603,8 +611,9 @@ void bfin_mmr_write(bfin_core *c, uint32_t addr, uint32_t val)
     case MMR_TCNTL: {
         uint32_t count = timer_count(c);
 
-        /* BF53x HRM15-46: sticky TINT clears by writing zero. */
-        c->tcntl = (val & ~TCNTL_INT) | (c->tcntl & val & TCNTL_INT);
+        /* TINT is sticky: write-one-to-clear, or write-zero with tint_w0c. */
+        c->tcntl = (val & ~TCNTL_INT) |
+                   (c->tcntl & TCNTL_INT & (c->tint_w0c ? val : ~val));
         timer_start(c, count ? count : c->tperiod);
         return;
     }
@@ -993,7 +1002,7 @@ bfin_stop bfin_stepi(bfin_core *c)
 
 void bfin_skip_cycles(bfin_core *c, uint64_t n)
 {
-    if (c->idle) {
+    if (c->idle && c->clock_model) {
         c->idle_cycles += n;
         if (c->tzero != UINT64_MAX) { c->tzero += n; }
     }

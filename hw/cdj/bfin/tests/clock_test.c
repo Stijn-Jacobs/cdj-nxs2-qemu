@@ -21,6 +21,7 @@ static void ownership_timing(void)
     bfin_core *c = bfin_new(&bus);
     bfin_ownership_timing t, repeated;
     bfin_map_ram(c, 0, sizeof(code), code); bfin_reset(c, 0);
+    bfin_set_models(c, 1, 0);
     assert(bfin_timing_enable(c, 1, 3) == -1);
     assert(bfin_timing_enable(c, 1, 2) == 0);
     assert(bfin_timing_enable(c, 1, 2) == -1);
@@ -62,19 +63,45 @@ static void ownership_timing(void)
     bfin_free(c);
 
     c = bfin_new(&bus); bfin_map_ram(c, 0, sizeof(code), code); bfin_reset(c, 0);
+    bfin_set_models(c, 1, 0);
     assert(!bfin_timing_enable(c, 0, 0)); bfin_sti(c, 0xffe0);
     bfin_timing_read(c, &t); assert(!t.start_seen && !t.start_configured);
     bfin_free(c);
     c = bfin_new(&bus); bfin_map_ram(c, 0, sizeof(code), code); bfin_reset(c, 0);
+    bfin_set_models(c, 1, 0);
     assert(!bfin_timing_enable(c, 1, 0x100)); bfin_sti(c, 0xffe0);
     bfin_set_wake(c, 1); bfin_step(c, 20, NULL);
     bfin_timing_read(c, &t); assert(!t.start_seen); /* unmask is not a phase marker */
     bfin_free(c);
     c = bfin_new(&bus); bfin_map_ram(c, 0, sizeof(code), code); bfin_reset(c, 0);
+    bfin_set_models(c, 1, 0);
     assert(!bfin_timing_enable(c, 1, 2)); bfin_set_wake(c, 1);
     bfin_step(c, 20, NULL); bfin_timing_read(c, &t);
     assert(t.start_seen && t.start_cycle == 1); /* normal block execution honors marker */
     bfin_free(c);
+}
+
+/* Without the models: CYCLES runs without CCEN, the core timer runs through
+ * IDLE, a wake level is ignored and TINT is write-one-to-clear. */
+static void default_models(void)
+{
+    bfin_bus bus = {0};
+    bfin_core *c = bfin_new(&bus);
+    bfin_map_ram(c, 0, sizeof(code), code); bfin_reset(c, 0);
+    bfin_skip_cycles(c, 20);
+    assert(counter(c) == 20);
+    bfin_mmr_write(c, TCOUNT, 10);
+    bfin_mmr_write(c, TCNTL, 3);
+    bfin_set_wake(c, 1);
+    assert(bfin_stepi(c) == BFIN_STOP_STEP && c->idle && !c->wake_level);
+    assert(bfin_timer_due(c) != UINT64_MAX);
+    bfin_skip_cycles(c, bfin_timer_due(c));
+    bfin_stepi(c);
+    assert(bfin_mmr_read(c, TCNTL) & 8);
+    bfin_mmr_write(c, TCNTL, 1);          /* writing zero retains TINT */
+    assert(bfin_mmr_read(c, TCNTL) & 8);
+    bfin_mmr_write(c, TCNTL, 9);          /* one clears it */
+    assert(!(bfin_mmr_read(c, TCNTL) & 8));
 }
 
 int main(void)
@@ -82,6 +109,7 @@ int main(void)
     bfin_bus bus = {0};
     bfin_core *c = bfin_new(&bus);
     bfin_map_ram(c, 0, sizeof(code), code);
+    bfin_set_models(c, 1, 1);
     bfin_reset(c, 0);
     bfin_skip_cycles(c, 20);
     assert(counter(c) == 0);             /* CCEN resets disabled */
@@ -143,6 +171,7 @@ int main(void)
     assert(counter(c) == before + 3);
     bfin_free(c);
     ownership_timing();
-    puts("PASS elapsed/IDLE clocks, CYCLES latch/CCEN, core timer and snapshots");
+    default_models();
+    puts("PASS elapsed/IDLE clocks, CYCLES latch/CCEN, core timer, snapshots and default models");
     return 0;
 }

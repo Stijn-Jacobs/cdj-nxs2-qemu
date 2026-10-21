@@ -737,9 +737,9 @@ bool cdj2000_display_init(const Cdj2000Display *desc)
         exit(1);
     }
     if (tick_hz) {
-        unsigned hz = strtoul(tick_hz, NULL, 10);
+        uint32_t hz;
 
-        if (hz < 60 || hz > 100000) {
+        if (!cdj_bf531_bounded_decimal(tick_hz, 100000, &hz) || hz < 60) {
             error_report("cdj_bf531: CDJ_BF531_TICK_HZ=%s out of 60..100000", tick_hz);
             exit(1);
         }
@@ -752,6 +752,8 @@ bool cdj2000_display_init(const Cdj2000Display *desc)
     }
 
     s->chip = bf531_new(desc->sdram_size, &host, stderr);
+    bfin_set_models(bf531_core(s->chip), getenv("CDJ_BF531_CLOCK_MODEL") != NULL,
+                    getenv("CDJ_BF531_TINT_W0C") != NULL);
     if (sport1) {
         uint8_t pkt[128];
         size_t n = cdj_bf531_parse_hex(sport1, pkt, sizeof(pkt));

@@ -162,6 +162,9 @@ struct bfin_core {
     FILE    *trace;
     uint64_t trace_from, trace_to;
     bfin_ownership_timing ownership; /* host observations, never snapshot state */
+    /* Opt-in models chosen by the board (bfin_set_models), not snapshot state. */
+    int      clock_model;
+    int      tint_w0c;
 };
 
 /* The bank holding the size bytes at addr, or NULL. */

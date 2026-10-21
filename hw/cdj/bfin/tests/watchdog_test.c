@@ -38,6 +38,7 @@ static void fresh(void)
     if (chip) { bf531_free(chip); }
     chip = bf531_new(0x10000, &host, NULL);
     core = bf531_core(chip);
+    bfin_set_models(core, 1, 0);
     memcpy(bf531_mem(chip, 0, sizeof(code)), code, sizeof(code));
     bfin_reset(core, 0);
     bfin_set_reg(core, 7, 2, 0x32); /* CCEN */

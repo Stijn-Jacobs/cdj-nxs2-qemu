@@ -103,14 +103,22 @@ void bfin_yield(bfin_core *c);
 /* Ends an IDLE without taking an event, or the next IDLE if none is running:
  * the PLL wakeup after a relock. */
 void bfin_wake(bfin_core *c);
-/* Peripheral wake is a level, independent of CEC/SIC interrupt masking. */
+/* Peripheral wake is a level, independent of CEC/SIC interrupt masking.
+ * Only with the clock model on (bfin_set_models). */
 void bfin_set_wake(bfin_core *c, int level);
+/* Two models that change what a stock display boot does, both off unless the
+ * board turns them on. clock_model: IDLE stops CYCLES and the core timer,
+ * CYCLES counts only with SYSCFG.CCEN, and the SIC wake level (SIC_IWR) ends
+ * or prevents IDLE. tint_w0c: TCNTL's sticky TINT clears on a written zero
+ * (BF53x HRM 15-46) rather than a written one. */
+void bfin_set_models(bfin_core *c, int clock_model, int tint_w0c);
 
 /* Level of the SIC's output to core event ivg (7..15). */
 void bfin_set_ivg(bfin_core *c, int ivg, int level);
 
 /* Elapsed simulation time; preserved for runner budgets, peripheral deadlines
- * and traces. Architectural CYCLES and the core timer stop during IDLE. */
+ * and traces. With the clock model, architectural CYCLES and the core timer
+ * stop during IDLE. */
 uint64_t bfin_cycles(const bfin_core *c);
 void     bfin_skip_cycles(bfin_core *c, uint64_t n);
 /* Cycles until the core timer next expires; UINT64_MAX when it is stopped. */
