@@ -359,7 +359,6 @@ static uint64_t hpi_read(void *opaque, hwaddr off, unsigned size)
     default:
         val = cdj_dsp_host_read_word(&s->host, s->hpia);
         hpi_slot_log('R', s->hpia, val);
-        hpi_slot_log('R', s->hpia, val);
         s->reads++;
         cdj_dsp_count(&s->polls, s->hpia, val);
         if ((off >> 18) == 2) {
