@@ -23,14 +23,22 @@ LOG = "replayed 10 of 10 records\nfinal: state 0x1 writes 0x2 ram 0x3\nverdict: 
     ("c66x jit: no module for ABI 12\n" + LOG, 0, False),
 ])
 def test_replay_gate(tmp_path, native, code, passed):
-    runner = tmp_path / "runner"
-    runner.write_text("#!" + sys.executable + "\nimport os\n"
-                      "assert 'C66X_JIT_AUTO' not in os.environ\n"
-                      "assert 'REPLAY_KEEP_GOING' not in os.environ\n"
-                      "native = bool(os.environ.get('C66X_JIT'))\n"
-                      f"print({native!r} if native else {LOG!r}, end='')\n"
-                      f"raise SystemExit({code} if native else 0)\n")
-    runner.chmod(0o755)
+    body = ("import os\n"
+            "assert 'C66X_JIT_AUTO' not in os.environ\n"
+            "assert 'REPLAY_KEEP_GOING' not in os.environ\n"
+            "native = bool(os.environ.get('C66X_JIT'))\n"
+            f"print({native!r} if native else {LOG!r}, end='')\n"
+            f"raise SystemExit({code} if native else 0)\n")
+    if os.name == "nt":
+        # Windows cannot start a shebang script, so a .cmd runs it instead.
+        script = tmp_path / "runner.py"
+        script.write_text(body)
+        runner = tmp_path / "runner.cmd"
+        runner.write_text(f'@"{sys.executable}" "{script}" %*\n')
+    else:
+        runner = tmp_path / "runner"
+        runner.write_text("#!" + sys.executable + "\n" + body)
+        runner.chmod(0o755)
     record, module = tmp_path / "record", tmp_path / "module"
     record.write_bytes(b"synthetic fixture")
     module.write_bytes(b"synthetic fixture")
