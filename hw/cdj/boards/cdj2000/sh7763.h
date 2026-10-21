@@ -115,8 +115,9 @@ void sh7763_board_init(MachineState *machine, const CdjBoardDesc *desc,
                        const Cdj2000Display *display_desc, bool auth_chip);
 
 /* Optional SDHI/card; without CDJ_SD_IMAGE preserve the empty-slot stub. */
-void cdj2000_sdhi_init(MemoryRegion *sysmem, qemu_irq irq);
-bool cdj2000_sdhi_card_init(MemoryRegion *sysmem, qemu_irq irq);
+void cdj2000_sdhi_init(MemoryRegion *sysmem, qemu_irq irq, qemu_irq dmte5);
+bool cdj2000_sdhi_card_init(MemoryRegion *sysmem, qemu_irq irq,
+                            qemu_irq dmte5);
 bool cdj2000_sdhi_lid_closed(void);
 bool cdj2000_sdhi_dma(bool writing, uint8_t *buf, unsigned len);
 

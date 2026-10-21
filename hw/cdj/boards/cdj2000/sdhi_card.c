@@ -26,6 +26,7 @@
 #include "sysemu/blockdev.h"
 #include "qemu/module.h"
 #include "qemu/timer.h"
+#include "cdj_getenv.h"
 
 #define SDHI_BASE       0xffe40000
 /* Widened past the TMIO register file so anything the driver's DMA path
@@ -84,7 +85,6 @@ struct CdjSdhiState {
     bool multi;
     bool writing;
 
-
     bool inserted;
     bool ejected;                   /* logically removed through QOM */
     QEMUTimer *insert_timer;
@@ -92,14 +92,11 @@ struct CdjSdhiState {
     QEMUTimer *data_timer;
     bool data_ready;
     bool lid_closed;
+    bool trace;                     /* CDJ_SDHI_TRACE */
 };
 
+/* Virtual time from a command or a consumed block to the next RXRDY/TXRQ. */
 #define SDHI_XFER_NS 20000
-
-static int64_t cdj_sdhi_block_ns(CdjSdhiState *s)
-{
-    return SDHI_XFER_NS;
-}
 
 /*
  * The data phase is interrupt-driven, not polled: sd_read_blocks waits on an RTOS
@@ -142,7 +139,6 @@ static void cdj_sdhi_store_response(CdjSdhiState *s, const uint8_t *rsp,
         s->rsp[0] = value & 0xffff;
         s->rsp[1] = value >> 16;
     } else if (len == 16) {
-    
         s->rsp[7] = rsp[0];
         for (i = 0; i < 7; i++) {
             s->rsp[6 - i] = ((uint16_t)rsp[1 + 2 * i] << 8) | rsp[2 + 2 * i];
@@ -161,7 +157,7 @@ static void cdj_sdhi_command(CdjSdhiState *s, uint16_t cmd)
 
     /*
      * DATAEND has to be dropped here.  The driver only ever clears bit 3 of
-     * INFO1 before a command (0x1ff518), so a DATAEND left over from the
+     * INFO1 before a command (0x041FF518), so a DATAEND left over from the
      * previous transfer would still be set when it checks, and it would treat
      * the next data phase as already finished.
      */
@@ -177,9 +173,9 @@ static void cdj_sdhi_command(CdjSdhiState *s, uint16_t cmd)
     len = !s->inserted || s->ejected ? 0 :
           sdbus_do_command(&s->sdbus, &request, response);
 
-    if (getenv("CDJ_SDHI_TRACE")) {
-        fprintf(stderr, "cdj2000-sdhi: cmd %#06x (CMD%u) arg %#010x -> %u bytes\n",
-                cmd, request.cmd, request.arg, (unsigned)len);
+    if (s->trace) {
+        info_report("cdj2000-sdhi: cmd %#06x (CMD%u) arg %#010x -> %u bytes",
+                    cmd, request.cmd, request.arg, (unsigned)len);
     }
 
     if ((cmd & SDHI_CMD_RESP_MASK) == SDHI_CMD_RESP_NONE) {
@@ -187,7 +183,7 @@ static void cdj_sdhi_command(CdjSdhiState *s, uint16_t cmd)
     } else if (len != 4 && len != 16) {
         /*
          * Report a response timeout rather than leaving the wait spinning:
-         * 0x1ff45c has a 65535-iteration cap but only yields to the RTOS every
+         * 0x041FF45C has a 65535-iteration cap but only yields to the RTOS every
          * eighth pass, so an unanswered command costs real time.
          */
         s->info2 |= SDHI_INFO2_CMDTIMEOUT;
@@ -215,9 +211,8 @@ static void cdj_sdhi_command(CdjSdhiState *s, uint16_t cmd)
         s->multi = (cmd & SDHI_CMD_MULTI) != 0;
         s->blocks_left = s->multi && s->seccnt ? s->seccnt : 1;
         s->writing = (cmd & SDHI_CMD_READ) == 0;
-    
         timer_mod(s->data_timer,
-                  qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + cdj_sdhi_block_ns(s));
+                  qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + SDHI_XFER_NS);
     }
     cdj_sdhi_update_irq(s);
 }
@@ -232,8 +227,8 @@ static void cdj_sdhi_data_end(CdjSdhiState *s)
         uint8_t response[16];
 
         sdbus_do_command(&s->sdbus, &request, response);
-        if (getenv("CDJ_SDHI_TRACE")) {
-            fprintf(stderr, "cdj2000-sdhi: auto CMD12\n");
+        if (s->trace) {
+            info_report("cdj2000-sdhi: auto CMD12");
         }
     }
     s->multi = false;
@@ -248,7 +243,7 @@ static void cdj_sdhi_block_done(CdjSdhiState *s)
     if (s->blocks_left > 1) {
         s->blocks_left--;
         timer_mod(s->data_timer,
-                  qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + cdj_sdhi_block_ns(s));
+                  qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + SDHI_XFER_NS);
     } else {
         cdj_sdhi_data_end(s);
     }
@@ -280,7 +275,6 @@ static uint16_t cdj_sdhi_read_halfword(CdjSdhiState *s, hwaddr offset)
     case SDHI_RSP ... SDHI_RSP + 14:
         return s->rsp[(offset - SDHI_RSP) / 2];
     case SDHI_INFO1:
-    
         /* NXS card-detect pin is active low, independent of W0C status. */
         return s->info1 | (!s->inserted ? SDHI_INFO1_CARD : 0);
     case SDHI_INFO2:
@@ -315,9 +309,8 @@ static uint16_t cdj_sdhi_read_halfword(CdjSdhiState *s, hwaddr offset)
         return value;
     }
     default:
-        if (offset >= 0x100 && getenv("CDJ_SDHI_TRACE")) {
-            fprintf(stderr, "cdj2000-sdhi: READ HIGH +%#06x\n",
-                    (unsigned)offset);
+        if (offset >= 0x100 && s->trace) {
+            info_report("cdj2000-sdhi: READ HIGH +%#06x", (unsigned)offset);
         }
         return 0;
     }
@@ -539,6 +532,7 @@ static void cdj_sdhi_realize(DeviceState *dev, Error **errp)
     qbus_init(&s->sdbus, sizeof(s->sdbus), TYPE_SD_BUS, dev, "sd-bus");
     s->insert_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, cdj_sdhi_insert, s);
     s->data_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, cdj_sdhi_data_ready, s);
+    s->trace = getenv("CDJ_SDHI_TRACE") != NULL;
     object_property_add_str(OBJECT(s), "card", cdj_sdhi_card_get,
                              cdj_sdhi_card_set);
 }
@@ -633,7 +627,8 @@ bool cdj2000_sdhi_dma(bool writing, uint8_t *buf, unsigned len)
     return true;
 }
 
-bool cdj2000_sdhi_card_init(MemoryRegion *sysmem, qemu_irq irq)
+bool cdj2000_sdhi_card_init(MemoryRegion *sysmem, qemu_irq irq,
+                            qemu_irq dmte5)
 {
     const char *path = getenv("CDJ_SD_IMAGE");
     DeviceState *host, *card;
@@ -655,8 +650,7 @@ bool cdj2000_sdhi_card_init(MemoryRegion *sysmem, qemu_irq irq)
     cdj_sdhi_singleton = CDJ_SDHI(host);
     cdj_sdhi_singleton->irq = irq;
     cdj_dmac_fifo_connect(SDHI_BASE + SDHI_DATA, cdj2000_sdhi_dma);
-    cdj_dmac_dei_connect(5, cdj_count_irq(
-        cdj_sh7763_intc.irqs[S63_DMTE5], "SD read DMTE5"));
+    cdj_dmac_dei_connect(5, dmte5);
     sysbus_mmio_map(SYS_BUS_DEVICE(host), 0, SDHI_BASE);
     card = qdev_new(TYPE_SD_CARD);
     qdev_prop_set_drive_err(card, "drive", blk, &error_fatal);
