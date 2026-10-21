@@ -23,8 +23,11 @@ void cdj_dsp_audio_arm(void)
         /* Paused, the DSP program keeps sending the McASP buffer it last
          * filled: 15288 frames (two 7644-frame halves) at deck speed 1.0, bit
          * for bit, on both chips. Right after the stop it first sends the
-         * buffer from 17880 frames back. */
+         * buffer from 17880 frames back. The XDJ-700 and XDJ-1000 loop 7644
+         * frames instead, after one pass of the buffer from 8820 frames
+         * back, also bit for bit. */
         .loop = { .period = 15288, .replay = 17880,
+                  .period2 = 7644, .replay2 = 8820,
                   .lag_min = 12000, .lag_max = 24000 },
     };
 

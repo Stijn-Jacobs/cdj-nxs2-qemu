@@ -11,6 +11,7 @@ import pytest
 
 import patch_main
 import sigpatch
+from players import cdj2000nxs2 as nxs2
 
 CODE = 0x08140000
 SHARED, SLOT = 0x081FFFF0, 0x0B569528
@@ -375,8 +376,8 @@ def blob(name):
 def test_registered_for_main_as_hooks_on_the_reader_and_the_publisher():
     fetch, data = patch_main.MODS['phrasefetch'], patch_main.MODS['phrasedata']
     assert fetch.target == data.target == 'main' and fetch.hook and data.hook
-    assert dict(sig=fetch.sig, start=fetch.start, end=fetch.end) == patch_main.PREVIEW_READ
-    assert dict(sig=data.sig, start=data.start, end=data.end) == patch_main.OVERVIEW_PUBLISH
+    assert dict(sig=fetch.sig, start=fetch.start, end=fetch.end) == nxs2.PREVIEW_READ
+    assert dict(sig=data.sig, start=data.start, end=data.end) == nxs2.OVERVIEW_PUBLISH
 
 
 def test_the_table_is_the_phrases_laid_over_the_columns():
@@ -494,4 +495,4 @@ def test_real_main_takes_the_phrase_mods_with_the_3band_ones_in_any_order():
     names = ['phrasefetch', 'phrasedata', 'wave3data', 'wave3detail', 'wave3ovdata', 'wave3ovfetch']
     assert patch_main.patch(data, names) == patch_main.patch(data, names[::-1])
     _, total = sigpatch.layout(patch_main.blob_path, patch_main.MODS)
-    assert patch_main.MAIN_PROFILE.ram_base + total <= 0x081FFFE0
+    assert 0x0811AF80 + total <= 0x081FFFE0

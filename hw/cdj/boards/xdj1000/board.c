@@ -28,6 +28,7 @@
 
 typedef struct Sh7724PanelExtra {
     bool lever_fwd;
+    bool tempo_centre;
     CdjPnlTouch touch;
 } Sh7724PanelExtra;
 
@@ -39,12 +40,23 @@ typedef struct Sh7724PanelExtra {
  * would run backwards from its first frame and look frozen. The lever sits at
  * FWD, where the bit reads 1.
  */
+/*
+ * The CDJ-900NXS tempo slider, as on the CDJ-2000 and NXS2: bytes 4-5 are the
+ * position, bytes 6-7 the centre reference (fw 1.31 decodes them at
+ * 0x08B63278 into 0x0B2E82AC and 0x0B2E82B0). With the centre at 0 TEMPO stays
+ * at 0.00 % wherever the slider is. Both default to mid travel (0.00 %); a
+ * live lvl overrides them.
+ */
 static void sh7724_panel_defaults(CdjPnlLinkState *s, void *extra, uint8_t *rx)
 {
     Sh7724PanelExtra *e = extra;
 
     if (e->lever_fwd) {
         rx[0x0F] |= 0x02;
+    }
+    if (e->tempo_centre) {
+        rx[4] = 0x80;
+        rx[6] = 0x80;
     }
 }
 
@@ -182,6 +194,7 @@ typedef struct Sh7724Deck {
     unsigned pnl_frame;
     bool pwm_ram;
     bool lever_fwd;             /* idle frame reports the direction lever at FWD */
+    bool tempo_centre;          /* idle frame reports the tempo slider's centre */
     bool touch_screen;          /* resistive panel digitised by the panel MCU */
     int auth_iic;               /* IIC channel of the auth chip, or -1 */
     bool scif0_irq;             /* console on SCIF0 is interrupt driven */
@@ -305,6 +318,7 @@ static void sh7724_deck_init(MachineState *machine, const Sh7724Deck *deck)
                                                 sizeof(*panel));
 
     panel->lever_fwd = deck->lever_fwd;
+    panel->tempo_centre = deck->tempo_centre;
     cdj_gui_keys_init(sh7724_deck_keys, ARRAY_SIZE(sh7724_deck_keys),
                       deck->name);
     if (deck->touch_screen) {
@@ -336,6 +350,7 @@ static const Sh7724Deck cdj900nxs_deck = {
     .usb_base = CDJ_USB_BASE,
     .usb_irq = CDJ_USB0,
     .pnl_frame = 24,
+    .tempo_centre = true,
     .auth_iic = 0,
     .scif0_irq = true,
 };

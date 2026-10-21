@@ -62,7 +62,7 @@ esac
 # installed keeps its old feature set forever and -display help silently stays
 # at "none, dbus". Reconfigure when the requested UI backend is not in the
 # existing config, or when QEMU_RECONFIGURE=1 is set.
-CFG_ARGS="--target-list=sh4-softmmu --disable-werror --disable-docs --disable-tools"
+CFG_ARGS="--target-list=sh4-softmmu --disable-werror --disable-docs --disable-tools --disable-libnfs"
 # Ask explicitly for the UI and sound backends, so a missing dependency fails
 # loudly instead of quietly producing a binary with no window or no sound. On
 # macOS they are Cocoa and Core Audio, which need nothing beyond the SDK.

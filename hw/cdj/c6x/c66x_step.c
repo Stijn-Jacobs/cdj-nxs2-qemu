@@ -81,9 +81,9 @@ int gather_packet(c66x_core *c, uint32_t pc, c66x_insn **pk, unsigned *n,
     unsigned hslot = PKC_SLOT(pc);
     c66x_insn *first = c->pkc[hslot].pc == pc ? c->pkc[hslot].first : NULL;
     HC(gather, first ? 0 : 1);
-    if (first && c->pkc[hslot].xins) {
+    if (first && c->pkc[hslot].cross) {
         const pkc_ent *pe = &c->pkc[hslot];
-        memcpy(pk, pe->xins, pe->n * sizeof pk[0]);
+        memcpy(pk, c->pkx[hslot].xins, pe->n * sizeof pk[0]);
         *n = pe->n;
         *next = pe->next;
         return 0;
@@ -91,11 +91,15 @@ int gather_packet(c66x_core *c, uint32_t pc, c66x_insn **pk, unsigned *n,
     if (!first) {
         first = fetch_insn(c, pc);
         if (first && first->pk_n) {
-            c->pkc[hslot] = (pkc_ent){ pc, first->pk_next, first, NULL, first->pk_n,
-                                       first->pk_special, first->pk_xread, first->pk_load,
-                                       first->pk_xnops, first->pk_branched, first->pk_allfop,
-                                       first->pk_xmask, jit_lookup(c, pc), jit_lookup0(c, pc) };
-            c->pkc[hslot].qregion = jit_lookupq(c, pc);
+            c->pkc[hslot] = (pkc_ent){ .pc = pc, .next = first->pk_next, .first = first,
+                                       .xmask = first->pk_xmask, .n = first->pk_n,
+                                       .special = first->pk_special, .load = first->pk_load,
+                                       .xnops = first->pk_xnops, .branched = first->pk_branched,
+                                       .allfop = first->pk_allfop };
+            c->pkx[hslot] = (pkc_aux){ .region = jit_lookup(c, pc), .region0 = jit_lookup0(c, pc),
+                                       .qregion = jit_lookupq(c, pc) };
+            /* A native kernel's loop head is handed to the general loop. */
+            c->pkc[hslot].special |= native_entry(c, pc);
         }
     }
     if (first && first->pk_n) {
@@ -145,8 +149,8 @@ int gather_packet(c66x_core *c, uint32_t pc, c66x_insn **pk, unsigned *n,
     HC(gather, in_block ? 3 : 2);
     if (*n >= MAX_PK)
         return 0;
-    pkc_ent e = { pc, a, pk[0], NULL, *n, 0, 0, 0, 0, 0, 1, 0 };
-    uint8_t mask = 0;
+    pkc_ent e = { .pc = pc, .next = a, .first = pk[0], .n = *n, .allfop = 1 };
+    uint8_t mask = 0, xread = 0;
     for (unsigned i = 0; i < *n; i++) {
         unsigned h = pk[i]->handler;
         if (pk[i]->xnops > e.xnops)
@@ -163,7 +167,7 @@ int gather_packet(c66x_core *c, uint32_t pc, c66x_insn **pk, unsigned *n,
         }
         if (h == H_SPMASK && pk[i]->nops)
             mask |= pk[i]->op[0].val;
-        e.xread |= pk[i]->xread;
+        xread |= pk[i]->xread;
         e.load |= h == H_LOAD;
         if (h == H_SPLOOP || h == H_SPLOOPD || h == H_SPLOOPW || h == H_SPKERNEL
             || h == H_SPKERNELR || h == H_SPMASK || h == H_SPMASKR)
@@ -173,7 +177,7 @@ int gather_packet(c66x_core *c, uint32_t pc, c66x_insn **pk, unsigned *n,
         first = pk[0];
         first->pk_next = a;
         first->pk_mask = mask;
-        first->pk_xread = e.xread;
+        first->pk_xread = xread;
         first->pk_special = e.special;
         first->pk_load = e.load;
         first->pk_xnops = e.xnops;
@@ -195,11 +199,11 @@ int gather_packet(c66x_core *c, uint32_t pc, c66x_insn **pk, unsigned *n,
         }
         xpk_ent *x = &c->xpk[c->nxpk++];
         memcpy(x->in, pk, *n * sizeof pk[0]);
-        e.xins = x->in;
-        e.region = jit_lookup(c, pc);
-        e.region0 = jit_lookup0(c, pc);
-        e.qregion = jit_lookupq(c, pc);
+        e.cross = 1;
+        e.special |= native_entry(c, pc);
         c->pkc[hslot] = e;
+        c->pkx[hslot] = (pkc_aux){ .xins = x->in, .region = jit_lookup(c, pc),
+                                   .region0 = jit_lookup0(c, pc), .qregion = jit_lookupq(c, pc) };
     }
     return 0;
 }
@@ -319,25 +323,26 @@ static int fast_cycles(c66x_core *c, uint64_t end, c66x_stop *stop)
                 continue;
             }
             if (c->jit) {
-                if (!c->nbr && !c->idle_ret_pending && (pe->region || pe->region0)) {
+                const pkc_aux *px = &c->pkx[PKC_SLOT(pc)];
+                if (!c->nbr && !c->idle_ret_pending && (px->region || px->region0)) {
                     uint64_t at = c->cycle;
-                    if (pe->region0 && !c->imm_n && jit_wq_empty(c)) {
+                    if (px->region0 && !c->imm_n && jit_wq_empty(c)) {
                         c->jit->entries0++;
-                        pe->region0->fn(c, end);
-                    } else if (pe->region) {
+                        px->region0->fn(c, end);
+                    } else if (px->region) {
                         c->jit->entries++;
-                        pe->region->fn(c, end);
+                        px->region->fn(c, end);
                     } else {
                         goto interpret;
                     }
                     c->jit->cycles += c->cycle - at;
                     continue;
                 }
-                if (c->nbr == 1 && pe->qregion && !c->idle_ret_pending
-                    && c->br[0].remaining == pe->qregion->rem && c->br[0].target == pe->qregion->target) {
+                if (c->nbr == 1 && px->qregion && !c->idle_ret_pending
+                    && c->br[0].remaining == px->qregion->rem && c->br[0].target == px->qregion->target) {
                     uint64_t at = c->cycle;
                     c->jit->qentries++;
-                    pe->qregion->r.fn(c, end);
+                    px->qregion->r.fn(c, end);
                     c->jit->qcycles += c->cycle - at;
                     continue;
                 }
@@ -345,8 +350,8 @@ static int fast_cycles(c66x_core *c, uint64_t end, c66x_stop *stop)
                 if (c->jit->prof)
                     jit_prof(c, pc);
                 else if (c->jit->auto_dir) {
-                    ((pkc_ent *)pe)->runs++;
-                    ((pkc_ent *)pe)->hits += !c->nbr;
+                    ((pkc_aux *)px)->runs++;
+                    ((pkc_aux *)px)->hits += !c->nbr;
                 }
             }
             c->exec_pc = pc;
@@ -354,12 +359,12 @@ static int fast_cycles(c66x_core *c, uint64_t end, c66x_stop *stop)
             c->st.packets++;
             HC(path, 0);
             HCPC(pc, 0, 0, 0);
-            c66x_insn *in = first;
+            c66x_insn *in = first, **xins = pe->cross ? c->pkx[PKC_SLOT(pc)].xins : NULL;
             c->store_now = !pe->load;
             if (pe->allfop) {
                 /* The common packet: fast forms only, bookkeeping precomputed. */
                 c->st.insns += n;
-                for (unsigned i = 0; i < n; i++, in = pe->xins ? pe->xins[i] : in + (in->size >> 1)) {
+                for (unsigned i = 0; i < n; i++, in = xins ? xins[i] : in + (in->size >> 1)) {
                     int r = fop_run(c, in, pe->next);
                     if (r) {
                         c->store_now = 0;
@@ -381,7 +386,7 @@ static int fast_cycles(c66x_core *c, uint64_t end, c66x_stop *stop)
                 continue;
             }
             xctx x = { .next_pc = pe->next };
-            for (unsigned i = 0; i < n; i++, in = pe->xins ? pe->xins[i] : in + (in->size >> 1)) {
+            for (unsigned i = 0; i < n; i++, in = xins ? xins[i] : in + (in->size >> 1)) {
                 if (in->fop) {
                     fop_exec(c, in, &x);
                     continue;
@@ -712,6 +717,9 @@ c66x_stop c66x_step(c66x_core *c, uint64_t budget, uint64_t *executed)
                 stop = C66X_STOP_IDLE;
                 break;
             }
+            const pkc_ent *npe = &c->pkc[PKC_SLOT(c->pc)];
+            if ((npe->pc == c->pc ? npe->special : native_entry(c, c->pc)) && native_run(c, start + budget))
+                continue;
             hook *hk = c->nhooks ? find_hook(c, c->pc) : NULL;
             if (hk) {
                 if (hk->fn(c, hk->opaque)) {

@@ -19,6 +19,8 @@ sendkey), 'key <payload>' (one datagram to the panel key socket,
 CDJ_PANEL_KEYSOCK) and 'wait <seconds>'.
 """
 
+import contextlib
+import hashlib
 import os
 import re
 import socket
@@ -29,6 +31,14 @@ import cdj_monsock
 
 LINK_DRAIN_S = 1.0
 SAVE_TIMEOUT_S = 120
+
+# A booting deck redraws its screen in steps and sits on each for a while (the
+# CDJ-2000NXS, with its host slowed to a 125 s boot: up to 25 s); the idle
+# screen it ends on never changes again.
+SETTLE_S = 45
+SETTLE_POLL_S = 2
+SETTLE_TIMEOUT_S = 300
+SCREENDUMP_TIMEOUT_S = 10
 
 
 def _command(mon, line, deadline):
@@ -48,6 +58,57 @@ def _status(mon, deadline):
     out = _command(mon, "info migrate", deadline).decode("utf-8", "replace")
     m = re.search(r"Migration status:\s*(\S+)", out)
     return m.group(1) if m else ""
+
+
+def _read_to_prompt(sock):
+    """Reads the monitor up to its next prompt. A socket closed with a reply
+    still unread is reset on Windows, which can leave the monitor dead."""
+    sock.settimeout(0.25)
+    seen, end = b"", time.time() + SCREENDUMP_TIMEOUT_S
+    while not seen.rstrip().endswith(b"(qemu)") and time.time() < end:
+        try:
+            part = sock.recv(65536)
+        except socket.timeout:
+            continue
+        if not part:
+            return
+        seen += part
+
+
+def screendump(mon, path):
+    """Writes the deck's screen to path and returns its digest, None if the
+    monitor gave no picture."""
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+    try:
+        with contextlib.closing(cdj_monsock.connect(mon)) as sock:
+            _read_to_prompt(sock)
+            sock.sendall(("screendump %s\n" % path.replace("\\", "/")).encode())
+            _read_to_prompt(sock)
+        with open(path, "rb") as f:
+            return hashlib.md5(f.read()).hexdigest()
+    except OSError:
+        return None
+
+
+def wait_settled(mon, idle_s, screen_path):
+    """Waits for the deck to finish booting: at least idle_s seconds, and the
+    screen unchanged for SETTLE_S. False once SETTLE_TIMEOUT_S has passed
+    without that. screen_path keeps the last picture taken."""
+    start = time.time()
+    shown, since = None, start
+    while True:
+        now = time.time()
+        digest = screendump(mon, screen_path)
+        if digest != shown:
+            shown, since = digest, now
+        if now - start >= idle_s and now - since >= SETTLE_S:
+            return True
+        if now - start >= SETTLE_TIMEOUT_S:
+            return False
+        time.sleep(SETTLE_POLL_S)
 
 
 def save(main_mon, gui_mon, out_dir):

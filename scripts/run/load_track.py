@@ -31,6 +31,17 @@ KEYSOCK = "/tmp/cdj-panel-keys-%s.sock" % TAG
 MAINMON = "/tmp/cdj-%s-main-mon.sock" % TAG
 OUT = os.environ.get("SHOTDIR", "/tmp")
 
+# A settled frame is not a ready deck: PLAY is ignored until the deck-state
+# word reaches 0x11. READY_ADDR is read over the MAIN monitor (memsave does not
+# halt the CPU); the word moves with the build, so the launcher names the one
+# it found in the image. READY_WAIT=0 skips the wait.
+READY_WAIT = float(os.environ.get("READY_WAIT", "40"))
+if READY_WAIT > 0 and not os.environ.get("READY_ADDR"):
+    sys.exit("[%s] READY_ADDR is not set: name the deck-ready word of this image, "
+             "or READY_WAIT=0 to skip the wait" % TAG)
+READY_ADDR = int(os.environ.get("READY_ADDR") or "0", 0)
+READY_VAL = int(os.environ.get("READY_VAL", "0x11"), 0)
+
 DWELL = float(os.environ.get("DWELL", "1.2"))
 WALK = os.environ.get("WALK", "push,rot+1,push,rot+1,push,push")
 POSTLOAD = float(os.environ.get("POSTLOAD", "4"))
@@ -488,14 +499,6 @@ while vnow() < deadline:
 pre = last
 print("[%s] load settled after %.1f s (stable=%d)"
       % (TAG, vnow() - t0, stable))
-
-# A settled frame is not a ready deck: PLAY is ignored until the deck-state
-# word reaches 0x11. READY_ADDR is read over the MAIN monitor (memsave does not
-# halt the CPU). READY_WAIT=0 skips the wait.
-READY_ADDR = int(os.environ.get("READY_ADDR", "0x0B5125B8"), 0)
-READY_VAL = int(os.environ.get("READY_VAL", "0x11"), 0)
-READY_WAIT = float(os.environ.get("READY_WAIT", "40"))
-
 
 def peek32(addr):
     """One little-endian word out of guest RAM, or None if unreadable."""

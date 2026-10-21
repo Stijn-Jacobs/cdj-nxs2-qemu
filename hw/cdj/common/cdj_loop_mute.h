@@ -12,6 +12,8 @@
 typedef struct CdjLoopMuteCfg {
     uint32_t period;        /* the buffer length at deck speed 1.0, frames; 0 = off */
     uint32_t replay;        /* the pause's first pass, frames; 0 = the DSP has none */
+    uint32_t period2;       /* a second period the loop can have, frames; 0 = none */
+    uint32_t replay2;       /* the first pass that goes with it */
     uint32_t lag_min;       /* the range a speed-scaled loop can land in, frames */
     uint32_t lag_max;
 } CdjLoopMuteCfg;

@@ -73,6 +73,10 @@ typedef struct CdjDspHost {
     GByteArray *snap;           /* the core's image in a snapshot */
     int64_t dsp_ns;             /* the virtual time the core has run up to */
     int64_t lag_max_ns;
+    /* CDJ_REPORT: the lag, idle and compiled shares and the host time spent
+     * running the core, every 5 s of the core's clock. */
+    int64_t report_ns, report_lag_ns, report_busy_ns;
+    uint64_t report_skipped, report_cycle, report_jit;
     int64_t slack_ns;           /* 0: the core may lag without bound */
     QEMUTimer *slack_timer;
     QemuMutex progress_lock;    /* @dsp_ns, for the slack timer's wait */

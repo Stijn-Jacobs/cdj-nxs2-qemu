@@ -75,8 +75,8 @@ typedef struct wq_ent { uint8_t kind; uint8_t idx; uint8_t load; uint32_t val; }
 enum { WK_REG, WK_CTRL };
 
 typedef struct fpblk {
-    uint16_t valid;           /* bit n = insn[n] decoded */
     c66x_insn insn[16];       /* indexed by fetch-packet offset / 2 */
+    uint16_t valid;           /* bit n = insn[n] decoded */
 } fpblk;
 
 /* Decoded fetch packets, two levels (4 KB page -> 128 fetch packets): a flat
@@ -136,21 +136,32 @@ typedef struct pend_branch { int remaining; uint32_t target; } pend_branch;
 typedef struct pend_store { uint32_t a, v, pc; uint8_t n, in_isr; } pend_store;
 
 /* A cached packet's shape lives in the entry, so the fast loop decides without
- * touching the instruction until it executes it. */
+ * touching the instruction until it executes it. The fast loop reads one entry
+ * per packet, so it is kept to 32 bytes: ~13k hot packets then fit the host's
+ * L2 instead of each costing a miss. */
 typedef struct pkc_ent {
     uint32_t pc, next;
     c66x_insn *first;
-    /* A packet crossing a fetch-packet boundary is not consecutive slots of one
-     * block: its instructions are listed here (NULL: walk from first). */
-    c66x_insn **xins;
-    uint8_t  n, special, xread, load, xnops, branched, allfop;
     uint64_t xmask;
+    uint8_t  n, special, load, xnops, branched, allfop;
+    uint8_t  cross;                 /* crosses a fetch packet: pkc_aux.xins lists it */
+} pkc_ent;
+
+/* The rest of a cached packet, by the same slot. */
+typedef struct pkc_aux {
+    /* A packet crossing a fetch-packet boundary is not consecutive slots of one
+     * block: its instructions are listed here. */
+    c66x_insn **xins;
     const c66x_jit_region *region;  /* a compiled region rooted here, verified */
     const c66x_jit_region *region0; /* a clean compiled state here: no writes pending */
     uint32_t hits;                  /* C66X_JIT_AUTO: fast-loop runs with no branch in flight */
     uint32_t runs;                  /* C66X_JIT_AUTO: all fast-loop runs (the generator's cold test) */
     const struct c66x_jit_qregion *qregion; /* a region entered with one branch in flight (ABI 12) */
-} pkc_ent;
+} pkc_aux;
+
+/* Together the two take what the one 72-byte entry of ABI 12 did, so every
+ * field after them keeps the offset modules were built against. */
+_Static_assert(sizeof(pkc_ent) + sizeof(pkc_aux) == 72, "pkc tables moved the ABI 12 fields");
 
 /* Instruction lists of cached packets that cross a fetch-packet boundary. */
 #define XPK_SIZE 4096
@@ -235,6 +246,7 @@ struct c66x_core {
     unsigned idle_nidem;
     /* PC -> first instruction of a cached packet; cleared on any invalidation */
     pkc_ent  pkc[PKC_SIZE];
+    pkc_aux  pkx[PKC_SIZE];
     xpk_ent  xpk[XPK_SIZE];
     unsigned nxpk;                  /* used xpk entries; reset with pkc */
     uint32_t watch_lo, watch_hi;
@@ -268,6 +280,15 @@ struct c66x_core {
     /* One bit per word offset within its mapping, modulo the filter size:
      * clear means no kept word of any mapping lives there. */
     uint32_t idle_rs_bloom[IDLE_RS_BLOOM / 32];
+    /* native kernels (c66x_native.c) */
+    uint8_t  native_mode;           /* C66X_NATIVE: 0 off, 1 on, 2 check against the interpreter */
+    uint32_t native_ok;             /* kernels whose code was found once ... */
+    uint64_t native_gen;            /* ... at this code_gen + 1 */
+    uint64_t native_pages;          /* ... and this many code pages */
+    uint64_t native_entries, native_cycles;
+    struct native_check *native_chk;
+    struct native_found *native_found;
+    uint64_t code_pages;            /* pages that hold decoded code */
 };
 
 /* ------------------------------------------------------------------------ */

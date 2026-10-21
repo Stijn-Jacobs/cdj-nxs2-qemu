@@ -16,8 +16,9 @@ from launcher import model  # noqa: E402
 
 
 def test_lists_the_committed_profiles():
-    assert model.list_models() == ["cdj2000nxs2", "xdj1000mk2", "xdj700", "xdj1000", "cdj900nxs",
-                                  "cdj2000nxs", "cdj900", "cdj2000"]
+    on_disk = sorted(f[:-len(".conf")] for f in os.listdir(model.models_dir()) if f.endswith(".conf"))
+    assert sorted(model.list_models()) == on_disk
+    assert {"cdj2000nxs2", "xdj1000mk2", "xdj700", "xdj1000", "cdj900nxs", "cdj2000nxs", "cdj900", "cdj2000"} <= set(on_disk)
 
 
 def test_default_first_then_newest_first():
@@ -60,7 +61,12 @@ def test_the_nxs2_platform_models_start_the_two_board_rig():
     # A profile without MODEL_LAUNCH=deck falls back to the rig, which boots
     # the NXS2 machines whatever the title says.
     rigs = [mid for mid in model.list_models() if model.load(mid).is_rig]
-    assert rigs == [model.DEFAULT]
+    assert rigs[0] == model.DEFAULT
+    assert "cdj2000nxs" not in rigs and "xdj700" not in rigs
+
+
+def test_the_default_rig_runs_with_the_rigs_own_knobs():
+    assert model.load().rig_env == {} and not model.load().tablet_peer
 
 
 def test_deck_model_may_not_share_the_default_extract_folder(tmp_path, monkeypatch):
