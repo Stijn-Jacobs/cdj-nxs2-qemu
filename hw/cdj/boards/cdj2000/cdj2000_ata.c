@@ -3,10 +3,10 @@
  * Pioneer CDJ-2000 / CDJ-2000NXS disc drive: the SH7764 ATAPI host controller
  * with its DMA engine, and the slot-in drive behind it.
  *
- * cdj2000_ata.h has the register map.  QEMU's generic `ide-cd` behind
- * `mmio-ide` used to stand in here.  It answered IDENTIFY, so E-7001 went
- * away, but MAIN never mounted a disc in it, for two reasons the firmware
- * states plainly:
+ * cdj2000_ata.h has the register map.  Answering IDENTIFY is enough to clear
+ * E-7001, but MAIN mounts a disc only through two paths a generic ATAPI
+ * CD-ROM does not have.  Function names and addresses here are from the
+ * CDJ-2000NXS MAIN symbols:
  *
  *  - The drive's mechanism is not visible through MMC at all.
  *    `cd_drive_state_machine_task` (0x041b7dd0) polls every 50 ms with the
@@ -16,15 +16,14 @@
  *    analysis starts), 1 = loading out (LOADOUTING), 2 = no disc (EJECTED).
  *    Before announcing a disc it also asks the drive's service channel "?D"
  *    (0xE3 writes the text, 0xE4 reads the reply; reply[2] bit 3 set means a
- *    firmware-update disc).  ide-cd rejects 0xE0 with ILLEGAL REQUEST, so the
- *    poll never produced a state and no disc was ever announced.
+ *    firmware-update disc).  A drive that rejects 0xE0 with ILLEGAL REQUEST
+ *    never produces a state, so no disc is ever announced.
  *  - Reads are DMA through the controller, not PIO.  `atapi_read_cd_command`
  *    sets FEATURES bit 0, then `drive_read_request_dispatch` programs
  *    DMA_START_ADR/DMA_TRANS_CNT one block at a time (2048, or 0x940 for
  *    READ CD with the formatted Q sub-channel) and writes COMMAND 0x25; each
  *    finished count raises STATUS bit 1, and the device's INTRQ (bit 4) must
  *    not arrive while a count is still active or the ISR aborts the read.
- *    mmio-ide has no DMA, so even a mounted disc could not have been read.
  *
  * So the drive is modelled here: task file + packet protocol (PIO and DMA),
  * the MMC commands MAIN sends (TEST UNIT READY, REQUEST SENSE, INQUIRY,
@@ -37,7 +36,7 @@
  * logged, so a command the firmware needs and this model lacks shows up in
  * the run's log rather than as a silent hang.  CDJ_ATA_TRACE=1 logs every
  * packet; CDJ_DISC_READ_BPS paces DMA data in guest bytes/second (unset: a
- * fixed 10 us per block, like the SD and USB models).
+ * fixed 10 us per block).
  *
  * Copyright (C) 2026 LycheeAPPF
  */
@@ -239,7 +238,7 @@ static CdjDisc *cdj_disc_open(const char *path, char **err)
                     }
                 }
             } else if (!strcmp(w[0], "PREGAP") || !strcmp(w[0], "POSTGAP")) {
-                /* ponytail: gaps that are not in the file; add when a disc needs it */
+                /* not supported: gaps that are not in the file */
                 *err = g_strdup_printf("%s:%d: %s is not supported", path,
                                        i + 1, w[0]);
                 goto fail;
@@ -328,7 +327,7 @@ static bool cdj_disc_raw(CdjDisc *d, uint32_t lba, uint8_t *out)
         memcpy(out, src, CD_RAW);
         return true;
     }
-    /* ponytail: EDC/ECC left zero; nothing in MAIN checks them on a read */
+    /* not supported: EDC/ECC stay zero; nothing in MAIN checks them on a read */
     memset(out, 0, CD_RAW);
     memset(out + 1, 0xff, 10);
     lba_to_msf(lba + CD_MSF_OFFSET, msf);
@@ -493,7 +492,7 @@ typedef struct CdjAta {
 
 #define TYPE_CDJ2000_ATAPI "cdj2000-atapi"
 
-/* Only the rate parser is needed from the old shared media-rate header. */
+/* CDJ_DISC_READ_BPS, plain decimal bytes per second; unset (0) paces nothing. */
 static uint64_t ata_read_rate(void)
 {
     const char *spec = getenv("CDJ_DISC_READ_BPS");
@@ -831,7 +830,7 @@ static uint32_t cmd_identify(CdjAta *s, uint8_t *out)
     uint16_t w[256] = { 0 };
     static const char serial[] = "CDJEMU00000000000001";
     static const char revision[] = "1.00    ";
-    /* ponytail: a neutral identity; MAIN only checks word 0 bit 15 here */
+    /* A neutral identity; MAIN only checks word 0 bit 15 here. */
     static const char model[] = "PIONEER CD-ROM DRIVE                    ";
     int i;
 
@@ -863,8 +862,8 @@ static const char *cmd_svmode_reply(CdjAta *s)
     /*
      * The drive's service console.  Only "?D" is used outside service mode
      * (cd_drive_poll_media_flag): reply[2] bit 3 would flag an update disc.
-     * "TS" waits for 'R'.  ponytail: the real drive's other replies are not
-     * known; "R" stands in for them.
+     * "TS" waits for 'R'.  Not supported: the real drive's other replies are
+     * not known; "R" stands in for them.
      */
     if (!strncmp(s->svmode, "?D", 2)) {
         return "0000\r";
@@ -1429,7 +1428,6 @@ static bool ata_disc_control(void *opaque, const char *action,
     return true;
 }
 
-/* QOM replaces the old input-socket disc command. */
 static char *ata_disc_get(Object *obj, Error **errp)
 {
     char note[PATH_MAX + 64] = "";

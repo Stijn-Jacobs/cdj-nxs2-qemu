@@ -6,8 +6,8 @@
  * `E-7001: DISC DRIVE ERROR` is device 6 in the status array, raised when the
  * chip is not on the bus.  The window was first found out of the `-d unimp`
  * log of an ordinary run -- MAIN writes 0xfff0001c with 0xA0, 0xEC and 0xA1
- * (PACKET, IDENTIFY DEVICE, IDENTIFY PACKET DEVICE) and polls it.  The NXS
- * symbols name the whole block (`.sdk/symbols/main.tsv`):
+ * (PACKET, IDENTIFY DEVICE, IDENTIFY PACKET DEVICE) and polls it.  The
+ * CDJ-2000NXS MAIN symbols name the whole block:
  *
  *   task file, one register per 32-bit word (channel stride 60, channel 0 only)
  *     +0x00 data            +0x10 byte count low     +0x1c status / command
