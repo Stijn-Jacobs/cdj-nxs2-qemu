@@ -48,8 +48,8 @@ def test_production_segment_clock_and_delivery(tmp_path):
 typedef void (*CdjNetsimFrameFn)(void *, const uint8_t *, unsigned);
 typedef struct { int64_t expires; } QEMUTimer;
 typedef struct { bool halted; } CPUState;
-static CPUState cpu;
-#define CPU_FOREACH(c) for (c = &cpu; c; c = NULL)
+static CPUState stub_cpu;
+#define CPU_FOREACH(c) for (c = &stub_cpu; c; c = NULL)
 static bool cpu_has_work(CPUState *c) { return false; }
 static int64_t host = 1000000;
 static int64_t get_clock(void) { return host; }
@@ -153,9 +153,9 @@ int main(int argc, char **argv) {
     ns.timer = timer_new_ns(0, NULL, NULL);
     /* Running CPU only promises now, not an idle jump into the future. */
     assert(netsim_promise(netsim_now()) == netsim_now());
-    cpu.halted = true;
+    stub_cpu.halted = true;
     assert(netsim_promise(netsim_now()) == netsim_now());
-    cpu.halted = false;
+    stub_cpu.halted = false;
     netsim_step(NULL);
     assert(ns.ceiling == ns.timer->expires);
     assert(ns.ceiling <= ns.peer_promise + ns.quantum);
