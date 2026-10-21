@@ -17,7 +17,7 @@ import subprocess
 import sys
 import time
 
-from . import chain, host, sites, snapshot
+from . import chain, dsp_module, host, sites, snapshot
 from . import model as cdj_model
 from .chain import export_default, ifset, nonempty
 from .layout import Layout
@@ -319,7 +319,7 @@ class Deck:
                 dirs[:] = sorted(n for n in dirs if n != "__pycache__")
                 sources += [os.path.join(d, n) for n in sorted(names)]
         # A different audio device or DSP module is a different machine too.
-        module = [p for p in env.get("C66X_JIT", "").split(";" if host.is_windows() else ":") if os.path.isfile(p)]  # every module in the chain
+        module = dsp_module.chain_files(env)
         root = snapshot.root(self.lay.tmp, [self.main_qemu, self.gui_qemu, media_src] + images + sources + module,
                              ",".join(mods) + " " + env.get("CDJ_AUDIODEV", ""))
         env["SNAPSHOT_ROOT"] = host.native(root)

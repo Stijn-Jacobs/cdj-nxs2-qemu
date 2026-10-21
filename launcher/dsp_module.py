@@ -41,8 +41,17 @@ def paths(path):
     return [path] + ([extra] if os.path.isfile(extra) else [])
 
 
+def _chain_sep():
+    return ";" if host.is_windows() else ":"
+
+
 def native_chain(path):
-    return (";" if host.is_windows() else ":").join(host.native(p) for p in paths(path))
+    return _chain_sep().join(host.native(p) for p in paths(path))
+
+
+def chain_files(env):
+    """The modules C66X_JIT names that exist, in load order."""
+    return [p for p in env.get("C66X_JIT", "").split(_chain_sep()) if os.path.isfile(p)]
 
 
 def _constant(path, pattern):

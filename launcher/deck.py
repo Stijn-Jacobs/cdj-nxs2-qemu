@@ -143,9 +143,7 @@ def plan_snapshot(lay, m, argv, env):
     kernel = argv[argv.index("-kernel") + 1]
     files = [argv[0], kernel] + [env[k] for k in ("CDJ_BF531_UPD", "CDJ_M16C_GUI") if k in env] + [lay.usb_image]
     # The sound device and the DSP module shape the machine as well.
-    for path in env.get("C66X_JIT", "").split(";" if host.is_windows() else ":"):
-        if os.path.isfile(path):
-            files.append(path)
+    files += dsp_module.chain_files(env)
     audio = argv[argv.index("-audio") + 1] if "-audio" in argv else ""
     point_dir = os.path.join(snapshot.root(lay.tmp, files, env.get("MAIN_ARGS", "") + " " + audio), point)
     if snapshot.saved(point_dir, ("main.vm",)):
