@@ -48,7 +48,6 @@
 #define LINK_UNIT       16
 #define LINK_BUFFER     0x800
 #define LINK_QUEUE      64
-#define LINK_QFRAME     128     /* the Blackfin answers at most 128 bytes */
 
 #define DMA_CTRL        0x1028
 #define DMA_STATUS      0x1188
@@ -71,9 +70,10 @@ typedef struct LinkPort {
     qemu_irq ser_irq;
     unsigned units;
     uint32_t reg[LINK_WINDOW / 4];
-    /* Answers that land while the receive is not armed, or its last
-     * frame not yet retired, wait here in order instead of being dropped. */
-    uint8_t q[LINK_QUEUE * LINK_QFRAME];
+    /* With pacing on, answers that land while the receive is not armed, or
+     * its last frame not yet retired, wait here in order instead of being
+     * dropped. */
+    uint8_t q[LINK_QUEUE * LINK_BUFFER];
     uint32_t q_len[LINK_QUEUE];
     uint32_t q_head, q_count;
     uint64_t q_dropped;
@@ -209,10 +209,14 @@ static void fault_report(LinkPort *p)
     info_report("display link: fault delivered case=%s original=%u delivered=%u applied=1",link_fault.name,link_fault.original_length,link_fault.delivered_length);
 }
 
-/* SPORT1 runs at 2.891 Mbit/s (TCLKDIV=16 at 98.304 MHz SCLK): a frame cannot
- * land sooner after the one before than its own bits take on the wire.
- * CDJ_LINK_RX_GAP_US=<us> replaces that with a fixed minimum gap. */
+/* CDJ_LINK_RX_PACE=1 queues the display's answers and paces them at wire
+ * rate. SPORT1 runs at 2.891 Mbit/s (TCLKDIV=16 at 98.304 MHz SCLK): a frame
+ * cannot land sooner after the one before than its own bits take on the wire.
+ * CDJ_LINK_RX_GAP_US=<us> paces with a fixed minimum gap instead, and implies
+ * the queue. Without either an answer is written at once, and dropped when
+ * the receive DMA is not armed. */
 #define LINK_WIRE_BPS   2891294
+static bool link_rx_paced;
 static int64_t link_gap_us = -1;
 static uint64_t link_gap_deferrals;
 static uint32_t link_tx_delay_us;
@@ -382,7 +386,7 @@ static void link_rx_pump(LinkPort *p)
 
         p->q_head = (h + 1) % LINK_QUEUE;
         p->q_count--;
-        link_deliver(p, p->q + h * LINK_QFRAME, p->q_len[h]);
+        link_deliver(p, p->q + h * LINK_BUFFER, p->q_len[h]);
     }
 }
 
@@ -396,6 +400,15 @@ void cdj2000_display_link_receive(const uint8_t *pkt, size_t len)
     LinkPort *p = &link_rx;
     uint32_t t;
 
+    if (!link_rx_paced) {
+        if (!(p->reg[DMA_CTRL / 4] & CTRL_START)) {
+            warn_report("display link: answer of %zu bytes dropped, receive DMA "
+                        "not armed", len);
+            return;
+        }
+        link_deliver(p, pkt, len);
+        return;
+    }
     if (p->q_count == LINK_QUEUE) {
         /* Fail loud: a dropped link frame is a broken run. */
         if (!p->q_dropped++) {
@@ -405,8 +418,8 @@ void cdj2000_display_link_receive(const uint8_t *pkt, size_t len)
         p->q_count--;
     }
     t = (p->q_head + p->q_count++) % LINK_QUEUE;
-    memcpy(p->q + t * LINK_QFRAME, pkt, MIN(len, LINK_QFRAME));
-    p->q_len[t] = MIN(len, LINK_QFRAME);
+    memcpy(p->q + t * LINK_BUFFER, pkt, MIN(len, LINK_BUFFER));
+    p->q_len[t] = MIN(len, LINK_BUFFER);
     link_rx_pump(p);
 }
 
@@ -438,8 +451,8 @@ static void link_write(void *opaque, hwaddr off, uint64_t val, unsigned size)
     switch (off / 4) {
     case DMA_CTRL / 4:
         if (p == &link_tx && (p->tx_pending || p->fault_delivering)) {
-            // A reset/restart cannot replace a captured delayed packet. Keep
-            // the original owner and restore its busy bit until it completes.
+            /* A reset/restart cannot replace a captured delayed packet. Keep
+             * the original owner and restore its busy bit until it completes. */
             p->reg[DMA_CTRL / 4] |= CTRL_START;
             if (p->tx_refused != UINT64_MAX) { p->tx_refused++; }
             if (p->tx_pending) {
@@ -525,10 +538,11 @@ static void link_port_init(LinkPort *p, MemoryRegion *sysmem, const char *name,
     memory_region_add_subregion(sysmem, base, &p->iomem);
 }
 
-static bool link_tx_delay_parse(const char *text, uint32_t *delay_us)
+/* Decimal microseconds 0..50000; unset is 0. */
+static bool link_us_parse(const char *text, uint32_t *us)
 {
     uint32_t n = 0;
-    if (!text) { *delay_us = 0; return true; }
+    if (!text) { *us = 0; return true; }
     if (!*text) { return false; }
     for (; *text; text++) {
         if (*text < '0' || *text > '9') { return false; }
@@ -536,7 +550,7 @@ static bool link_tx_delay_parse(const char *text, uint32_t *delay_us)
         if (n > 5000 || (n == 5000 && d != 0)) { return false; }
         n = n * 10 + d;
     }
-    *delay_us = n;
+    *us = n;
     return true;
 }
 
@@ -550,7 +564,7 @@ static bool link_fault_configure(const char *name,const char *report)
     uint32_t ppi=0;
     const char *cap=getenv("CDJ_LINK_CAPTURE");
     if (!kind || link_tx_delay_us || getenv("CDJ_LINK_RX_GAP_US") ||
-        !link_tx_delay_parse(getenv("CDJ_BF531_PPI_DELAY_US"),&ppi) || ppi ||
+        !link_us_parse(getenv("CDJ_BF531_PPI_DELAY_US"),&ppi) || ppi ||
         getenv("CDJ_BF531_PPI_DELAY_COUNT") || (cap && !strcmp(cap,report))) {return false;}
     FILE *f=fopen(report,"wx");
     if (!f) {return false;}
@@ -565,8 +579,14 @@ void cdj2000_display_link_init(MemoryRegion *sysmem, qemu_irq rx, qemu_irq tx,
                                qemu_irq tx_ser)
 {
     const char *gap = getenv("CDJ_LINK_RX_GAP_US");
-    if (!link_tx_delay_parse(getenv("CDJ_LINK_TX_DELAY_US"), &link_tx_delay_us)) {
+    uint32_t gap_us;
+
+    if (!link_us_parse(getenv("CDJ_LINK_TX_DELAY_US"), &link_tx_delay_us)) {
         error_report("display link: CDJ_LINK_TX_DELAY_US must be decimal 0..50000");
+        exit(1);
+    }
+    if (!link_us_parse(gap, &gap_us)) {
+        error_report("display link: CDJ_LINK_RX_GAP_US must be decimal 0..50000");
         exit(1);
     }
 
@@ -594,8 +614,9 @@ void cdj2000_display_link_init(MemoryRegion *sysmem, qemu_irq rx, qemu_irq tx,
         }
     }
     if (gap) {
-        link_gap_us = strtoll(gap, NULL, 10);
+        link_gap_us = gap_us;
     }
+    link_rx_paced = gap || getenv("CDJ_LINK_RX_PACE");
     link_port_init(&link_rx, sysmem, "sh7763.display-rx", 0xFF400000,
                    0x1018, rx, NULL);
     link_port_init(&link_tx, sysmem, "sh7763.display-tx", 0xFF500000,

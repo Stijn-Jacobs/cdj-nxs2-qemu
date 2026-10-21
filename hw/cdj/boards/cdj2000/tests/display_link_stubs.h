@@ -55,6 +55,7 @@ static void test_log(bool error,const char *format,...)
 }
 #define info_report(...) test_log(false,__VA_ARGS__)
 #define error_report(...) test_log(true,__VA_ARGS__)
+#define warn_report(...) test_log(false,__VA_ARGS__)
 static inline int g_strcmp0(const char *a,const char *b) {return a?strcmp(a,b):-1;}
 static inline uint32_t extract32(uint32_t v,unsigned shift,unsigned bits) {return (v>>shift)&(UINT32_MAX>>(32-bits));}
 static inline uint32_t deposit32(uint32_t old,unsigned shift,unsigned bits,uint32_t v)

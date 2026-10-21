@@ -215,12 +215,12 @@ int main(int argc,char **argv)
 {
     assert(argc==1 || argc==2);if (argc==2) {test_out=argv[1];}
     uint32_t parsed=99;
-    assert(link_tx_delay_parse(NULL,&parsed) && parsed==0);
-    assert(link_tx_delay_parse("0",&parsed) && parsed==0);
-    assert(link_tx_delay_parse("50000",&parsed) && parsed==50000);
+    assert(link_us_parse(NULL,&parsed) && parsed==0);
+    assert(link_us_parse("0",&parsed) && parsed==0);
+    assert(link_us_parse("50000",&parsed) && parsed==50000);
     for (unsigned i=0;i<8;i++) {
         const char *bad[]={"","-1","+1"," 1","1 ","50001","9999999999999999999999","1us"};
-        parsed=17;assert(!link_tx_delay_parse(bad[i],&parsed) && parsed==17);
+        parsed=17;assert(!link_us_parse(bad[i],&parsed) && parsed==17);
     }
     fresh(0);start();assert(deliveries==1 && delivered_len[0]==64);
     for (unsigned i=0;i<64;i++) {assert(delivered[0][i]==(uint8_t)i);}
