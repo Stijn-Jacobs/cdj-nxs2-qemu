@@ -1,7 +1,21 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 /* SH7764 SDHI, ported from cdj2000-emulator's firmware-derived TMIO model.
  * QEMU's sd-card supplies SD/SDSC/SDHC command and raw-block semantics.
- * See docs/sd-model.md for the observed driver contract and limitations. */
+ *
+ * CDJ_SD_IMAGE=<raw image> attaches the card; without it the empty-slot stub
+ * and its VMState stay. The image size picks SDSC (up to 2 GiB) or SDHC and
+ * must be a power of two. The card goes in CDJ_SD_INSERT seconds of virtual
+ * time after reset (default 20, 0 = not until asked), so the stock driver's
+ * absent-to-present mount gate can arm; a configured card also closes the lid
+ * contact. "qom-set /machine/sdhi card insert|eject" (monitor or QMP) inserts
+ * or ejects it at run time. CDJ_SDHI_TRACE=1 logs the SD commands.
+ *
+ * What the stock driver relies on: 16-bit TMIO registers, W0C status,
+ * inverted interrupt masks, one 512-byte FIFO by PIO or DMA (read channel 5,
+ * write 4), block-counted transfers with automatic CMD12, and 20 us of
+ * virtual time before each RXRDY/TXRQ. Acknowledging RXRDY/TXRQ does not
+ * drain the FIFO; consuming a block schedules the next. SDIO, UHS and
+ * electrical or CRC faults are not modelled. */
 #include "sh7763.h"
 #include "hw/sd/sd.h"
 #include "hw/qdev-properties.h"
