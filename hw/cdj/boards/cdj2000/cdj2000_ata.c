@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Pioneer CDJ-2000 / CDJ-2000NXS disc drive: the SH7764 ATAPI host controller
  * with its DMA engine, and the slot-in drive behind it.
@@ -39,7 +40,6 @@
  * fixed 10 us per block, like the SD and USB models).
  *
  * Copyright (C) 2026 LycheeAPPF
- * SPDX-License-Identifier: GPL-2.0-or-later
  */
 
 #include "qemu/osdep.h"

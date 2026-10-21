@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Pioneer CDJ-2000 / CDJ-2000NXS disc drive: the SH7764 ATAPI host controller
  * and the slot-in drive behind it.
@@ -32,7 +33,6 @@
  * Without media, the drive remains present with an empty slot.
  *
  * Copyright (C) 2026 LycheeAPPF
- * SPDX-License-Identifier: GPL-2.0-or-later
  */
 #ifndef CDJ2000_ATA_H
 #define CDJ2000_ATA_H
