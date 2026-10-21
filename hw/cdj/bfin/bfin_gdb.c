@@ -52,8 +52,7 @@ static uint32_t reg_get(bfin_gdb *g, unsigned n)
     if (n == PC_REGNUM) {
         return bfin_get_pc(g->core);
     }
-    reg_map(n, &grp, &reg);
-    return bfin_get_reg(g->core, grp, reg);
+    return reg_map(n, &grp, &reg) ? 0 : bfin_get_reg(g->core, grp, reg);
 }
 
 static int reg_set(bfin_gdb *g, unsigned n, uint32_t v)
