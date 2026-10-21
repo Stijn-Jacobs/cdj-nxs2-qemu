@@ -826,12 +826,12 @@ static void cdj_usb_realize(DeviceState *dev, Error **errp)
 static const VMStateDescription vmstate_cdj_usb = {
     .name = "cdj-usb",
     .version_id = 2,
-    .minimum_version_id = 2,
+    .minimum_version_id = 1,
     .fields = (const VMStateField[]) {
-        VMSTATE_BOOL(armed_before, CdjUsbState),
         VMSTATE_TIMER_PTR(attach_timer, CdjUsbState),
         CDJ_VMSTATE_SPAN(CdjUsbState, attached, port_pipe),
         CDJ_VMSTATE_SPAN(CdjUsbState, pipecfg, reg),
+        VMSTATE_BOOL_V(armed_before, CdjUsbState, 2),
         VMSTATE_END_OF_LIST()
     }
 };
