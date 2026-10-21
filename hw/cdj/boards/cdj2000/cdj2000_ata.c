@@ -49,6 +49,7 @@
 #include "exec/memory.h"
 
 #include "cdj2000_ata.h"
+#include "cdj_common.h"
 #include "cdj_getenv.h"
 #include "hw/boards.h"
 #include "qapi/error.h"
@@ -490,6 +491,7 @@ typedef struct CdjAta {
     int mech;
     QEMUTimer *mech_timer;
     char svmode[64];
+    GByteArray *disc_path, *mouth_path;     /* only while saving or loading */
 } CdjAta;
 
 #define TYPE_CDJ2000_ATAPI "cdj2000-atapi"
@@ -1463,6 +1465,108 @@ static void ata_disc_set(Object *obj, const char *value, Error **errp)
     }
 }
 
+/*
+ * The snapshot holds the discs' paths, not their images: a restore opens
+ * them again and fails if one is gone.
+ */
+static int ata_pre_save(void *opaque)
+{
+    CdjAta *s = opaque;
+
+    if (s->disc) {
+        s->disc_path = g_byte_array_append(g_byte_array_new(),
+                                           (const guint8 *)s->disc->path,
+                                           strlen(s->disc->path));
+    }
+    if (s->mouth) {
+        s->mouth_path = g_byte_array_append(g_byte_array_new(),
+                                            (const guint8 *)s->mouth->path,
+                                            strlen(s->mouth->path));
+    }
+    return 0;
+}
+
+static int ata_post_save(void *opaque)
+{
+    CdjAta *s = opaque;
+
+    g_clear_pointer(&s->disc_path, g_byte_array_unref);
+    g_clear_pointer(&s->mouth_path, g_byte_array_unref);
+    return 0;
+}
+
+static bool ata_reopen(GByteArray *saved, CdjDisc **d)
+{
+    g_autofree char *path = NULL;
+    char *err = NULL;
+
+    *d = NULL;
+    if (!saved || !saved->len) {
+        return true;
+    }
+    path = g_strndup((const char *)saved->data, saved->len);
+    *d = cdj_disc_open(path, &err);
+    if (!*d) {
+        error_report("cdj2000-ata: the saved disc cannot be opened: %s", err);
+        g_free(err);
+        return false;
+    }
+    return true;
+}
+
+static int ata_post_load(void *opaque, int version_id)
+{
+    CdjAta *s = opaque;
+    bool ok;
+
+    cdj_disc_free(s->disc);
+    cdj_disc_free(s->mouth);
+    ok = ata_reopen(s->disc_path, &s->disc) &&
+         ata_reopen(s->mouth_path, &s->mouth);
+    ata_post_save(s);
+    return ok ? 0 : -EINVAL;
+}
+
+static const VMStateDescription vmstate_cdj2000_ata = {
+    .name = "cdj2000-atapi",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .pre_save = ata_pre_save,
+    .post_save = ata_post_save,
+    .post_load = ata_post_load,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT32_ARRAY(reg, CdjAta, CDJ_ATA_CHIP_SIZE / 4),
+        VMSTATE_UINT32(latched, CdjAta),
+        VMSTATE_BOOL(dma_active, CdjAta),
+        VMSTATE_UINT32(dma_addr, CdjAta),
+        VMSTATE_UINT32(dma_left, CdjAta),
+        VMSTATE_TIMER_PTR(dma_timer, CdjAta),
+        CDJ_VMSTATE_SPAN(CdjAta, feature, devctl),
+        VMSTATE_BOOL(intrq, CdjAta),
+        VMSTATE_UINT32(phase, CdjAta),
+        VMSTATE_BOOL(packet, CdjAta),
+        VMSTATE_BOOL(dma, CdjAta),
+        VMSTATE_UINT8_ARRAY(cdb, CdjAta, 12),
+        VMSTATE_UINT32(cdb_len, CdjAta),
+        VMSTATE_UINT32(len, CdjAta),
+        VMSTATE_UINT32(pos, CdjAta),
+        VMSTATE_UINT32(chunk_left, CdjAta),
+        VMSTATE_UINT32(limit, CdjAta),
+        VMSTATE_VBUFFER_UINT32(buf, CdjAta, 0, NULL, len),
+        VMSTATE_UINT8(sense_key, CdjAta),
+        VMSTATE_UINT8(asc, CdjAta),
+        VMSTATE_UINT8(ascq, CdjAta),
+        VMSTATE_UINT32(action, CdjAta),
+        VMSTATE_TIMER_PTR(cmd_timer, CdjAta),
+        VMSTATE_INT32(mech, CdjAta),
+        VMSTATE_TIMER_PTR(mech_timer, CdjAta),
+        CDJ_VMSTATE_SPAN(CdjAta, svmode, svmode),
+        CDJ_VMSTATE_BYTES(disc_path, CdjAta),
+        CDJ_VMSTATE_BYTES(mouth_path, CdjAta),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static void ata_instance_init(Object *obj)
 {
     CdjAta *s = (CdjAta *)obj;
@@ -1516,6 +1620,7 @@ void cdj2000_ata_init(MemoryRegion *system, qemu_irq irq)
     object_property_add_child(OBJECT(qdev_get_machine()), "cdj-atapi", obj);
     object_unref(obj);
     s->irq = irq;
+    vmstate_register_any(NULL, &vmstate_cdj2000_ata, s);
     memory_region_init_io(&s->taskfile, obj, &ata_tf_ops, s,
                           "cdj2000.ata", CDJ_ATA_SIZE);
     memory_region_add_subregion(system, CDJ_ATA_BASE, &s->taskfile);
