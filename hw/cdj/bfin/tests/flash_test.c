@@ -23,7 +23,6 @@
 
 static int failures;
 static char *logbuf;
-static size_t logsz;
 static FILE *logstream;
 static bf531 *chip;
 static bf531_host host;
@@ -33,27 +32,27 @@ static bf531 *fresh(void)
     if (chip) {
         bf531_free(chip);
     }
-    /* Close the memstream before freeing its buffer: glibc only publishes
-     * the text on fflush/fclose of that stream, and fflush(NULL) does not
-     * reach it (the Linux failures of this test). */
     if (logstream) {
         fclose(logstream);
-        logstream = NULL;
     }
-    free(logbuf);
-    logbuf = NULL;
-    logsz = 0;
-    logstream = open_memstream(&logbuf, &logsz);
+    /* A temporary file, not open_memstream, which Windows does not have. */
+    logstream = tmpfile();
     chip = bf531_new(0x100000, &host, logstream);
     return chip;
 }
 
 static const char *logtext(void)
 {
-    if (logstream) {
-        fflush(logstream);
-    }
-    return logbuf ? logbuf : "";
+    long len;
+
+    fflush(logstream);
+    len = ftell(logstream);
+    free(logbuf);
+    logbuf = malloc(len + 1);
+    rewind(logstream);
+    logbuf[fread(logbuf, 1, len, logstream)] = '\0';
+    fseek(logstream, 0, SEEK_END);
+    return logbuf;
 }
 
 static uint32_t rd(uint32_t a) { return bf531_bus_read(chip, BASE + a, 2); }
