@@ -159,18 +159,6 @@ EOF
     echo "patched hw/sh4/Kconfig"
 fi
 
-# Older installed trees predate the optional SDHI card backend.
-python3 - "$Q/hw/sh4/Kconfig" <<'PYSD'
-import pathlib, sys
-p = pathlib.Path(sys.argv[1])
-s = p.read_text()
-a = s.index('config CDJ_COMMON\n')
-b = s.index('\nconfig ', a + 1)
-if '    select SD\n' not in s[a:b]:
-    s = s[:b] + '    select SD\n' + s[b:]
-    p.write_text(s)
-PYSD
-
 echo
 echo "next:"
 echo "  cd $Q && ./configure --target-list=sh4-softmmu --disable-werror"
