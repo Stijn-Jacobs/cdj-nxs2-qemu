@@ -352,7 +352,8 @@ static void ctl_progress(CdjUsbf *s)
             s->e0commit = true;
         }
         if (s->e0commit && s->e0pid == PID_BUF) {
-            unsigned take = MIN(s->e0tx_n, wlen - s->resp_n);
+            unsigned take = MIN(MIN(s->e0tx_n, wlen - s->resp_n),
+                                sizeof(s->resp) - s->resp_n);
             bool end = s->e0end;
 
             memcpy(s->resp + s->resp_n, s->e0tx, take);
