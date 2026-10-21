@@ -39,12 +39,12 @@ def main():
     # Take clock inputs from the board actually installed by the patch workflow.
     board = (ROOT / "hw/cdj/boards/cdj2000/board.c").read_text()
     clock_defines = "\n".join(re.findall(
-        r'^#define (?:CDJ2000NXS_PERIPH_HZ|SH7763_FRQCR_BOOT)\s+\S+',
+        r'^#define (?:CDJ2000NXS_PERIPH_HZ|CDJ2000NXS_FRQCR_BOOT|SH7763_FRQCR_BOOT)\s+\S+',
         board, re.M))
     nxs = board[board.index("static const CdjBoardDesc cdj2000nxs_board"):
                 board.index("static const CdjBoardDesc cdj2000_board")]
     assert ".periph_hz = CDJ2000NXS_PERIPH_HZ" in nxs
-    assert "{ 0x00, SH7763_FRQCR_BOOT }" in board
+    assert ".frqcr = CDJ2000NXS_FRQCR_BOOT" in nxs
     program = r'''
 #include <glib.h>
 #include <assert.h>
@@ -253,11 +253,12 @@ static unsigned stock_tick_rate(uint32_t hz, uint32_t frqcr, bool pioneer)
 static void board_clock_test(void)
 {
     assert(CDJ2000NXS_PERIPH_HZ == 26965000 * 12 / 6);
-    assert(SH7763_FRQCR_BOOT == 0x40320044);
+    assert(SH7763_FRQCR_BOOT == 0x30000000);
+    assert(CDJ2000NXS_FRQCR_BOOT == 0x40320044);
     assert(stock_tick_rate(54000000, 0x30000000, false) == 1200);
     assert(stock_tick_rate(54000000, 0x30000000, true) == 1000);
-    assert(stock_tick_rate(CDJ2000NXS_PERIPH_HZ, SH7763_FRQCR_BOOT, false) == 998);
-    assert(stock_tick_rate(CDJ2000NXS_PERIPH_HZ, SH7763_FRQCR_BOOT, true) == 998);
+    assert(stock_tick_rate(CDJ2000NXS_PERIPH_HZ, CDJ2000NXS_FRQCR_BOOT, false) == 998);
+    assert(stock_tick_rate(CDJ2000NXS_PERIPH_HZ, CDJ2000NXS_FRQCR_BOOT, true) == 998);
     /* Owned runtime TMU2 free-run, TMU1 one-shot: both use Pphi/4.
      * Its counts*2/27 conversion deliberately assumes nominal 54 MHz. */
     now = 0; IRQ irq = {0};

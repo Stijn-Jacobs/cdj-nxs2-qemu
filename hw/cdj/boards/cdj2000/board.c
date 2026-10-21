@@ -24,10 +24,13 @@
  * 0x042C5B7E and never writes it: top nibble 3 (mode 2) gives TMU0 a period
  * of 11250 counts, anything else 13500. The mode straps set FRQCR, and the
  * NXS strap is mode 3 (reset value 0x40320044, SH7764 hardware manual
- * table 10.2). NXS X2 is 26.965 MHz, PLL x12, Pphi /6: 53.93 MHz. */
+ * table 10.2). NXS X2 is 26.965 MHz, PLL x12, Pphi /6: 53.93 MHz. The
+ * CDJ-2000 and CDJ-900 keep 0x30000000 and 54 MHz until their straps are
+ * read. */
 #define SH7763_PERIPH_HZ    54000000
+#define SH7763_FRQCR_BOOT   0x30000000
 #define CDJ2000NXS_PERIPH_HZ 53930000
-#define SH7763_FRQCR_BOOT   0x40320044
+#define CDJ2000NXS_FRQCR_BOOT 0x40320044
 
 #define CDJ2000_USBH_BASE   0xFE400000
 
@@ -55,6 +58,7 @@ static const CdjBoardDesc cdj2000nxs_board = {
     .sr_seed_slot = 0x04D13694,
     .sr_seed = 0x400000F0,
     .periph_hz = CDJ2000NXS_PERIPH_HZ,
+    .frqcr = CDJ2000NXS_FRQCR_BOOT,
     .ccn_trace_lo = 0x640,              /* DMAC DMTE0..DMTE3 */
     .ccn_trace_hi = 0x6A0,
     .exit_report = cdj_sh7763_intc_report,
@@ -125,8 +129,8 @@ void sh7763_board_init(MachineState *machine, const CdjBoardDesc *desc,
     SuperHCPU *cpu = cdj_board_init(machine, desc);
     qemu_irq *irq;
     bool display;
-    static const CdjRegInit cpg[] = {
-        { 0x00, SH7763_FRQCR_BOOT },
+    const CdjRegInit cpg[] = {
+        { 0x00, desc->frqcr ? desc->frqcr : SH7763_FRQCR_BOOT },
         { 0 },
     };
 
