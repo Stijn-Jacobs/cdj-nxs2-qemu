@@ -577,11 +577,10 @@ static uint32_t mem_read(bf531 *s, uint32_t addr, unsigned size);
 /* ---- the flash ---------------------------------------------------------- */
 
 /*
- * 2 MiB, x16, AMD/JEDEC command set (CFI cmdset 0x0002), one erase region of
- * 32 sectors of 64 KiB. Written from the command-set description, not from
- * any other simulator. The ID pair is that of a 16 Mbit AMD-compatible x16
- * part (manufacturer 0x0001, device 0x2249); drivers that care read the CFI
- * table instead.
+ * 2 MiB, x16, AMD/JEDEC command set (CFI cmdset 0x0002), top boot: 31
+ * sectors of 64 KiB, then 8 of 8 KiB (see FL_BOOT). Written from the
+ * command-set description, not from any other simulator. The ID pair is
+ * FL_ID_MAN/FL_ID_DEV below; drivers that care read the CFI table instead.
  *
  * Reads: in read-array mode the core reads the flash array directly (a ROM
  * bank); in every other mode (autoselect, CFI query, a program or erase in
