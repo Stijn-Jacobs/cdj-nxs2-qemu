@@ -59,6 +59,10 @@ static const CdjBoardDesc cdj2000nxs_board = {
     .sr_seed = 0x400000F0,
     .periph_hz = CDJ2000NXS_PERIPH_HZ,
     .frqcr = CDJ2000NXS_FRQCR_BOOT,
+    /* Stock MAIN's updater gives up on media ~3 s after it starts and finds
+     * a stick present at power-on ~0.2-0.3 s before that; a 500 ms first
+     * attach sent it down its no-media path (phase_saved 0x80). */
+    .usb_attach_at_boot = true,
     .ccn_trace_lo = 0x640,              /* DMAC DMTE0..DMTE3 */
     .ccn_trace_hi = 0x6A0,
     .exit_report = cdj_sh7763_intc_report,
