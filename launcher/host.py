@@ -195,6 +195,16 @@ def pick_udp_port(wanted):
     return wanted if p == -1 else p
 
 
+def pick_udp_block(wanted, count):
+    """`wanted`, or the next base below it where wanted .. wanted+count-1 are
+    all unreserved: one panel key port per deck."""
+    ranges = windows_reserved_ranges("udp")
+    for base in range(wanted, wanted - 2000, -1):
+        if not any(in_ranges(base + i, ranges) for i in range(count)):
+            return base
+    return wanted
+
+
 def pick_port_block(base, count):
     """`base`, or the next one where base .. base+count-1 are all free and
     unreserved: the app's one VNC port per deck."""

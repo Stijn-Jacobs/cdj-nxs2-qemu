@@ -136,7 +136,7 @@ show the firmware interface, not a claim of feature parity.
 | **Interface** | | | | | | | | |
 | Touch screen | ✅ | ✅ | ✅ | ✅ | ➖ | ➖ | ➖ | ➖ |
 | **Pro DJ Link** | | | | | | | | |
-| Link with other players | ✅ | ❌<sup>6</sup> | ❌<sup>6</sup> | ❌<sup>6</sup> | ❌<sup>6</sup> | ⚠️<sup>7</sup> | ❌<sup>6</sup> | ❌<sup>6</sup> |
+| Link with other players | ✅ | ✅ | ❌<sup>6</sup> | ❌<sup>6</sup> | ❌<sup>6</sup> | ✅ | ❌<sup>6</sup> | ✅ |
 
 Firmware: CDJ-2000NXS2 1.87, XDJ-1000MK2 1.45, XDJ-700 1.15, XDJ-1000 1.13, CDJ-900NXS 1.31, CDJ-2000NXS 1.44, CDJ-900 4.32, CDJ-2000 4.33.
 
@@ -146,7 +146,6 @@ Firmware: CDJ-2000NXS2 1.87, XDJ-1000MK2 1.45, XDJ-700 1.15, XDJ-1000 1.13, CDJ-
 4. Loops engage in only some runs.
 5. The slipped playback is not checked yet.
 6. Only one deck can be started so far.
-7. Announces itself; browsing not checked yet.
 
 </details>
 <!-- feature-matrix:end -->
@@ -602,6 +601,8 @@ only the mods made for it.
 | [`usb_midi`](mods/usb_midi/README.md) | MIDI clock and Start/Stop over the rear USB-B port, so a DAW or drum machine follows the deck. |
 | [`ableton_link`](mods/ableton_link/README.md) | Joins Ableton Link, so Live or any Link app follows the deck's tempo and beat. |
 | [`tcnet`](mods/tcnet/README.md) | A TCNet Master node, so ShowKontrol, Resolume and other TCNet receivers follow the deck. |
+| [`gate_cue`](mods/gate_cue/README.md) | Gate Cue, CDJ-3000 style: from pause, a hot cue pad plays only while held and letting go returns to the cue. |
+| [`beat_jump_long`](mods/beat_jump_long/README.md) | Long beat jumps, CDJ-3000 style: the 2 and 4 beat jump keys jump 32 and 64 beats. |
 
 **XDJ-700**
 
@@ -626,8 +627,8 @@ what the deck boots into, not how it behaves once it is up.
 
 ### Patching a real firmware update
 
-`three_band`, `phrase`, `osc`, `usb_midi`, `ableton_link`, `tcnet`
-and `track_filter` are firmware code patches, not emulator knobs: the launcher applies the display ones to a copy of
+`three_band`, `phrase`, `osc`, `usb_midi`, `ableton_link`, `tcnet`,
+`gate_cue`, `beat_jump_long` and `track_filter` are firmware code patches, not emulator knobs: the launcher applies the display ones to a copy of
 the display image at boot (`mods/patch_gui.py`) and the MAIN ones to a copy of
 the MAIN image (`mods/patch_main.py`), the same code a real update would carry.
 `mods/patch_update.py` makes the same patches to a real Pioneer `.UPD` file, so

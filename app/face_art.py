@@ -200,8 +200,8 @@ class FaceArt(ART.Art):
     def jog_sprite(self, phase):
         return self._centred(self._nxs2(self.jog[2], L.JOG[2]).jog_sprite(phase), *self.jog[:2])
 
-    def centre_sprite(self, ring, live):
-        return self._centred(self._nxs2(self.jog[2], L.JOG[2]).centre_sprite(ring, live),
+    def centre_sprite(self, live):
+        return self._centred(self._nxs2(self.jog[2], L.JOG[2]).centre_sprite(live),
                              *self.jog[:2])
 
     def select_sprite(self, phase, down):

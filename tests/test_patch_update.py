@@ -283,7 +283,7 @@ def build_upd(*sections):
 
 def test_registry_only_lists_firmware_patchable_mods():
     reg = patch_update.registry("cdj2000nxs2")
-    assert set(reg) == set(patch_gui.MODS) | set(patch_main.MODS)
+    assert set(reg) == set(patch_gui.MODS) | set(patch_gui.TABLES) | set(patch_main.MODS) | set(patch_main.TABLES)
     # the emulator-only knobs must never appear here
     assert "high_fps" not in reg and "live_clock" not in reg
     assert "three_band" not in reg          # that row's key, not the mod names

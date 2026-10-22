@@ -53,17 +53,19 @@ import main_encode
 
 # The MAIN patches of each model: the routines its mod folders declare, placed
 # the way its player's profile says.
-PATCH_SETS = {model: sigpatch.PatchSet(modelfw.player(model).MAIN_PROFILE, mods)
+PATCH_SETS = {model: sigpatch.patch_set(modelfw.player(model).MAIN_PROFILE, mods)
               for model, mods in modelfw.declared_mods('main').items()}
 MODS = PATCH_SETS[modelfw.DEFAULT_MODEL].mods
+TABLES = PATCH_SETS[modelfw.DEFAULT_MODEL].tables
 
 
 def mods_for(model):
-    return PATCH_SETS[model].mods if model in PATCH_SETS else {}
+    """Every patch of `model`: its routines, and the rewrites of bytes the firmware already has."""
+    return {**PATCH_SETS[model].mods, **PATCH_SETS[model].tables} if model in PATCH_SETS else {}
 
 
 def every_mod():
-    return {name for patches in PATCH_SETS.values() for name in patches.mods}
+    return {name for model in PATCH_SETS for name in mods_for(model)}
 
 
 def source(name, model=modelfw.DEFAULT_MODEL):

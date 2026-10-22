@@ -36,6 +36,7 @@ changes nothing and a missing mod can be added to it.
 """
 import collections
 import hashlib
+import os
 import re
 import struct
 
@@ -96,9 +97,34 @@ FreeEnd = collections.namedtuple('FreeEnd', 'delta')
 #               span; the span is moved into a trampoline shared by every
 #               selected hook mod with the same sig/start/end, which runs it
 #               once and then calls each hook -- see trampoline().
+# after         names of hook mods on the same span whose routines must run
+#               before this one when both are selected; hooks without such a
+#               constraint run in alphabetical order
 Mod = collections.namedtuple(
-    'Mod', 'what target fw_versions sig start end args literal hook imports',
-    defaults=(False, ()))
+    'Mod', 'what target fw_versions sig start end args literal hook imports after',
+    defaults=(False, (), ()))
+
+
+# A patch that rewrites bytes the firmware reads as data (the USB descriptors,
+# say) instead of calling a routine placed beside it.
+# old, new  the stock bytes and what replaces them, of the same length; `count`
+#           places in the window hold `old`
+Edit = collections.namedtuple('Edit', 'old new count', defaults=(1,))
+
+# what, target, fw_versions as in Mod
+# table     bytes that occur exactly once in the image and are not themselves
+#           edited, so a patched image is still found
+# before    where the window the edits are searched in starts, in bytes
+#           before the table
+# reach     the window's length
+# edits     a tuple of Edit, or a function of the environment that returns one
+#           (what a patch takes from the person applying it, such as a PID)
+# kind      'site' (the default) for a rewrite of firmware code, which the
+#           validator holds to a call site's size; 'data' for a block of bytes
+#           the firmware reads as data (a USB descriptor), which may be large
+#           but is still checked against the boot-critical code closure
+DataPatch = collections.namedtuple('DataPatch', 'what target fw_versions table before reach edits kind',
+                                   defaults=('site',))
 
 
 def is_pcrel_load(op):
@@ -539,13 +565,25 @@ def site_key(mod):
 
 def hook_sites(mods):
     """{(sig, start, end): names} for the hook mods of a registry, names in
-    registry (alphabetical) order -- the order a trampoline calls them in."""
+    the order a trampoline calls them in: alphabetical, with each hook moved
+    behind the ones it names in `after`."""
     sites = {}
     for name in sorted(mods):
         mod = mods[name]
         if mod.hook:
             sites.setdefault(site_key(mod), []).append(name)
-    return sites
+    return {key: call_order(names, mods) for key, names in sites.items()}
+
+
+def call_order(names, mods):
+    ordered, waiting = [], list(names)
+    while waiting:
+        ready = next((n for n in waiting if not any(a in waiting for a in mods[n].after)), None)
+        if ready is None:
+            raise SystemExit('hooks %s each wait for another to run first' % ', '.join(waiting))
+        ordered.append(ready)
+        waiting.remove(ready)
+    return ordered
 
 
 def literal_pool_reads(img):
@@ -605,25 +643,39 @@ def trampoline_size(key, hooks):
                           [0] * hooks, 0, 0))
 
 
-# The patches of one model's image: its ImageProfile and the registry of mods.
-PatchSet = collections.namedtuple('PatchSet', 'profile mods')
+# The patches of one model's image: its ImageProfile, the routines of the mods
+# (placed in the image, and so laid out together) and the DataPatches (rewrites
+# of bytes already there).
+PatchSet = collections.namedtuple('PatchSet', 'profile mods tables', defaults=({},))
+
+
+def patch_set(profile, declared):
+    """The PatchSet of the patches a model's mod folders declare."""
+    return PatchSet(profile,
+                    {n: p for n, p in declared.items() if isinstance(p, Mod)},
+                    {n: p for n, p in declared.items() if isinstance(p, DataPatch)})
 
 
 def patch_model(sets, blob_path, data, names, model, tag, report=None, spans=None):
-    """patch() with the PatchSet `sets` holds for `model`. A mod the model has
-    no patch for is reported as not applied; an image with none gets back as
-    it is."""
+    """patch() with the PatchSet `sets` holds for `model`, then its DataPatches.
+    A mod the model has no patch for is reported as not applied; an image with
+    none gets back as it is."""
     report = {} if report is None else report
     found = sets.get(model)
-    known = found.mods if found else {}
+    known = {**found.mods, **found.tables} if found else {}
     for name in names:
         if name not in known:
             report[name] = ('skipped', 'no patch for %s' % model)
             print('%s: %s not applied: no patch for %s' % (tag, name, model))
     if not any(name in known for name in names):
         return bytes(data)
-    return patch(found.profile, lambda name: blob_path(name, model), data, known,
-                 [n for n in names if n in known], tag=tag, report=report, spans=spans)
+    out = bytes(data)
+    if any(n in found.mods for n in names):
+        out = patch(found.profile, lambda name: blob_path(name, model), data, found.mods,
+                    [n for n in names if n in found.mods], tag=tag, report=report, spans=spans)
+    if any(n in found.tables for n in names):
+        out = patch_tables(out, found.tables, [n for n in names if n in found.tables], tag, report, spans)
+    return out
 
 
 def read_blobs(blob_path, mods):
@@ -873,3 +925,64 @@ def patch(profile, blob_path, data, mods, names, tag='sigpatch', report=None, sp
     elif not profile.loadtab_n:
         print('%s: %d bytes reserved in place at %#x' % (tag, total, dest))
     return bytes(img.d)
+
+
+def edit_runs(old, new):
+    """(offset, size) of the stretches where two equal-length byte strings
+    differ, joined across gaps shorter than three bytes the way validate.py
+    reads them back."""
+    runs = []
+    for i, (a, b) in enumerate(zip(old, new)):
+        if a != b:
+            if runs and i - sum(runs[-1]) < 3:
+                runs[-1] = (runs[-1][0], i + 1 - runs[-1][0])
+            else:
+                runs.append((i, 1))
+    return runs
+
+
+def occurrences(window, probe):
+    found, at = [], window.find(probe)
+    while at >= 0:
+        found.append(at)
+        at = window.find(probe, at + len(probe))
+    return found
+
+
+def patch_tables(data, tables, names, tag, report, spans):
+    """Apply the DataPatch `tables[name]` for each name to data. A patch whose
+    table is not found exactly once, or whose window holds neither all of the
+    stock bytes nor all of the new ones, is left out and reported; one whose
+    window already holds the new bytes is 'present'. Written ranges go to
+    `spans` as 'site', since each is a few bytes of the image that existed."""
+    img = bytearray(data)
+    spans = {} if spans is None else spans
+    for name in names:
+        table = tables[name]
+        hits = occurrences(bytes(img), table.table)
+        if len(hits) != 1:
+            report[name] = ('skipped', 'table found %d times' % len(hits))
+            print('%s: %s not applied: table found %d times' % (tag, table.what, len(hits)))
+            continue
+        lo = hits[0] - table.before
+        window = bytes(img[lo:lo + table.reach])
+        edits = table.edits(os.environ) if callable(table.edits) else table.edits
+        stock = [len(occurrences(window, e.old)) for e in edits]
+        done = [len(occurrences(window, e.new)) for e in edits]
+        if all(n == e.count for n, e in zip(done, edits)):
+            report[name] = ('present', '')
+            print('%s: %s already applied' % (tag, table.what))
+            continue
+        if not all(n == e.count for n, e in zip(stock, edits)):
+            why = 'the bytes to change are not what this firmware has'
+            report[name] = ('skipped', why)
+            print('%s: %s not applied: %s' % (tag, table.what, why))
+            continue
+        patched = window
+        for e in edits:
+            patched = patched.replace(e.old, e.new)
+        img[lo:lo + len(patched)] = patched
+        spans.setdefault(name, []).extend((lo + off, size, table.kind) for off, size in edit_runs(window, patched))
+        report[name] = ('applied', '')
+        print('%s: %s rewritten at %#x' % (tag, table.what, lo))
+    return bytes(img)

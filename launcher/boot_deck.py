@@ -19,7 +19,7 @@ import time
 
 from . import chain, dsp_module, host, sites, snapshot
 from . import model as cdj_model
-from .chain import export_default, ifset, nonempty
+from .chain import append_mpoke, export_default, hold_wire_mac, ifset, nonempty
 from .layout import Layout
 
 
@@ -30,10 +30,6 @@ def _monsock(lay):
     finally:
         sys.path.remove(lay.run)
     return cdj_monsock
-
-
-def _append_mpoke(env, spec):
-    env["CDJ_MPOKE"] = env["CDJ_MPOKE"] + "," + spec if env.get("CDJ_MPOKE") else spec
 
 
 class Deck:
@@ -113,14 +109,12 @@ class Deck:
             own_mac = sites.find(lay, profile).get("own_mac")
         if own_mac is not None:
             if not env.get("OWNMAC") and env.get("CDJ_ETHER_MAC"):
-                for i, b in enumerate(env["CDJ_ETHER_MAC"].split(":")):
-                    if i == 5 or int(b, 16) != 0:
-                        _append_mpoke(env, "0x%08X:0x%s:1" % (own_mac + i, b))
+                hold_wire_mac(env, own_mac)
                 self.notes.append((1, "[%s] own MAC 0x%08X held to the wire address %s (OWNMAC=0 to leave it)"
                                    % (tag, own_mac, env["CDJ_ETHER_MAC"])))
             else:
                 om = nonempty(env, "OWNMAC", n)
-                _append_mpoke(env, "0x%08X:%s:1" % (own_mac + 5, om))
+                append_mpoke(env, "0x%08X:%s:1" % (own_mac + 5, om))
                 self.notes.append((1, "[%s] own MAC byte 0x%08X held at %s (OWNMAC=0 to leave it)"
                                    % (tag, own_mac + 5, om)))
         if env.get("CDJ_AUDIODEV"):

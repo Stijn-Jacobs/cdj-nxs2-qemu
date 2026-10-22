@@ -156,9 +156,6 @@ def rig_env(env, tag, ndecks, frames):
     #                    QEMU's socket backend carries one frame per datagram.
     #  CDJ_ETHER_PHYADS  0,1,5. The link-up gate is link_status(0) | link_status(1).
     #  CDJ_ETHER_MAC     a distinct MAC per deck (%N% = deck number).
-    #  CDJ_PCALL2        wakes the ether worker, which waits in twai_flg, with
-    #                    iset_flg(42, 0x50000001). The pattern needs a bit in
-    #                    0xFC000000 or the worker goes straight back to waiting.
     # The deck will not announce without a DHCP lease, so a DHCP server runs
     # as long as the rig.
     export_default(env, "DJLINK", "1")
@@ -182,9 +179,6 @@ def rig_env(env, tag, ndecks, frames):
         export_default(env, "CDJ_NETDEV", netdev)
         export_default(env, "CDJ_ETHER_PHYADS", "0,1,5")
         env["CDJ_ETHER_MAC"] = ifset(env, "CDJ_ETHER_MAC", "02:00:00:00:00:0%N%")
-        if found.has("pcall_pc", "set_flag"):
-            export_default(env, "CDJ_PCALL2", "0x%08X:0x%08X:0x2a:0x50000001:0x0"
-                           % (found.get("pcall_pc"), found.get("set_flag")))
         if nonempty(env, "DJLINK_DHCP", "1") != "1":
             dhcp = None
         say("[%s] Pro DJ Link ON: %s, MAC %s, leases -> /tmp/cdj-%s-dhcpd.log" % (tag, where, env["CDJ_ETHER_MAC"], tag))

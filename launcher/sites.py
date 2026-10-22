@@ -20,7 +20,6 @@ from . import firmware, model
 # is missing.
 OFF = (
     (("load_poke_pc", "load_poke_addr"), "the load poke: the loader may stall waiting for the file layer"),
-    (("pcall_pc", "set_flag"), "the Pro DJ Link start call: the player may not announce itself"),
     (("own_mac",), "the firmware's own MAC hold: two decks may not settle their device numbers"),
     (("colour_capability",), "the colour capability byte: the display may stay in its monochrome mode"),
     (("deck_ready",), "the wait for the deck-ready word before the first key"),

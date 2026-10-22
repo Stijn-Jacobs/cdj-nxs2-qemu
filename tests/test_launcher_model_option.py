@@ -374,8 +374,8 @@ def test_start_app_builds_the_older_decks_app_command(tmp_path, monkeypatch):
     monkeypatch.setattr(start.host, "pick_port_block", lambda want, n: want)
     monkeypatch.setattr(start.host, "pick_udp_port", lambda want: want)
     got = []
-    monkeypatch.setattr(start.deck, "start", lambda m, env, dry, app_cmd: got.append((env, app_cmd)) or 0)
-    start._start_deck(lay, m, {"CDJ_DJLINK": "0", "CDJ_GROUP": "", "CDJ_AUDIO": "0", "CDJ_NAME": "show",
+    monkeypatch.setattr(start.deck, "start", lambda m, env, dry, app_cmd, decks: got.append((env, app_cmd)) or 0)
+    start._start_deck(lay, m, {"CDJ_DECKS": "1", "CDJ_DJLINK": "0", "CDJ_GROUP": "", "CDJ_AUDIO": "0", "CDJ_NAME": "show",
                                "QEMU_BUILD": "", "QEMU_EB_BUILD": ""}, True, True)
     env, app_cmd = got[0]
     assert env["GUI_DISPLAY"] == "vnc=127.0.0.1:21"

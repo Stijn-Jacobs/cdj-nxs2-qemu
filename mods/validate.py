@@ -69,6 +69,10 @@ LABEL_SIZE = 32
 EMERGENCY_OFF = 0x10000
 MAX_SITE_BYTES = 32
 KNOWN_GUI_SITES = ('wave3', 'wave3ov', 'phrase')
+# Byte rewrites of display code that is equally off the boot path: the detail
+# waveform message (0x37) handler runs only when MAIN sends a loaded track's
+# waveform.
+KNOWN_GUI_TABLES = ()
 VECTOR_COPY_DEST = 0xFFF84000
 RECORD_BYTES = 12
 SHOWN = 8
@@ -603,7 +607,8 @@ def load_records(img, profile):
 
 def known_gui_sites(stock_img, profile):
     """Byte ranges of the display image where a mod may rewrite code: the three
-    sites patch_gui.py ships, found in the stock image by their instructions.
+    routine sites patch_gui.py ships, found in the stock image by their
+    instructions, and the bytes of the known rewrites.
     All three are inside pixel renderers (the centre waveform's RGB branch and
     the overview strip's column decode and column loop), which the display
     task runs only when it draws a waveform, long after the load table, the
@@ -615,6 +620,11 @@ def known_gui_sites(stock_img, profile):
         mod = patch_gui.MODS[name]
         for at in sigpatch.sig_hits(image, mod.sig):
             ranges.append((at + 2 * mod.start, at + 2 * mod.end))
+    shipped = [name for name in KNOWN_GUI_TABLES if name in patch_gui.TABLES]
+    spans = {}
+    sigpatch.patch_tables(stock_img, patch_gui.TABLES, shipped, 'validate', {}, spans)
+    for name in shipped:
+        ranges += [(lo, lo + size) for lo, size, _ in spans.get(name, [])]
     return ranges
 
 

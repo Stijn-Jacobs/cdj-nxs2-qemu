@@ -9,7 +9,9 @@
 #include "cdj_common.h"
 
 /*
- * Maps the EtherMAC at base (MemoryRegion name = name) and attaches irq.
+ * Maps the EtherMAC at base (MemoryRegion name = name) and attaches irq. phy_irq
+ * is the PHY's INT# pin, the INTC's IRQ5 on the SH7724 boards (NULL where it is
+ * not wired): the firmware's handler for it enables the MAC.
  * mdio_ta_default is this board's read-turnaround lead-in (see
  * cdj_ether_mdio_ta() in cdj_ether.c): 0 for the NXS2, 1 for the SH7763
  * boards. CDJ_ETHER_MDIO_TA still overrides either. lmon_low is the polarity
@@ -19,6 +21,7 @@
  * (CDJ_ETHER_*), so nothing else is board-specific.
  */
 void cdj_ether_init(MemoryRegion *sysmem, const char *name, hwaddr base,
-                    qemu_irq irq, unsigned mdio_ta_default, bool lmon_low);
+                    qemu_irq irq, qemu_irq phy_irq, unsigned mdio_ta_default,
+                    bool lmon_low);
 
 #endif

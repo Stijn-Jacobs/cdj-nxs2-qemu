@@ -37,6 +37,19 @@ def export_default(env, name, default):
     env[name] = nonempty(env, name, default)
 
 
+def append_mpoke(env, spec):
+    env["CDJ_MPOKE"] = env["CDJ_MPOKE"] + "," + spec if env.get("CDJ_MPOKE") else spec
+
+
+def hold_wire_mac(env, own_mac):
+    """Holds the player's own MAC (the six bytes at own_mac) to CDJ_ETHER_MAC,
+    so the address in its Pro DJ Link packets is the one on the wire. Only
+    non-zero bytes and byte 5 are held: CDJ_MPOKE has 8 slots."""
+    for i, b in enumerate(env["CDJ_ETHER_MAC"].split(":")):
+        if i == 5 or int(b, 16) != 0:
+            append_mpoke(env, "0x%08X:0x%s:1" % (own_mac + i, b))
+
+
 def unset(env, *names):
     for n in names:
         env.pop(n, None)

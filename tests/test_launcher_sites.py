@@ -13,7 +13,7 @@ EMU = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if EMU not in sys.path:
     sys.path.insert(0, EMU)
 
-from launcher import boot_decks, host, instrumented_batch, model, play_real_dsp, rig, sites  # noqa: E402
+from launcher import boot_decks, firmware, host, instrumented_batch, model, play_real_dsp, rig, sites  # noqa: E402
 
 REAL_MAIN = os.path.join(EMU, "..", "extract", "main_unpacked.bin")
 needs_real_main = pytest.mark.skipif(not os.path.exists(REAL_MAIN), reason="extract/main_unpacked.bin not present")
@@ -22,7 +22,6 @@ needs_real_main = pytest.mark.skipif(not os.path.exists(REAL_MAIN), reason="extr
 NXS2_187 = {
     "load_poke_pc": 0x082F04D8,
     "load_poke_addr": 0x0994CC18,
-    "pcall_pc": 0x08345574,
     "set_flag": 0x08516448,
     "own_mac": 0x0A35F754,
     "deck_ready": 0x0B5125B8,
@@ -63,11 +62,12 @@ def test_an_image_without_the_sites_leaves_every_poke_out(tmp_path):
     assert found.sr_seed_slot() == "0"
 
 
-def test_a_player_with_no_launcher_sites_is_warned_about_none_of_them(tmp_path):
+def test_a_player_with_only_its_own_mac_site_is_warned_about_that_one(tmp_path):
     xdj700 = model.load("xdj700")
     found = sites.find(layout_with(tmp_path, bytes(0x40000), xdj700), xdj700)
-    assert not found.pinned and found.values == {}
-    assert found.switched_off(xdj700) == [sites.UNPINNED_DSP_IDLE]
+    assert not found.pinned and found.values == {"own_mac": None}
+    own_mac_off = next(what for names, what in sites.OFF if names == ("own_mac",))
+    assert found.switched_off(xdj700) == [own_mac_off, sites.UNPINNED_DSP_IDLE]
 
 
 def test_an_image_run_in_place_of_the_installed_one_is_pinned_by_its_own_hash(tmp_path, monkeypatch):
@@ -185,14 +185,27 @@ def test_the_signatures_find_the_supported_addresses_in_the_supported_image(tmp_
     assert values == NXS2_187
 
 
-# The SR seed slots the SH7763 boards (hw/cdj/boards/cdj2000, cdj900) default to.
-SH7763_SR_SLOTS = {"cdj2000": 0x04FC45F0, "cdj2000nxs": 0x04D13694, "cdj900": 0x04FC287C}
+# What the older players' launcher anchors find in their stock MAIN image: the
+# SR seed slot the SH7763 boards (hw/cdj/boards/cdj2000, cdj900) default to,
+# and the buffer the firmware keeps its own MAC in.
+OLDER_STOCK = {
+    "cdj2000": {"sr_save_slot": 0x04FC45F0, "own_mac": 0x04C0878C},
+    "cdj2000nxs": {"sr_save_slot": 0x04D13694, "own_mac": 0x04CF2498},
+    "cdj900": {"sr_save_slot": 0x04FC287C, "own_mac": 0x04C06398},
+    "cdj900nxs": {"own_mac": 0x0A4DEA6C},
+    "xdj1000": {"own_mac": 0x0D2BE5C0},
+    "xdj1000mk2": {"own_mac": 0x0C7A491C},
+    "xdj700": {"own_mac": 0x0A8BE5F4},
+}
 
 
-@pytest.mark.parametrize("model_id", sorted(SH7763_SR_SLOTS))
-def test_the_sh7763_decks_find_their_boards_seed_slot_in_their_stock_image(model_id):
-    path = os.path.join(EMU, "..", model.load(model_id).extract, "main_unpacked.bin")
+@pytest.mark.parametrize("model_id", sorted(OLDER_STOCK))
+def test_the_older_decks_find_their_sites_in_their_stock_image(model_id):
+    m = model.load(model_id)
+    path = os.path.join(EMU, "..", m.extract, "main_unpacked.bin")
     if not os.path.exists(path):
         pytest.skip("%s not present" % path)
+    if firmware.installed_sha256(path) != firmware.stock_main_sha256(m):
+        pytest.skip("%s is not the supported update" % path)
     values = sites._found(os.path.abspath(path), 0, 0, EMU, model_id)
-    assert values == {"sr_save_slot": SH7763_SR_SLOTS[model_id]}
+    assert values == OLDER_STOCK[model_id]

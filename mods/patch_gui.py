@@ -46,20 +46,22 @@ sys.path.insert(0, HERE)
 import modelfw
 import sigpatch
 
-# The display firmware patches of each model: the routines its mod folders
-# declare. Only the CDJ-2000NXS2's display processor is covered; the older
-# decks' displays are not.
-PATCH_SETS = {model: sigpatch.PatchSet(modelfw.player(model).GUI_PROFILE, mods)
+# The display firmware patches of each model: the routines and byte rewrites
+# its mod folders declare. Only the CDJ-2000NXS2's display processor is
+# covered; the older decks' displays are not.
+PATCH_SETS = {model: sigpatch.patch_set(modelfw.player(model).GUI_PROFILE, mods)
               for model, mods in modelfw.declared_mods('gui').items()}
 MODS = PATCH_SETS[modelfw.DEFAULT_MODEL].mods
+TABLES = PATCH_SETS[modelfw.DEFAULT_MODEL].tables
 
 
 def mods_for(model):
-    return PATCH_SETS[model].mods if model in PATCH_SETS else {}
+    """Every patch of `model`: its routines, and the rewrites of bytes the firmware already has."""
+    return {**PATCH_SETS[model].mods, **PATCH_SETS[model].tables} if model in PATCH_SETS else {}
 
 
 def every_mod():
-    return {name for patches in PATCH_SETS.values() for name in patches.mods}
+    return {name for model in PATCH_SETS for name in mods_for(model)}
 
 
 def source(name, model=modelfw.DEFAULT_MODEL):

@@ -104,11 +104,45 @@ PLAYER_RECORDS = (0x0A371D3C, Anchor(sig=[0xE749, 0x016A, 0x4708, 0xD977, 0x07E7
 # data the firmware reaches only through a base a little before it
 OVERVIEW_SLOT = (0x0B569528, Anchor(sig=[0x056A, 0x61E2, 0x52E1, 0xE60E, 0xDE54, 0x4618], index=4, literal=True, delta=0x8))
 
+# -- MAIN sites and addresses of the HID report path, used by more than one mod --
+
+# The entry of the host-report router 0x084F9504: its five register pushes and
+# its frame, which the hook trampoline runs before the hooks look at the
+# report. The router hands the report to the handshake handler 0x084FD262
+# while the deck is not authenticated, to the report dispatchers once it is.
+# The handler's own entry is in the boot-critical set; this is not.
+REPORT_ROUTER_ENTRY = dict(
+    sig=[0x2FB6, 0x2FC6, 0x2FD6, 0x2FE6, 0x4F22, 0x7FA4, 0xD646, 0x6C53, 0x6262, 0x2228, 0x8F08, 0x6E43],
+    start=0,
+    end=6,
+)
+
+# The HID OUT task's read of a report, after the count it returns is checked.
+HIDO_READ_DONE = dict(
+    sig=[0x4E0B, 0x66D2, 0x016A, 0x88FB, 0xDE3D, 0x6503, 0x21E9, 0x8D2F, 0x416A],
+    start=2,
+    end=7,
+)
+
+# The HID OUT task's 128-byte report buffer, as its start-up code loads it.
+HIDO_BUFFER = (0x0BD50FDC, Anchor(sig=[0xD21F, 0xE001, 0xD722, 0xE440, 0xD11F, 0xD521, 0x2B42, 0xE404],
+                                  index=4, literal=True))
+# The HID OUT task's state word, 2 while it hands reports to the router.
+HIDO_STATE = (0x0BD50E90, Anchor(sig=[0x2CE9, 0x4C6A, 0x7F10, 0xDB5E, 0x64B2, 0x6043, 0x8801, 0x8B0D],
+                                 index=3, literal=True))
+# The handshake's authentication word.
+HS_AUTH = (0x0BD4B144, Anchor(sig=[0xD215, 0x420B, 0x6462, 0xD614, 0xE201, 0xA07B], index=3, literal=True))
+# The report framework (r4 = report, r5 = length): per-type records, appended at
+# each record's running count, completed at the last fragment.
+REPORT_FRAMEWORK = (0x084F9DB2, Anchor(sig=[0x2F86, 0x2F96, 0x2FA6, 0x2FB6, 0x2FC6, 0x2FD6, 0x2FE6, 0x4F22,
+                                            0x4F12, 0x7FE0, 0x8441, 0xE125], index=0, literal=False))
+# The stock beat grid record (count at +16), as the grid completion loads it.
+BEAT_GRID = (0x0BF5BFFC, Anchor(sig=[0xDC7C, 0xED00, 0xE014, 0x58C3, 0x28D1, 0x5AC3], index=0, literal=True))
+
 # -- what the launcher pokes while it runs the player (launcher/sites.py) ------
 
 LAUNCHER = dict(
     load_poke_pc=Anchor(sig=[0xAFDD, 0x426A, 0xE094, 0x600C, 0x02EE, 0x2228], index=4, literal=False),       # 0x082F04D8 the loader's wait branch
-    pcall_pc=Anchor(sig=[0x4F22, 0xDE08, 0x60E2, 0xC801, 0x8B05], index=0, literal=False),                    # 0x08345574 the Pro DJ Link start call
     set_flag=Anchor(sig=[0x60D3, 0xDE69, 0xE501, 0xD773, 0x2219, 0x426A], index=3, literal=True),             # 0x08516448 sets an event flag
     load_poke_addr=Anchor(sig=[0x6EF6, 0x000B, 0x6DF6, 0xDE38, 0xE1AC], index=3, literal=True, delta=0x94),   # 0x0994CC18 the loader's state word
     own_mac=Anchor(sig=[0x000B, 0x006E, 0xD26D, 0x63F2, 0x51F1], index=2, literal=True),                      # 0x0A35F754 the player's own MAC

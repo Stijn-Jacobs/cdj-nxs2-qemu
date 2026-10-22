@@ -205,7 +205,10 @@ void sh7763_board_init(MachineState *machine, const CdjBoardDesc *desc,
      * base; its MDIO read routine needs one extra turnaround lead-in bit
      * (static trace only, not yet confirmed against a live MDIO read). */
     cdj_ether_init(sysmem, "sh7763.ether", 0xFEF00000,
-                  cdj_count_irq(irq[S63_GETHER0], "GETHER0"), 1, true);
+                  cdj_count_irq(irq[S63_GETHER0], "GETHER0"), NULL, 1, true);
+    /* The launcher holds each deck's own MAC in RAM with CDJ_MPOKE, so two
+     * linked decks do not both announce the blank flash's address. */
+    cdj_mpoke_init();
     cdj2000_sdhi_init(sysmem, cdj_count_irq(irq[S63_SDHI], "SDHI"),
                       cdj_count_irq(irq[S63_DMTE5], "DMAC DMTE5"));
     if (auth_chip) {

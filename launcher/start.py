@@ -317,6 +317,11 @@ def _start_deck(lay, player, c, dry, app=False):
         env["NOSOUND"] = "1"
     if not _offer_rebuild(lay, env, dry):
         return 1
+    decks = 2 if c["CDJ_DECKS"] == "2" else 1
+    if app and decks > 1:
+        # The app sends every key to the one panel port it is given.
+        say("the virtual deck app drives one older deck so far; starting the %d plain windows" % decks)
+        app = False
     app_cmd = []
     if app:
         app_py = _app_python(lay, c)
@@ -333,7 +338,7 @@ def _start_deck(lay, player, c, dry, app=False):
         app_cmd = app_py + [os.path.join(lay.emu, "app", "virtual_deck.py"), "--model", player.app_face,
                             "--decks", "1", "--prefix", c["CDJ_NAME"], "--vnc-base", str(vnc_base),
                             "--panel-port", env["CDJ_PANEL_KEYSOCK"]]
-    return deck.start(player, env, dry, app_cmd)
+    return deck.start(player, env, dry, app_cmd, decks)
 
 
 def _shown(argv):

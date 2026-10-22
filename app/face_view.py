@@ -98,7 +98,7 @@ class FaceDeckView:
         self.screen.set_views({"face": self.lcd_size})
         self._draw_jog()
         self._draw_cap()
-        img, pos = self.art.centre_sprite(False, False)
+        img, pos = self.art.centre_sprite(False)
         self.centre = (gfx.surface(img), pos)
         self.warm = list(range(1, ART.Art.JOG_PHASES))
         self._draw_select(False)

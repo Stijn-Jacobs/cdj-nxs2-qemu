@@ -51,6 +51,9 @@ enum {
 /* PIPECFG 15:14 TYPE (0 = pipe unused), bit 8 CNTMD. */
 #define CDJ_USBF_TYPE    0xC000
 #define CDJ_USBF_CNTMD   0x0100
+/* PIPECFG bit 9 DBLB: two buffers for the pipe; without it a transmitting
+ * pipe cannot be written until the host has taken the packet. */
+#define CDJ_USBF_DBLB    0x0200
 /* PIPEnCTR: bit 14 INBUFM, bit 9 ACLRM, bits 8 and 7 SQCLR/SQSET (write
  * only). PID bit 1 set is STALL. */
 #define CDJ_USBF_INBUFM  0x4000
@@ -167,6 +170,18 @@ static void cdj_usbf_pipe_clear(CdjUsbfPipe *p)
     p->len = p->pos = 0;
     p->sie_len = p->sie_pos = 0;
     p->closed = p->sie_valid = false;
+}
+
+/* May the FIFO port write the pipe? FRDY follows this. */
+static bool cdj_usbf_writable(CdjUsbfState *s, unsigned pipe)
+{
+    CdjUsbfPipe *p = &s->pipe[pipe];
+
+    if (p->closed) {
+        return false;
+    }
+    return !(pipe && cdj_usbf_transmits(s, pipe) && p->sie_valid &&
+             !(s->pipecfg[pipe] & CDJ_USBF_DBLB));
 }
 
 /* The buffer on the FIFO side is complete: hand it to the bus side, or leave
@@ -477,7 +492,7 @@ static uint64_t cdj_usbf_read(void *opaque, hwaddr off, unsigned size)
         unsigned pipe = s->port_pipe[port];
         CdjUsbfPipe *p = &s->pipe[pipe];
 
-        v = p->closed ? 0 : CDJ_USB_FRDY;
+        v = cdj_usbf_writable(s, pipe) ? CDJ_USB_FRDY : 0;
         if (!cdj_usbf_transmits(s, pipe)) {
             v |= (p->len - p->pos) & CDJ_USB_DTLN;
         }
@@ -488,7 +503,8 @@ static uint64_t cdj_usbf_read(void *opaque, hwaddr off, unsigned size)
                         ? 0 : (off - CDJ_USB_PIPECTR(1)) / 2 + 1;
         CdjUsbfPipe *p = &s->pipe[pipe];
 
-        if (cdj_usbf_transmits(s, pipe) ? !p->closed : p->pos < p->len) {
+        if (cdj_usbf_transmits(s, pipe) ? cdj_usbf_writable(s, pipe)
+                                        : p->pos < p->len) {
             v |= CDJ_USB_BSTS;
         }
         if (pipe && p->sie_valid) {
@@ -547,7 +563,7 @@ static void cdj_usbf_write(void *opaque, hwaddr off, uint64_t val,
         CdjUsbfPipe *p = &s->pipe[pipe];
         unsigned i;
 
-        for (i = 0; i < size && !p->closed; i++) {
+        for (i = 0; i < size && cdj_usbf_writable(s, pipe); i++) {
             p->fifo[p->len++] = (val >> (8 * i)) & 0xff;
             if (p->len == cdj_usbf_fill(s, pipe)) {
                 cdj_usbf_close(p);
@@ -574,7 +590,8 @@ static void cdj_usbf_write(void *opaque, hwaddr off, uint64_t val,
 
     port = cdj_usb_ctr_port(off);
     if (port >= 0) {
-        CdjUsbfPipe *p = &s->pipe[s->port_pipe[port]];
+        unsigned pipe = s->port_pipe[port];
+        CdjUsbfPipe *p = &s->pipe[pipe];
 
         if (val & CDJ_USB_BCLR) {
             p->len = p->pos = 0;
@@ -582,7 +599,7 @@ static void cdj_usbf_write(void *opaque, hwaddr off, uint64_t val,
         }
         /* BVAL ends a short buffer; on an empty one it is a zero-length
          * packet. */
-        if ((val & CDJ_USB_BVAL) && !p->closed) {
+        if ((val & CDJ_USB_BVAL) && cdj_usbf_writable(s, pipe)) {
             cdj_usbf_close(p);
         }
         cdj_usbf_update_irq(s);

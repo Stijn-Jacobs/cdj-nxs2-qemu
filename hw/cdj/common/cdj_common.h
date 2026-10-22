@@ -170,6 +170,9 @@ const char *cdj_getenv(const char *name);
 bool cdj_report_enabled(void);
 void cdj_add_exit_report(Notifier *n);
 
+/* The CDJ_MPOKE, CDJ_MCOPY, CDJ_MFILL and CDJ_LOADBIN memory holds. */
+void cdj_mpoke_init(void);
+
 /* Ask the host to run the calling thread on a performance core. */
 void cdj_thread_prefer_fast_core(void);
 #endif

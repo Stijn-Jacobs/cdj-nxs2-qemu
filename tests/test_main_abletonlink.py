@@ -164,8 +164,8 @@ class LinkCpu(UsbMidiCpu, OscCpu):
     """The usbmidi interpreter plus what the Link routines add, with the
     firmware's fixed addresses mapped onto scratch memory and the firmware
     functions they call replaced by recorders."""
-    WINDOWS = ((TICK, 0x3800, 4), (TCNT4, 0x3810, 8), (DEVICE, 0x3820, 1),
-               (CEP, 0x3830, 4), (POOL, 0x3840, 4))
+    WINDOWS = ((TICK, 0x8000, 4), (TCNT4, 0x8010, 8), (DEVICE, 0x8020, 1),
+               (CEP, 0x8030, 4), (POOL, 0x8040, 4))
 
     def __init__(self, image):
         Sh4.__init__(self, image, 0)

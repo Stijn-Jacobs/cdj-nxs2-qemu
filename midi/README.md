@@ -76,7 +76,7 @@ is exactly how the next one gets named.
     "left/cue":       {"action": "cue",          "deck": "cdjA"},
     "left/jog":       {"action": "jog",          "deck": "cdjA"},
     "left/tempo":     {"action": "tempo",        "deck": "cdjA"},
-    "left/pad_1":     {"action": "key_0x1a_0x01", "deck": "cdjA"},
+    "left/pad_1":     {"action": "hot_cue_a",    "deck": "cdjA"},
     "left/pad_8":     {"action": "touch_tap",    "deck": "cdjA", "x": 700, "y": 60},
     "left/load":      {"action": "set_focus",    "deck": "cdjA"},
     "right/load":     {"action": "set_focus",    "deck": "cdjB"},

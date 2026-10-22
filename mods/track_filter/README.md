@@ -6,6 +6,11 @@ only the tracks within 6 % of the BPM of the track loaded on the deck. Hold
 INFO again and the whole list is back. A deck with nothing loaded has no BPM to
 filter on, so the first hold does nothing until a track is loaded.
 
+<img src="../../docs/img/mods/track_filter.png" alt="The USB track list before and after a hold of INFO" width="640">
+
+*The track list of the test stick with a 205 BPM track loaded, before and after
+a hold of INFO: the 190 BPM track is gone.*
+
 | | |
 |---|---|
 | knob | `CDJ_MAIN_TRACKFILTER` |

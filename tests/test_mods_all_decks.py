@@ -131,6 +131,8 @@ def declarations():
 def test_a_mod_folder_holds_every_routine_it_declares():
     for folder, decl in declarations():
         for name, mod in decl.MODS.items():
+            if isinstance(mod, sigpatch.DataPatch):
+                continue
             for ext in (".s", ".bin"):
                 assert os.path.isfile(os.path.join(folder, "%s_%s%s" % (mod.target, name, ext))), (folder, name)
 
@@ -140,7 +142,7 @@ def test_no_two_mods_hand_words_over_in_the_same_bytes():
     for folder, decl in declarations():
         model = os.path.basename(folder)
         for mod in decl.MODS.values():
-            for _, source in mod.imports:
+            for _, source in getattr(mod, "imports", ()):
                 if isinstance(source, sigpatch.FreeEnd):
                     for b in range(source.delta, source.delta + 4):
                         assert owner.setdefault((model, b), folder) == folder, (folder, source)
@@ -175,7 +177,8 @@ needs_real = pytest.mark.skipif(not all(os.path.exists(p) for p in REAL.values()
 
 MAIN_ALL = ["wave3data", "wave3detail", "wave3ovdata", "wave3ovfetch", "phrasefetch", "phrasedata",
             "abletonlink", "abletonlinkpong", "osc", "oscbeat", "tcnet", "tcnettime", "tcnetdata",
-            "usbmidi", "usbmiditick"]
+            "usbmidi", "usbmiditick", "gatecue", "gatecuepress",
+            "beatjumplong"]
 
 # SHA-256 of what patch_main.py / patch_gui.py write for these selections. The
 # routines are laid out for the whole registry, so a new NXS2 MAIN routine
@@ -183,9 +186,13 @@ MAIN_ALL = ["wave3data", "wave3detail", "wave3ovdata", "wave3ovfetch", "phrasefe
 # with it and the display ones do not.
 PINNED = [
     ("main_unpacked.bin", patch_main, MAIN_ALL,
-     "8251fa2b78fc25679fc465ec24b27ae297980562d9ba2da5553a0e7f14c589c1"),
+     "b5bf4b8df8339cc7286979b1aac7bf6d76c259ecc6f2e07c647914dd6c7c2b6b"),
     ("main_unpacked.bin", patch_main, ["osc", "oscbeat"],
-     "514ef1f55efc4466c21e1c0c2581b67c2d340c257f0323746f6b6b9a7f1764c6"),
+     "73c54406c384bc042657ccc26565c53648b87d07e4beebf3fc110d228c454e8c"),
+    ("main_unpacked.bin", patch_main, ["gatecue", "gatecuepress"],
+     "62868dda790a74a8ea08d72f56eda4e891d64923eff9e0d1d79140aebd8beb10"),
+    ("main_unpacked.bin", patch_main, ["beatjumplong"],
+     "c44fe3b05df50cdbacbaebc7778adbe624609e0d29cfbddd1fc2ee12359fed63"),
     ("gui_unpacked.bin", patch_gui, ["wave3", "wave3ov", "phrase"],
      "82e9d514b2cff6ed608a851b0d3afd7574c9649b95db17992e651b9d525dafb4"),
     ("gui_unpacked.bin", patch_gui, ["wave3"],
@@ -481,7 +488,8 @@ def test_the_xdj700_track_filter_takes_the_shell_room_and_is_left_as_it_is_when_
 @needs_real
 def test_the_routines_follow_the_firmware_when_its_addresses_move():
     """Every literal an anchor reads is shifted, as if the functions and data
-    they name sat 0x1230 bytes further on; the last 0x100 bytes of the erased
+    they name sat 0x1230 bytes further on (an anchor that finds code by its
+    instructions is not moved); the last 0x100 bytes of the erased
     run are taken, as if the image ended earlier. The imported words of every
     routine follow, and the whole set still patches."""
     ps = patch_main.PATCH_SETS["cdj2000nxs2"]
@@ -502,7 +510,12 @@ def test_the_routines_follow_the_firmware_when_its_addresses_move():
         routine = sigpatch.routine_bytes(moved, mod, blob, site)
         for off, source in sigpatch.import_offsets(mod, blob, "<"):
             stock = next(v for v, s in mod.imports if s is source)
-            expected = stock - 0x100 if isinstance(source, sigpatch.FreeEnd) else stock + shift
+            if isinstance(source, sigpatch.FreeEnd):
+                expected = stock - 0x100
+            elif source.literal:
+                expected = stock + shift
+            else:
+                expected = stock    # a function found by its instructions, which stay where they are
             assert struct.unpack_from("<I", routine, off)[0] == expected, (name, hex(stock))
 
     report = {}

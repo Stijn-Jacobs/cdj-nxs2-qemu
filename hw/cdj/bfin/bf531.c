@@ -1478,10 +1478,13 @@ int bf531_load_update(bf531 *s, const uint8_t *img, size_t len)
     size_t off = 0x20;
 
     first_section(&img, &len);
-    if (len < off || len - off > FLASH_SIZE - FLASH_APP) {
+    if (len < off + 4 || len - off > FLASH_SIZE - FLASH_APP) {
         return -1;
     }
-    memcpy(s->flash + FLASH_APP, img + off, len - off);
+    /* The section ends in a 4-byte checksum the update tool checks; it is
+     * not flash content, and copying it put 0xED into the settings sector
+     * at 0x1FC000. */
+    memcpy(s->flash + FLASH_APP, img + off, len - off - 4);
     return ldr_boot(s, img, off, len);
 }
 
