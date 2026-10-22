@@ -34,10 +34,12 @@ FILES=(
     hw/sh4/meson.build
     hw/timer/sh_timer.c
     include/hw/sh4/sh_intc.h
+    include/sysemu/cpu-timers.h
     migration/file.c
     net/socket.c
     scripts/symlink-install-tree.py
     system/runstate.c
+    system/cpus.c
     target/sh4/cpu.c
     target/sh4/cpu.h
     target/sh4/helper.c

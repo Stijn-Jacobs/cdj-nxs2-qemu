@@ -1,0 +1,18 @@
+diff --git a/system/cpus.c b/system/cpus.c
+index 1c818ff..340c978 100644
+--- a/system/cpus.c
++++ b/system/cpus.c
+@@ -209,8 +209,13 @@ void cpu_exec_reset_hold(CPUState *cpu)
+     }
+ }
+ 
++int64_t (*board_virtual_clock)(void);
++
+ int64_t cpus_get_virtual_clock(void)
+ {
++    if (board_virtual_clock) {
++        return board_virtual_clock();
++    }
+     /*
+      * XXX
+      *
