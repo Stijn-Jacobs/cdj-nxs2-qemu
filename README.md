@@ -927,6 +927,20 @@ of `deck_smoke.py` it restores each deck's loaded point and checks that the
 playhead moves (`deck_smoke.py --snapshot`). The first run saves the points,
 so it takes as long as `decks2`; after that a deck takes a minute and a half.
 
+### Checking a modified image against stock
+
+```sh
+python scripts/test/mod_check.py --model cdj900nxs my_main.bin /tmp/check \
+    --allow 131,144,662,262
+```
+
+`mod_check.py` runs a modified MAIN image beside the installed stock one on a
+one-window deck, takes its pictures at the same points in both (idle, the
+browser, a cued track, the menus), and passes when the image matches stock
+outside the `--allow` regions the change is meant to touch.
+`<out>/summary.txt` gives a verdict per picture and `<out>/diff/` marks every
+difference; `mod_check.py --help` has the steps and the verdicts.
+
 <details>
 <summary><b>📁 Repository layout</b></summary>
 
@@ -952,7 +966,7 @@ so it takes as long as `decks2`; after that a deck takes a minute and a half.
 | `scripts/net/` | the Pro DJ Link segment: DHCP server, capture, capture scorer, `tempo_master.py` (a tempo master player the decks can sync to), and `tap_setup.ps1` for the [TAP adapter](#rekordbox-ableton) |
 | `midi/` | the MIDI controller bridge, controller profiles, mappings and the learn tool |
 | `app/` | the [virtual deck app](#virtual-deck): the drawn player around the emulated screen |
-| `tests/`, `scripts/test/` | the offline unit tests (`python -m pytest tests`, no firmware needed) and the quick check: `scripts/test/quick.sh` runs them beside a replay of DSP recordings and a headless boot of each deck to its first stable screen (`deck_smoke.py`), in a couple of minutes |
+| `tests/`, `scripts/test/` | the offline unit tests (`python -m pytest tests`, no firmware needed) and the quick check: `scripts/test/quick.sh` runs them beside a replay of DSP recordings and a headless boot of each deck to its first stable screen (`deck_smoke.py`), in a couple of minutes; `mod_check.py` compares a modified MAIN image's screens with stock |
 | `docs/img/` | the screenshots on this page |
 
 The board sources are copied into the QEMU tree on every build; edit them here,

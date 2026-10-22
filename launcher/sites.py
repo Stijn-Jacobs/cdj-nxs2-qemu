@@ -117,15 +117,27 @@ def _found(path, mtime_ns, size, emu, player_name):
     return values
 
 
-def find(lay, m=None):
+def _is_stock_main(path, m):
+    """`path` is the MAIN image the supported update of `m` unpacks to (a
+    profile that pins no image counts every image as that one)."""
+    want = dict((os.path.basename(rel), sha) for rel, sha in m.expected).get("main_unpacked.bin")
+    return want is None or firmware.installed_sha256(path) == want
+
+
+def find(lay, m=None, main=None):
     """The sites in the MAIN image installed for model `m` (the selected one
-    when None); none while no image is installed."""
+    when None), or in the image at `main`, a MAIN run in the installed one's
+    place (a modified one under test); none while no image is installed."""
     m = m or model.load()
     folder = model.extract_dir(lay, m)
     differ = firmware.differing_images(folder, m)
-    pinned = "main_unpacked.bin" not in differ
     gui_pinned = "gui_unpacked.bin" not in differ
-    path = os.path.join(folder, "main_unpacked.bin")
+    if main is None:
+        path = os.path.join(folder, "main_unpacked.bin")
+        pinned = "main_unpacked.bin" not in differ
+    else:
+        path = main
+        pinned = _is_stock_main(path, m)
     board_image = pinned
     if m.main_machine != m.id:
         machine_sha = firmware.stock_main_sha256(model.load(m.main_machine))

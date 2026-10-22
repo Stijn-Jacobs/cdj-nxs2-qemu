@@ -14,7 +14,7 @@ EMU = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if EMU not in sys.path:
     sys.path.insert(0, EMU)
 
-from launcher import conf, deck, dsp_module, model, rig, start  # noqa: E402
+from launcher import conf, deck, dsp_module, firmware, host, model, rig, start  # noqa: E402
 from launcher.console import Console  # noqa: E402
 from launcher.layout import Layout  # noqa: E402
 from launcher.setup import Options, Setup, parse_args  # noqa: E402
@@ -172,6 +172,28 @@ def test_cdj900_deck_gets_its_display_processor_flash(tree):
     assert m.images == ("main_unpacked.bin", "gui.flat")
     argv, env = deck.command(tree, m, {"MAIN_QEMU": "/q/qemu-system-sh4"})
     assert env["CDJ_M16C_GUI"].endswith("cdj900/gui.flat") and "CDJ_BF531_UPD" not in env
+
+
+def test_deck_runs_another_main_image_with_the_knobs_of_that_image(tree, tmp_path, monkeypatch):
+    m = model.load("cdj900nxs")
+    os.makedirs(os.path.join(tree.extract, "cdj900nxs"))
+    installed = os.path.join(tree.extract, "cdj900nxs", "main_unpacked.bin")
+    with open(installed, "wb") as f:
+        f.write(b"stock")
+    other = tmp_path / "under_test.bin"
+    other.write_bytes(b"modified")
+    # The installed image is the supported update's; the other one is not.
+    stock = firmware.stock_main_sha256(m)
+    real = firmware.installed_sha256
+    monkeypatch.setattr(firmware, "installed_sha256",
+                        lambda path: stock if os.path.normpath(path) == os.path.normpath(installed) else real(path))
+    env0 = {"MAIN_QEMU": "/q/qemu-system-sh4", "MODULE": "none"}
+    argv, env = deck.command(tree, m, env0)
+    assert argv[argv.index("-kernel") + 1] == host.native(installed) and env["CDJ_C6747_IDLE"] == m.dsp_idle
+    argv, env = deck.command(tree, m, env0, main=str(other))
+    assert argv[argv.index("-kernel") + 1] == host.native(str(other))
+    # The DSP idle-loop skip is only armed on the supported update's image.
+    assert "CDJ_C6747_IDLE" not in env
 
 
 def test_deck_without_a_display_board_plans_its_snapshot(tree, tmp_path):
