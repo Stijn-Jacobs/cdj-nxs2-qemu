@@ -704,6 +704,19 @@ version, and the display image's boot path (no call graph). Nothing here boots
 the file. A pass does not replace testing on a real deck, with a way back
 (the official file and service mode) at hand.
 
+**Then run it.** `mod_check.py` boots a modified MAIN image beside the
+installed stock one on a one-window deck, takes its pictures at the same points
+in both (idle, the browser, a cued track, the menus), and passes when the image
+matches stock outside the `--allow` regions the change is meant to touch:
+
+```sh
+python scripts/test/mod_check.py --model cdj900nxs my_main.bin /tmp/check \
+    --allow 131,144,662,262
+```
+
+`<out>/summary.txt` gives a verdict per picture and `<out>/diff/` marks every
+difference; `mod_check.py --help` has the steps and the verdicts.
+
 <a id="adding-a-mod"></a>
 
 ### Adding a mod
@@ -936,20 +949,6 @@ read-only-in-practice snapshot and comes back as the original file.
 of `deck_smoke.py` it restores each deck's loaded point and checks that the
 playhead moves (`deck_smoke.py --snapshot`). The first run saves the points,
 so it takes as long as `decks2`; after that a deck takes a minute and a half.
-
-### Checking a modified image against stock
-
-```sh
-python scripts/test/mod_check.py --model cdj900nxs my_main.bin /tmp/check \
-    --allow 131,144,662,262
-```
-
-`mod_check.py` runs a modified MAIN image beside the installed stock one on a
-one-window deck, takes its pictures at the same points in both (idle, the
-browser, a cued track, the menus), and passes when the image matches stock
-outside the `--allow` regions the change is meant to touch.
-`<out>/summary.txt` gives a verdict per picture and `<out>/diff/` marks every
-difference; `mod_check.py --help` has the steps and the verdicts.
 
 <details>
 <summary><b>📁 Repository layout</b></summary>
