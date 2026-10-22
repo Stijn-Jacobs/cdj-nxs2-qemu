@@ -11,7 +11,9 @@
 #   phases: source   fetch QEMU v9.1.0 into qemu-src/ (skipped if it is there)
 #           patches  apply patches/ to it (idempotent: applied ones are skipped)
 #           main     the MAIN QEMU, qemu-system-sh4 with the CDJ-2000NXS2 board
+#                    (applies patches/ first, so a pull's new patches are in)
 #           display  the display-board QEMU, qemu-system-sh4eb with the SH7269
+#                    (likewise)
 #           dsp      the DSP core library, libc66x.so, for the run-time JIT
 #   env:    QEMU_BUILD / QEMU_EB_BUILD   build trees. Windows default
 #                                        /c/qemu-build-mingw[-eb]: they must be on
@@ -53,9 +55,13 @@ phase_source() {
 phase_patches() {
     echo "== applying patches/"
     bash "$E/patches/apply.sh" "$SRC"
+    PATCHED=1
 }
 
 phase_main() {
+    # A pull can bring new QEMU patches, and the board sources then need them:
+    # the rebuild start.sh offers after a pull runs only main and display.
+    [ "${PATCHED:-0}" = 1 ] || phase_patches
     if on_windows; then
         echo "== building the MAIN QEMU (Windows, MSYS2)"
         bash "$E/scripts/build/build_windows.sh" main
@@ -68,6 +74,7 @@ phase_main() {
 }
 
 phase_display() {
+    [ "${PATCHED:-0}" = 1 ] || phase_patches
     if on_windows; then
         echo "== building the display-board QEMU (Windows, MSYS2)"
         bash "$E/scripts/build/build_windows.sh" eb
