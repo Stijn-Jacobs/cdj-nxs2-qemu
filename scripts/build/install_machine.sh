@@ -98,9 +98,14 @@ echo "hw/sh4/cdj/c6x/meson.build: ${#C6X_SRCS[@]} sources"
 
 # Anything in hw/sh4/cdj/ this run did not write is stale (a file deleted from
 # the project, an old split output): remove it so it cannot be built or read.
+# Not a pipe into grep -q: with pipefail, grep's early exit can kill printf
+# with SIGPIPE, and a file that WAS installed gets removed as stale at random.
+INSTALLED_LIST="$(mktemp)"
+printf '%s\n' "${INSTALLED[@]}" > "$INSTALLED_LIST"
 while IFS= read -r f; do
-    printf '%s\n' "${INSTALLED[@]}" | grep -qxF "$f" || { rm -f "$f"; echo "removed stale ${f#$Q/}"; }
+    grep -qxF -- "$f" "$INSTALLED_LIST" || { rm -f "$f"; echo "removed stale ${f#$Q/}"; }
 done < <(find "$D" -type f)
+rm -f "$INSTALLED_LIST"
 
 # --- hw/sh4/meson.build -----------------------------------------------------
 # Strip every earlier form (the two flat board lines, the marked c6x block and

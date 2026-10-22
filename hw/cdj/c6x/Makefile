@@ -88,10 +88,13 @@ $(O)/native_test: tests/native_test.c $(CORE_O) | $(O)
 native-test: $(O)/native_test
 	$(O)/native_test $(MAIN_UNPACKED)
 
+copy-burst-test:
+	CC="$(CC)" python3 tests/test_jit_copy_burst.py
+
 m1: $(O)/c6xdis
 	python3 tools/c1_m1diff.py $(O)/c6xdis $(MAIN_UNPACKED)
 
 clean:
 	rm -rf $(O)
 
-.PHONY: all m1 core-test ext-test native-test clean
+.PHONY: all m1 core-test ext-test native-test copy-burst-test clean

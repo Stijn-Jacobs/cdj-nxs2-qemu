@@ -147,6 +147,17 @@ def _mb(path):
     return -(-total // (1 << 20))
 
 
+STICK_MAX_MB = 2000  # FAT16's limit, as make_usb_image.py formats it
+
+
+def stick_size_mb(folder):
+    """(folder_mb, image_mb): the folder's size, and the size of a stick image
+    that holds it with room to spare -- 15 % and 64 MB more, in whole 64 MB,
+    at least 256 MB. make_test_stick.py sizes its image the same way."""
+    mb = _mb(folder)
+    return mb, max(256, (mb * 115 // 100 + 64 + 63) // 64 * 64)
+
+
 def _onoff(v):
     return "1" if v.lower() in ("on", "1", "yes", "y") else "0"
 
@@ -499,9 +510,8 @@ class Setup:
             con.warn("no PIONEER/ folder in %s: the deck browses rekordbox's database, so\n"
                      "      loose files will not show up. Export a playlist to a folder with rekordbox (Export\n"
                      "      mode, 'USB') and use that folder." % folder)
-        mb = _mb(folder)
-        size = max(256, (mb * 115 // 100 + 64 + 63) // 64 * 64)
-        if size > 2000:
+        mb, size = stick_size_mb(folder)
+        if size > STICK_MAX_MB:
             con.fail("%s holds %d MB; the stick image is FAT16, at most 2 GB. Export fewer tracks." % (folder, mb))
             return False
         py = self.py_tools
@@ -555,8 +565,7 @@ class Setup:
                         con.warn(line[len("note: "):])
             device = os.path.join(stage, "device")
             os.makedirs(device, exist_ok=True)
-            argv = [baken_bin, "expressport", "--device", device, "--generate-analysis",
-                    "--no-settings", xml_path]
+            argv = baken.expressport_argv(baken_bin, xml_path, device)
             if not con.run_phase("baken: writing the device export from %s"
                                  % os.path.basename(tracks.rstrip("/\\")),
                                  os.path.join(lay.logs, "baken-expressport.log"),

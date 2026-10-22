@@ -12,7 +12,8 @@
  *
  *   CDJ_USB_DEBUG=1      log every register access and transfer
  *   CDJ_USB_ATTACH=1     report the port occupied even with no device
- *   CDJ_USB_ATTACH_MS=n  delay before the attach interrupt (default 500)
+ *   CDJ_USB_ATTACH_MS=n  delay before the attach interrupt (default 500, or
+ *                        0 for the first arm on a usb_attach_at_boot board)
  */
 /* INTENB1/INTSTS1 bit 14: bus change -- the device-attached notification. */
 #define CDJ_USB_BCHG     0x4000
@@ -54,6 +55,7 @@ struct CdjUsbState {
     } buf[CDJ_USB_NR_PIPES];
     /* Which pipe each FIFO window is currently wired to. */
     unsigned port_pipe[CDJ_USB_NR_FIFO_PORTS];
+    bool armed_before;             /* the driver armed BCHG once since power-on */
 
     /* PIPESEL is a window: PIPECFG/PIPEBUF/PIPEMAXP/PIPEPERI refer to the pipe
      * it names, so they are stored per pipe. */
@@ -727,13 +729,17 @@ static void cdj_usb_write(void *opaque, hwaddr off, uint64_t val, unsigned size)
 
     case CDJ_USB_INTENB1:
         /* A device already in the port produces no edge, so fire BCHG shortly
-         * after the driver arms it, like plugging the stick in.
-         * CDJ_USB_ATTACH_MS overrides the delay. */
+         * after the driver arms it, like plugging the stick in. On a
+         * usb_attach_at_boot board the controller saw a stick present at
+         * power-on before the first arm, so that change is pending at once.
+         * CDJ_USB_ATTACH_MS overrides both. */
         if ((val & CDJ_USB_BCHG) && s->attach_timer && !s->attached &&
             cdj_usb_present(s) && !timer_pending(s->attach_timer)) {
             const char *ms = getenv("CDJ_USB_ATTACH_MS");
-            int64_t delay = ms ? strtoll(ms, NULL, 0) : 500;
+            int64_t delay = ms ? strtoll(ms, NULL, 0)
+                : cdj_board->usb_attach_at_boot && !s->armed_before ? 0 : 500;
 
+            s->armed_before = true;
             timer_mod(s->attach_timer,
                       qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) + delay);
         }
@@ -819,12 +825,13 @@ static void cdj_usb_realize(DeviceState *dev, Error **errp)
 
 static const VMStateDescription vmstate_cdj_usb = {
     .name = "cdj-usb",
-    .version_id = 1,
+    .version_id = 2,
     .minimum_version_id = 1,
     .fields = (const VMStateField[]) {
         VMSTATE_TIMER_PTR(attach_timer, CdjUsbState),
         CDJ_VMSTATE_SPAN(CdjUsbState, attached, port_pipe),
         CDJ_VMSTATE_SPAN(CdjUsbState, pipecfg, reg),
+        VMSTATE_BOOL_V(armed_before, CdjUsbState, 2),
         VMSTATE_END_OF_LIST()
     }
 };

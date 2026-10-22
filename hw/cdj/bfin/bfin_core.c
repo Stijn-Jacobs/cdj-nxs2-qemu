@@ -30,6 +30,100 @@
 /* IMASK bits 0-4 are the unmaskable events and always read as set. */
 #define IMASK_FIXED 0x1Fu
 
+static uint64_t awake_cycles(const bfin_core *c) { return c->cycles - c->idle_cycles; }
+static uint64_t cycle_counter(const bfin_core *c)
+{
+    int ccen = !c->clock_model || (c->syscfg & 2);
+
+    return c->cycle_base + (ccen ? awake_cycles(c) - c->cycle_stamp : 0);
+}
+
+static void timing_add(bfin_ownership_timing *t, uint64_t *field, uint64_t n)
+{
+    if (UINT64_MAX - *field < n) {
+        *field = UINT64_MAX;
+        if (t->overflow != UINT64_MAX) { t->overflow++; }
+    } else { *field += n; }
+}
+static void timing_close(bfin_ownership_timing *t, bfin_mask_timing *m,
+                         uint64_t now, uint64_t idle, int censored)
+{
+    uint64_t duration = now - m->since, asleep = idle - m->idle_since;
+    if (censored) {
+        timing_add(t, &m->censored_intervals, 1);
+        timing_add(t, &m->censored_cycles, duration);
+        timing_add(t, &m->censored_idle_cycles, asleep);
+    } else {
+        timing_add(t, &m->intervals, 1);
+        timing_add(t, &m->total_cycles, duration);
+        timing_add(t, &m->total_idle_cycles, asleep);
+        timing_add(t, &m->total_awake_cycles, duration - asleep);
+        if (duration > m->max_cycles) { m->max_cycles = duration; }
+        if (asleep > m->max_idle_cycles) { m->max_idle_cycles = asleep; }
+        if (duration - asleep > m->max_awake_cycles) { m->max_awake_cycles = duration - asleep; }
+    }
+    m->open = 0;
+}
+static void timing_mask(bfin_core *c, bfin_mask_timing *m, int blocked)
+{
+    if (m->open && !blocked) {
+        timing_close(&c->ownership, m, c->cycles, c->idle_cycles, 0);
+    } else if (!m->open && blocked) {
+        m->open = 1; m->since = c->cycles; m->idle_since = c->idle_cycles;
+    }
+}
+static void timing_masks(bfin_core *c)
+{
+    bfin_ownership_timing *t = &c->ownership;
+    if (!t->enabled) { return; }
+    unsigned phase = t->start_seen ? 1 : 0;
+    timing_mask(c, &t->phase[phase].imask, !(c->imask & 0xffe0));
+    timing_mask(c, &t->phase[phase].ipend_global, !!(c->ipend & (1u << EV_GLOBAL)));
+}
+static void timing_pc(bfin_core *c, uint32_t pc)
+{
+    bfin_ownership_timing *t = &c->ownership;
+    if (!t->enabled || !t->start_configured || t->start_seen || pc != t->start_pc) { return; }
+    if (t->phase[0].imask.open) {
+        timing_close(t, &t->phase[0].imask, c->cycles, c->idle_cycles, 1);
+    }
+    if (t->phase[0].ipend_global.open) {
+        timing_close(t, &t->phase[0].ipend_global, c->cycles, c->idle_cycles, 1);
+    }
+    t->start_seen = 1; t->start_cycle = c->cycles;
+    timing_masks(c); /* continuation begins at the boundary, not a fake unmask */
+}
+int bfin_timing_enable(bfin_core *c, int configured, uint32_t pc)
+{
+    if (c->ownership.enabled || (configured && (pc & 1))) { return -1; }
+    c->ownership.enabled = 1;
+    c->ownership.start_configured = !!configured;
+    c->ownership.start_pc = pc;
+    timing_masks(c);
+    memset(c->blocks, 0, BLOCK_SLOTS * sizeof(*c->blocks));
+    return 0;
+}
+int bfin_timing_started(const bfin_core *c)
+{
+    return c->ownership.enabled && c->ownership.start_seen && !c->ownership.snapshot_loaded;
+}
+int bfin_timing_phase(const bfin_core *c)
+{
+    return !c->ownership.enabled ? -1 : !!c->ownership.start_seen;
+}
+void bfin_timing_read(const bfin_core *c, bfin_ownership_timing *out)
+{
+    *out = c->ownership; out->end_cycle = c->cycles;
+    unsigned phase = out->start_seen ? 1 : 0;
+    bfin_mask_timing *masks[] = { &out->phase[phase].imask, &out->phase[phase].ipend_global };
+    for (unsigned i = 0; i < 2; i++) {
+        if (masks[i]->open) {
+            timing_close(out, masks[i], c->cycles, c->idle_cycles, 1);
+            masks[i]->open = 1; /* copied open interval is censored, never completed */
+        }
+    }
+}
+
 bfin_core *bfin_new(const bfin_bus *bus)
 {
     bfin_core *c = calloc(1, sizeof(*c));
@@ -38,6 +132,7 @@ bfin_core *bfin_new(const bfin_bus *bus)
     c->blocks = calloc(BLOCK_SLOTS, sizeof(*c->blocks));
     c->code_lines = calloc(1, CODE_LINE(~0u) + 1);
     c->tzero = UINT64_MAX;
+    c->bp_skip_pc = 1;
     bfin_decode_init();
     return c;
 }
@@ -45,7 +140,9 @@ bfin_core *bfin_new(const bfin_bus *bus)
 void bfin_free(bfin_core *c)
 {
     free(c->blocks);
+    free(c->tring);
     free(c->code_lines);
+    free(c->exec_lines);
     free(c);
 }
 
@@ -62,6 +159,7 @@ size_t bfin_snap_save(const bfin_core *c, uint8_t *buf)
 void bfin_snap_load(bfin_core *c, const uint8_t *buf)
 {
     memcpy(&c->pc, buf, SNAP_LEN);
+    if (c->ownership.enabled) { c->ownership.snapshot_loaded = 1; }
     c->code_gen++;
 }
 
@@ -78,15 +176,53 @@ void bfin_map_rom(bfin_core *c, uint32_t base, uint32_t size,
     if (c->nram < BFIN_MAX_RAM) {
         c->ram[c->nram++] = (bfin_ram){ base, size, (uint8_t *)host, 1 };
     }
+    c->code_span = 0;
+    c->code_gen++;
+}
+
+void bfin_unmap_rom(bfin_core *c, uint32_t base)
+{
+    for (int n = 0; n < c->nram; n++) {
+        if (c->ram[n].rom && c->ram[n].base == base) {
+            memmove(&c->ram[n], &c->ram[n + 1], (c->nram - n - 1) * sizeof(c->ram[0]));
+            c->nram--;
+            break;
+        }
+    }
+    c->code_span = 0;                   /* the cached bank may be gone */
+    c->code_gen++;
+}
+
+void bfin_exec_track(bfin_core *c)
+{
+    if (!c->exec_lines) {
+        c->exec_lines = calloc(1, CODE_LINE(~0u) + 1);
+    }
+}
+
+uint32_t bfin_exec_lines(const bfin_core *c, uint32_t lo, uint32_t hi)
+{
+    uint32_t n = 0;
+
+    for (uint64_t a = lo & ~0xFFull; c->exec_lines && a < hi; a += 0x100) {
+        n += c->exec_lines[CODE_LINE((uint32_t)a)];
+    }
+    return n;
 }
 
 void bfin_reset(bfin_core *c, uint32_t pc)
 {
+    if (c->ownership.enabled) { c->ownership.snapshot_loaded = 1; }
     memset(c->r, 0, offsetof(bfin_core, cmmr) - offsetof(bfin_core, r));
     c->pc = pc;
+    c->bp_skip_pc = 1;
     c->ipend = 1u << EV_RST;
     c->imask = IMASK_FIXED;
     c->syscfg = 0x30;
+    c->idle_cycles = c->cycles;
+    c->cycle_base = c->cycle_stamp = 0;
+    c->cycle_high_latch = 0;
+    c->wake = c->wake_level = 0;
     c->tzero = UINT64_MAX;
     c->idle = 0;
     c->irq_check = 1;
@@ -150,8 +286,12 @@ uint32_t bfin_reg(bfin_core *c, unsigned grp, unsigned reg)
         case 3: return c->lc[1];
         case 4: return c->lt[1];
         case 5: return c->lb[1];
-        case 6: return (uint32_t)c->cycles;
-        case 7: return (uint32_t)(c->cycles >> 32);
+        case 6: {
+            uint64_t value = cycle_counter(c);
+            c->cycle_high_latch = value >> 32;
+            return (uint32_t)value;
+        }
+        case 7: return c->cycle_high_latch;
         }
         break;
     case 7:
@@ -175,7 +315,7 @@ static void set_acc_x(bfin_core *c, int n, uint32_t v)
     c->a[n] = (int64_t)((uint64_t)(int8_t)v << 32 | (uint32_t)c->a[n]);
 }
 
-void bfin_set_reg(bfin_core *c, unsigned grp, unsigned reg, uint32_t v)
+void bfin_reg_put(bfin_core *c, unsigned grp, unsigned reg, uint32_t v)
 {
     switch (grp) {
     case 0: c->r[reg] = v; return;
@@ -200,7 +340,13 @@ void bfin_set_reg(bfin_core *c, unsigned grp, unsigned reg, uint32_t v)
         case 3: c->lc[1] = v; return;
         case 4: c->lt[1] = v & ~1u; return;
         case 5: c->lb[1] = v & ~1u; return;
-        case 6: case 7: return;
+        case 6: case 7: {
+            uint64_t value = cycle_counter(c);
+            c->cycle_base = reg == 6 ? (value & ~UINT64_C(0xffffffff)) | v :
+                                      (value & UINT64_C(0xffffffff)) | (uint64_t)v << 32;
+            c->cycle_stamp = awake_cycles(c);
+            return;
+        }
         }
         break;
     case 7:
@@ -213,7 +359,11 @@ void bfin_set_reg(bfin_core *c, unsigned grp, unsigned reg, uint32_t v)
             }
             return;
         case 1: c->seqstat = v; return;
-        case 2: c->syscfg = v; return;
+        case 2:
+            c->cycle_base = cycle_counter(c);
+            c->cycle_stamp = awake_cycles(c);
+            c->syscfg = v;
+            return;
         case 3: c->reti = v; return;
         case 4: c->retx = v; return;
         case 5: c->retn = v; return;
@@ -270,6 +420,7 @@ static void take_event(bfin_core *c, int ev)
     c->pc = c->evt[ev];
     c->idle = 0;
     c->irq_check = 1;
+    timing_masks(c);
 }
 
 void bfin_raise(bfin_core *c, int ev)
@@ -319,18 +470,21 @@ void bfin_return(bfin_core *c, int ev)
         c->p[6] = c->usp;
     }
     c->irq_check = 1;
+    timing_masks(c);
 }
 
 void bfin_cli(bfin_core *c, unsigned dreg)
 {
     c->r[dreg] = c->imask;
     c->imask = IMASK_FIXED;
+    timing_masks(c);
 }
 
 void bfin_sti(bfin_core *c, uint32_t mask)
 {
     c->imask = mask | IMASK_FIXED;
     c->irq_check = 1;
+    timing_masks(c);
 }
 
 void bfin_reti_pushed(bfin_core *c, int pushed)
@@ -341,6 +495,7 @@ void bfin_reti_pushed(bfin_core *c, int pushed)
     } else if (c->ipend & ~(1u << EV_GLOBAL)) {
         c->ipend |= 1u << EV_GLOBAL;
     }
+    timing_masks(c);
 }
 
 void bfin_yield(bfin_core *c)
@@ -355,6 +510,18 @@ void bfin_wake(bfin_core *c)
     } else {
         c->wake = 1;
     }
+}
+
+void bfin_set_wake(bfin_core *c, int level)
+{
+    c->wake_level = c->clock_model && level;
+    if (c->wake_level) { c->idle = 0; }
+}
+
+void bfin_set_models(bfin_core *c, int clock_model, int tint_w0c)
+{
+    c->clock_model = clock_model;
+    c->tint_w0c = tint_w0c;
 }
 
 void bfin_set_ivg(bfin_core *c, int ivg, int level)
@@ -399,7 +566,7 @@ static void timer_expire(bfin_core *c)
 
 uint64_t bfin_timer_due(const bfin_core *c)
 {
-    return c->tzero == UINT64_MAX ? UINT64_MAX :
+    return (c->idle && c->clock_model) || c->tzero == UINT64_MAX ? UINT64_MAX :
            c->tzero > c->cycles ? c->tzero - c->cycles : 0;
 }
 
@@ -444,8 +611,9 @@ void bfin_mmr_write(bfin_core *c, uint32_t addr, uint32_t val)
     case MMR_TCNTL: {
         uint32_t count = timer_count(c);
 
-        /* TINT is sticky and write-one-to-clear. */
-        c->tcntl = (val & ~TCNTL_INT) | (c->tcntl & TCNTL_INT & ~val);
+        /* TINT is sticky: write-one-to-clear, or write-zero with tint_w0c. */
+        c->tcntl = (val & ~TCNTL_INT) |
+                   (c->tcntl & TCNTL_INT & (c->tint_w0c ? val : ~val));
         timer_start(c, count ? count : c->tperiod);
         return;
     }
@@ -535,7 +703,7 @@ static inline const bfin_block *next_block(bfin_core *c)
 
     if (c->stop_flags || b->pc != c->pc || !b->n || b->gen != c->code_gen ||
         c->cycles + b->n > c->run_limit || loop_inside(c, b) ||
-        c->pc == c->break_pc) {
+        bfin_is_split(c, c->pc)) {
         return NULL;
     }
     return b;
@@ -605,7 +773,7 @@ static bfin_block *block_at(bfin_core *c, uint32_t pc)
 
         memcpy(&iw0, code + off, 2);
         len = bfin_insn_len(iw0);
-        if (off + len > BLOCK_BYTES || (off && pc + off == c->break_pc)) {
+        if (off + len > BLOCK_BYTES || (off && bfin_is_split(c, pc + off))) {
             break;
         }
         if (len > 2) {
@@ -670,7 +838,7 @@ int bfin_end(bfin_core *c, const bfin_insn *i)
     c->pc = npc;
     c->cycles = c->cycles_at + i->idx + 1;
     if (npc == pc && self_jump(i->iw0, i->iw1) && !c->trace &&
-        pc != c->break_pc) {
+        !bfin_is_split(c, pc)) {
         skip_self_jump(c, c->step_end);
     }
 #ifdef BFIN_CHAINS
@@ -697,8 +865,8 @@ static int run_insn(bfin_core *c, uint32_t pc)
         memcpy(&iw0, code, 2);
         memcpy(&iw1, code + 2, 2);
     } else {
-        iw0 = bfin_load(c, pc, 2);
-        iw1 = bfin_load(c, pc + 2, 2);
+        iw0 = bfin_load_nw(c, pc, 2);
+        iw1 = bfin_load_nw(c, pc + 2, 2);
     }
     len = bfin_insn_len(iw0);
     if (len == 2) {
@@ -722,6 +890,8 @@ bfin_stop bfin_step(bfin_core *c, uint64_t budget, uint64_t *executed)
     bfin_stop stop = BFIN_STOP_BUDGET;
 
     c->undef = 0;
+    c->watch_pending = 0;
+    c->watch_extra = 0;
     c->code_gen++;
     c->step_end = end;
     while (c->cycles < end) {
@@ -743,18 +913,29 @@ bfin_stop bfin_step(bfin_core *c, uint64_t budget, uint64_t *executed)
 
         uint32_t pc = c->pc;
 
-        if (pc == c->break_pc && c->cycles != start) {
+        if (bfin_is_bp(c, pc) && pc != c->bp_skip_pc) {
+            c->bp_skip_pc = pc;
             stop = BFIN_STOP_BREAK;
             break;
         }
-        bfin_block *blk = c->trace ? NULL : block_at(c, pc);
+        c->bp_skip_pc = 1;
+        if (c->exec_lines) {
+            c->exec_lines[CODE_LINE(pc)] = 1;
+        }
+        timing_pc(c, pc);
+        if (bfin_is_tp(c, pc)) {
+            bfin_trace_hit(c, pc);
+        }
+        /* Watchpoints are tested per instruction: no chains, so the core
+         * stops right after the access. */
+        bfin_block *blk = c->trace || c->nwp ? NULL : block_at(c, pc);
         /* A block runs whole or not at all: inside it nothing tests the
          * cycle limit, and an instruction that cannot stop the run does not
          * look at the flags, so an event just taken (irq_check) gets the
          * checks above again after one instruction. A change to tzero
          * raises irq_check, which also stops blocks running on into each
          * other below run_limit. */
-        c->run_limit = c->trace ? 0 : end < c->tzero ? end : c->tzero;
+        c->run_limit = c->trace || c->nwp || c->exec_lines ? 0 : end < c->tzero ? end : c->tzero;
 
         if (blk && c->cycles + blk->n <= c->run_limit && !c->irq_check) {
             c->cycles_at = c->cycles;
@@ -764,6 +945,10 @@ bfin_stop bfin_step(bfin_core *c, uint64_t budget, uint64_t *executed)
             }
         } else if (run_insn(c, pc)) {
             stop = BFIN_STOP_UNDEF;
+            break;
+        }
+        if (c->watch_pending) {
+            stop = BFIN_STOP_WATCH;
             break;
         }
         if (c->yield) {
@@ -777,8 +962,50 @@ bfin_stop bfin_step(bfin_core *c, uint64_t budget, uint64_t *executed)
     return stop;
 }
 
+bfin_stop bfin_stepi(bfin_core *c)
+{
+    c->undef = 0;
+    c->watch_pending = 0;
+    c->watch_extra = 0;
+    c->code_gen++;
+    c->step_end = c->cycles + 1;
+    c->run_limit = 0;                   /* no chain runs on */
+    c->bp_skip_pc = 1;
+    if (c->cycles >= c->tzero) {
+        timer_expire(c);
+    }
+    if (c->irq_check) {
+        int ev = irq_ready(c);
+
+        c->irq_check = 0;
+        if (ev >= 0) {
+            take_event(c, ev);
+            return BFIN_STOP_STEP;
+        }
+    }
+    if (c->idle) {
+        return BFIN_STOP_IDLE;
+    }
+    if (c->exec_lines) {
+        c->exec_lines[CODE_LINE(c->pc)] = 1;
+    }
+    timing_pc(c, c->pc);
+    if (bfin_is_tp(c, c->pc)) {
+        bfin_trace_hit(c, c->pc);
+    }
+    if (run_insn(c, c->pc)) {
+        return BFIN_STOP_UNDEF;
+    }
+    c->yield = 0;
+    return c->watch_pending ? BFIN_STOP_WATCH : BFIN_STOP_STEP;
+}
+
 void bfin_skip_cycles(bfin_core *c, uint64_t n)
 {
+    if (c->idle && c->clock_model) {
+        c->idle_cycles += n;
+        if (c->tzero != UINT64_MAX) { c->tzero += n; }
+    }
     c->cycles += n;
 }
 
@@ -824,8 +1051,246 @@ void bfin_set_trace(bfin_core *c, FILE *f, uint64_t from, uint64_t to)
     c->trace_to = to;
 }
 
+int bfin_bp_find(const bfin_core *c, uint32_t pc)
+{
+    for (int n = 0; n < c->nbp; n++) {
+        if (c->bp[n] == pc) {
+            return n;
+        }
+    }
+    return -1;
+}
+
+static void bp_rebloom(bfin_core *c)
+{
+    c->bp_bloom = 0;
+    for (int n = 0; n < c->nbp; n++) {
+        c->bp_bloom |= 1ull << ((c->bp[n] >> 1) & 63);
+    }
+}
+
+int bfin_break_add(bfin_core *c, uint32_t pc)
+{
+    if (pc & 1) {
+        return -1;
+    }
+    if (bfin_bp_find(c, pc) >= 0) {
+        return 0;
+    }
+    if (c->nbp == BFIN_MAX_BREAK) {
+        return -1;
+    }
+    c->bp[c->nbp++] = pc;
+    bp_rebloom(c);
+    /* Blocks decoded so far run through the new breakpoint. */
+    memset(c->blocks, 0, BLOCK_SLOTS * sizeof(*c->blocks));
+    return 0;
+}
+
+int bfin_break_del(bfin_core *c, uint32_t pc)
+{
+    int n = bfin_bp_find(c, pc);
+
+    if (n < 0) {
+        return -1;
+    }
+    c->bp[n] = c->bp[--c->nbp];
+    bp_rebloom(c);                      /* longer blocks are still correct */
+    return 0;
+}
+
+void bfin_break_clear(bfin_core *c)
+{
+    c->nbp = 0;
+    bp_rebloom(c);
+}
+
 void bfin_set_break(bfin_core *c, uint32_t pc)
 {
-    c->break_pc = pc;
+    bfin_break_clear(c);
+    if (pc) {
+        bfin_break_add(c, pc);
+    }
+}
+
+int bfin_tp_find(const bfin_core *c, uint32_t pc)
+{
+    for (int n = 0; n < c->ntp; n++) {
+        if (c->tp[n] == pc) {
+            return n;
+        }
+    }
+    return -1;
+}
+
+static void tp_rebloom(bfin_core *c)
+{
+    c->tp_bloom = 0;
+    for (int n = 0; n < c->ntp; n++) {
+        c->tp_bloom |= 1ull << ((c->tp[n] >> 1) & 63);
+    }
+}
+
+int bfin_trace_ring(bfin_core *c, uint32_t nrec)
+{
+    if (c->tring || !nrec) {
+        return -1;
+    }
+    c->tring_cap = nrec;
+    return 0;
+}
+
+int bfin_trace_add(bfin_core *c, uint32_t pc, uint16_t id)
+{
+    int n = bfin_tp_find(c, pc);
+
+    if (pc & 1) {
+        return -1;
+    }
+    if (n >= 0) {
+        c->tp_id[n] = id;
+        return 0;
+    }
+    if (c->ntp == BFIN_MAX_TRACE) {
+        return -1;
+    }
+    if (!c->tring) {
+        if (!c->tring_cap) {
+            c->tring_cap = BFIN_TRACE_RING;
+        }
+        c->tring = calloc(c->tring_cap, sizeof(*c->tring));
+        if (!c->tring) {
+            return -1;
+        }
+    }
+    c->tp[c->ntp] = pc;
+    c->tp_id[c->ntp++] = id;
+    tp_rebloom(c);
+    /* Blocks decoded so far run through the new tracepoint. */
     memset(c->blocks, 0, BLOCK_SLOTS * sizeof(*c->blocks));
+    return 0;
+}
+
+void bfin_trace_clear(bfin_core *c)
+{
+    c->ntp = 0;                     /* undrained records stay readable */
+    tp_rebloom(c);
+}
+
+void bfin_trace_hit(bfin_core *c, uint32_t pc)
+{
+    bfin_trace_rec *r;
+
+    if (c->tring_head - c->tring_tail == c->tring_cap) {
+        c->tring_lost++;
+        return;
+    }
+    r = &c->tring[c->tring_head++ % c->tring_cap];
+    r->cycles = c->cycles;
+    r->pc = pc;
+    r->r0 = c->r[0];
+    r->r1 = c->r[1];
+    r->r2 = c->r[2];
+    r->id = c->tp_id[bfin_tp_find(c, pc)];
+}
+
+size_t bfin_trace_drain(bfin_core *c, bfin_trace_rec *out, size_t max)
+{
+    size_t n = 0;
+
+    while (n < max && c->tring_tail != c->tring_head) {
+        out[n++] = c->tring[c->tring_tail++ % c->tring_cap];
+    }
+    return n;
+}
+
+uint64_t bfin_trace_lost(const bfin_core *c)
+{
+    return c->tring_lost;
+}
+
+int bfin_watch_add(bfin_core *c, uint32_t addr, uint32_t len, int kind)
+{
+    if (!len || !(kind & BFIN_WATCH_ACCESS)) {
+        return -1;
+    }
+    for (int n = 0; n < c->nwp; n++) {
+        if (c->wp[n].addr == addr && c->wp[n].len == len &&
+            c->wp[n].kind == kind) {
+            return 0;
+        }
+    }
+    if (c->nwp == BFIN_MAX_WATCH) {
+        return -1;
+    }
+    c->wp[c->nwp++] = (typeof(c->wp[0])){ addr, len, kind };
+    return 0;
+}
+
+int bfin_watch_del(bfin_core *c, uint32_t addr, uint32_t len, int kind)
+{
+    for (int n = 0; n < c->nwp; n++) {
+        if (c->wp[n].addr == addr && c->wp[n].len == len &&
+            c->wp[n].kind == kind) {
+            c->wp[n] = c->wp[--c->nwp];
+            return 0;
+        }
+    }
+    return -1;
+}
+
+void bfin_watch_clear(bfin_core *c)
+{
+    c->nwp = 0;
+}
+
+void bfin_watch_check(bfin_core *c, uint32_t addr, unsigned size, int kind)
+{
+    for (int n = 0; n < c->nwp; n++) {
+        uint64_t wa = c->wp[n].addr, wb = wa + c->wp[n].len;
+
+        if ((c->wp[n].kind & kind) && addr < wb && wa < (uint64_t)addr + size) {
+            if (c->watch_pending) {
+                c->watch_extra++;
+            } else {
+                c->watch_pending = 1;
+                c->watch_addr = c->wp[n].addr;
+                c->watch_kind = c->wp[n].kind;
+            }
+        }
+    }
+}
+
+int bfin_watch_hit(const bfin_core *c, uint32_t *addr, int *kind)
+{
+    if (!c->watch_pending) {
+        return 0;
+    }
+    *addr = c->watch_addr;
+    *kind = c->watch_kind;
+    return 1;
+}
+
+unsigned bfin_watch_extra(const bfin_core *c)
+{
+    return c->watch_extra;
+}
+
+int bfin_set_reg(bfin_core *c, unsigned grp, unsigned reg, uint32_t val)
+{
+    int bad;
+
+    c->undef = 0;
+    bfin_reg_put(c, grp, reg, val);
+    bad = c->undef;
+    c->undef = 0;
+    c->irq_check = 1;
+    return bad ? -1 : 0;
+}
+
+void bfin_set_pc(bfin_core *c, uint32_t pc)
+{
+    c->pc = pc;
+    c->bp_skip_pc = pc;
+    c->irq_check = 1;
 }
