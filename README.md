@@ -947,7 +947,7 @@ so it takes as long as `decks2`; after that a deck takes a minute and a half.
 | `patches/` | the changes to QEMU 9.1.0 itself |
 | `scripts/build/` | the QEMU builds (Linux, macOS and MSYS2), the board installer and the DSP module build |
 | `scripts/firmware/` | unpacking and verifying the update file |
-| `scripts/media/` | the USB stick image builder; `collection_xml.py` and `bpm_estimate.py` turn a plain folder of music into the XML [baken](https://github.com/M-Igashi/baken) reads for the other USB step |
+| `scripts/media/` | the USB stick image builder; `collection_xml.py` and `bpm_estimate.py` turn a plain folder of music into the XML [baken](https://github.com/M-Igashi/baken) reads for the other USB step; `make_test_stick.py` builds a stick of synthetic test tracks whose grid, key and cues are known exactly |
 | `scripts/run/` | the run chain behind the launchers, the panel and monitor sockets, the controller relay and the run reports |
 | `scripts/net/` | the Pro DJ Link segment: DHCP server, capture, capture scorer, `tempo_master.py` (a tempo master player the decks can sync to), and `tap_setup.ps1` for the [TAP adapter](#rekordbox-ableton) |
 | `midi/` | the MIDI controller bridge, controller profiles, mappings and the learn tool |

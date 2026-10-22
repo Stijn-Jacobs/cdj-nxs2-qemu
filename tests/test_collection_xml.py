@@ -115,3 +115,61 @@ def test_build_uses_the_bpm_tag_when_present_and_estimates_otherwise(tmp_path, c
 def test_build_dies_on_an_empty_folder(tmp_path):
     with pytest.raises(SystemExit):
         collection_xml.build(str(tmp_path), "All Tracks")
+
+
+def _tags(**kw):
+    tags = {"title": "", "artist": "", "album": "", "genre": "", "bpm": 0.0,
+            "duration": 0, "bitrate": 0, "sample_rate": 0}
+    tags.update(kw)
+    return tags
+
+
+def test_track_xml_writes_a_known_grid_key_and_cues_as_given(tmp_path, monkeypatch):
+    # make_test_stick.py's path: nothing is read from the audio or estimated.
+    def no(*_a, **_k):
+        raise AssertionError("a known grid must not be estimated")
+    monkeypatch.setattr(bpm_estimate, "estimate", no)
+    path = tmp_path / "t.mp3"
+    path.write_bytes(b"x" * 10)
+    notes = []
+    xml = collection_xml.track_xml(
+        7, str(path), _tags(title="T & U"), None, notes, tempo=(128.0, 0.5), key="F#m",
+        marks=[(8.703125, collection_xml.MEMORY_CUE), (15.5, 0)])
+    assert notes == []
+    assert xml.startswith('    <TRACK TrackID="7" Name="T &amp; U" ')
+    assert 'AverageBpm="128.00"' in xml and 'Tonality="F#m"' in xml
+    assert xml.endswith(
+        '>\n      <TEMPO Inizio="0.500" Bpm="128.00" Metro="4/4" Battito="1"/>\n'
+        '      <POSITION_MARK Name="" Type="0" Start="8.703" Num="-1"/>\n'
+        '      <POSITION_MARK Name="" Type="0" Start="15.500" Num="0"/>\n'
+        '    </TRACK>\n')
+
+
+def test_track_xml_without_a_grid_or_cues_is_one_empty_element(tmp_path, monkeypatch):
+    monkeypatch.setattr(bpm_estimate, "available", lambda: False)
+    path = tmp_path / "t.wav"
+    path.write_bytes(b"x")
+    notes = []
+    xml = collection_xml.track_xml(1, str(path), _tags(), None, notes)
+    assert xml.endswith('Tonality=""/>\n')
+    assert notes and "no beat grid" in notes[0]
+
+
+def test_cues_without_a_grid_still_make_a_track_with_children(tmp_path, monkeypatch):
+    monkeypatch.setattr(bpm_estimate, "available", lambda: False)
+    path = tmp_path / "t.wav"
+    path.write_bytes(b"x")
+    xml = collection_xml.track_xml(1, str(path), _tags(), None, [], marks=[(1.0, 2)])
+    assert "<TEMPO" not in xml
+    assert '<POSITION_MARK Name="" Type="0" Start="1.000" Num="2"/>' in xml
+    assert xml.endswith("    </TRACK>\n")
+
+
+def test_document_wraps_the_tracks_in_one_playlist():
+    doc = collection_xml.document(["    <TRACK TrackID=\"1\"/>\n", "    <TRACK TrackID=\"2\"/>\n"],
+                                  "A & B", product="x.py")
+    assert '<PRODUCT Name="cdj-nxs2-re x.py"' in doc
+    assert '<COLLECTION Entries="2">' in doc
+    assert '<NODE Name="A &amp; B" Type="1" KeyType="0" Entries="2">' in doc
+    assert doc.index('<TRACK Key="1"/>') < doc.index('<TRACK Key="2"/>')
+    assert collection_xml.document([], "x").count("<TRACK") == 0

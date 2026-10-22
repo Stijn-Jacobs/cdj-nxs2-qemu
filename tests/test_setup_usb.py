@@ -74,3 +74,25 @@ def test_an_existing_image_is_kept_non_interactively(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "USB image:" in out
     assert "collection_xml.py" not in out
+
+
+def test_expressport_argv_is_setups_command_with_an_optional_device_name():
+    from launcher import baken
+    assert baken.expressport_argv("baken", "c.xml", "dev") == [
+        "baken", "expressport", "--device", "dev", "--generate-analysis", "--no-settings", "c.xml"]
+    assert baken.expressport_argv("baken", "c.xml", "dev", "STICK") == [
+        "baken", "expressport", "--device", "dev", "--generate-analysis", "--no-settings",
+        "--device-name", "STICK", "c.xml"]
+
+
+def test_stick_size_leaves_room_in_whole_64_mb_and_at_least_256(tmp_path):
+    from launcher.setup import stick_size_mb
+    (tmp_path / "small").mkdir()
+    (tmp_path / "small" / "a").write_bytes(b"x" * 1000)
+    assert stick_size_mb(str(tmp_path / "small")) == (1, 256)
+    big = tmp_path / "big"
+    big.mkdir()
+    with open(big / "a", "wb") as f:
+        f.truncate(300 << 20)  # sparse: only the size counts
+    # 300 MB + 15 % + 64 MB = 409 MB, rounded up to 448.
+    assert stick_size_mb(str(big)) == (300, 448)
