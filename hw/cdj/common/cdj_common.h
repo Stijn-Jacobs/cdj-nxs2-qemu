@@ -159,6 +159,9 @@ typedef struct CdjDmacDei {
 void cdj_dmac_init(MemoryRegion *sysmem, const char *name, hwaddr base,
                    hwaddr dreq_base, hwaddr dreq_size, const CdjDmacDei *dei);
 void cdj_dmac_dei_connect(unsigned ch, qemu_irq irq);
+/* Optional fixed FIFO endpoint; returns false until a complete burst is ready. */
+void cdj_dmac_fifo_connect(hwaddr port,
+                          bool (*transfer)(bool, uint8_t *, unsigned));
 void cdj_dmac_dreq(void);
 
 const char *cdj_getenv(const char *name);
