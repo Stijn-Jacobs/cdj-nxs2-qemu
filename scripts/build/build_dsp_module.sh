@@ -36,6 +36,12 @@
 #
 # --preflight only checks disk space and tools, and says why it would not run.
 # --reuse-profile skips the profile run and builds from the one in WORK.
+# DSP_SUPPLEMENT=1, on a model with MODEL_DSP_SUPPLEMENT_ARGS, also installs
+# m.extra.so (scripts/build/build_dsp_supplement.sh), loaded after m.so; off by
+# default, since its gain was measured on one broad private profile only and
+# not on this short-play one. DSP_SUPPLEMENT_JOBS defaults to 6; both modules
+# share the installed m.stamp. DSP_SUPPLEMENT_PROFILE can name a private
+# profile of a broader workload.
 set -uo pipefail
 E="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 . "$E/scripts/cdj_paths.sh"
@@ -237,10 +243,26 @@ else
         -Wno-missing-profile "-fprofile-dir=$(native "$PGO_DIR")" || die "the profiled build failed"
 fi
 
+# A separate, bounded pass preserves the curated pass's loops and queued
+# branches. The core loads it second so its regions override overlapping roots.
+EXTRA="$WORK/supplement"
+SUPPLEMENT=0
+[ "${DSP_SUPPLEMENT:-0}" != 1 ] || [ -z "${MODEL_DSP_SUPPLEMENT_ARGS:-}" ] || SUPPLEMENT=1
+if [ "$SUPPLEMENT" = 1 ]; then
+    [ "$DRY" = 1 ] || rm -rf "$EXTRA"
+    run env C66X_JIT_LIBDIR="$LIBDIR" JOBS="${DSP_SUPPLEMENT_JOBS:-6}" \
+        bash "$E/scripts/build/build_dsp_supplement.sh" "${DSP_SUPPLEMENT_PROFILE:-$PROF}" "$EXTRA" ||
+        die "the supplemental generator/build failed"
+fi
 run mkdir -p "$DEST"
 run rm -f "$DEST/m.stamp"
 run cp "$OBJ/m.so" "$DEST/m.so.new"
 run mv -f "$DEST/m.so.new" "$DEST/m.so"
+run rm -f "$DEST/m.extra.so"
+if [ "$SUPPLEMENT" = 1 ]; then
+    run cp "$EXTRA/m.so" "$DEST/m.extra.so.new"
+    run mv -f "$DEST/m.extra.so.new" "$DEST/m.extra.so"
+fi
 run env PYTHONPATH="$(native "$E")" python3 -m launcher dsp-stamp "$(native "$DEST")" ||
     die "the module was installed but its stamp was not written"
 [ "$DRY" = 1 ] || rm -f "$OBJ"/*.o

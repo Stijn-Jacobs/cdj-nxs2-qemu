@@ -785,6 +785,15 @@ program the module is built from, so turning a mod on or off later needs no
 rebuild. To compare without the module, start with `MODULE=none ./start.sh`
 (the DSP's hot code is then compiled as it plays).
 
+For the CDJ-2000NXS, `DSP_SUPPLEMENT=1 scripts/build/build_dsp_module.sh` also
+builds a second, smaller module (`m.extra.so`, `MODEL_DSP_SUPPLEMENT_ARGS`)
+that is loaded after the first under the same stamp. It is off by default: its
+gain (about 1.3x on a complete MP3 and MASTER TEMPO replay) was measured on one
+broad private profile, not on the short play setup uses.
+`scripts/test/dsp_native_replay.py --record <dsp.c6rec>` replays a recording
+with the interpreter and with the installed modules, and passes only when every
+record is EXACT and the final hashes are equal.
+
 <a id="limits"></a>
 
 ## Limits

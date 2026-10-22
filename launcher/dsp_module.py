@@ -8,6 +8,8 @@ setup and start share. The stamp names what the module was built from:
              (the installed image's; the supported update's when none is installed)
   model      the player
 
+The same stamp covers m.extra.so when the build installs a supplemental pass.
+
 The core refuses a module of another ABI by itself and every compiled region
 checks its code bytes, so a module of another firmware only loses speed. A
 module of another generator version is the one that could compute wrongly, and
@@ -23,12 +25,33 @@ import os
 import re
 import sys
 
-from . import firmware, model
+from . import firmware, host, model
 from .layout import Layout
 
 STAMP = "m.stamp"
 
 Module = collections.namedtuple("Module", "path notice")
+
+
+def paths(path):
+    """The curated module followed by its optional, jointly stamped supplement."""
+    if not path:
+        return []
+    extra = os.path.join(os.path.dirname(path), "m.extra.so")
+    return [path] + ([extra] if os.path.isfile(extra) else [])
+
+
+def _chain_sep():
+    return ";" if host.is_windows() else ":"
+
+
+def native_chain(path):
+    return _chain_sep().join(host.native(p) for p in paths(path))
+
+
+def chain_files(env):
+    """The modules C66X_JIT names that exist, in load order."""
+    return [p for p in env.get("C66X_JIT", "").split(_chain_sep()) if os.path.isfile(p)]
 
 
 def _constant(path, pattern):
