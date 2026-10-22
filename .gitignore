@@ -10,3 +10,10 @@ logs/
 tools/
 __pycache__/
 *.pyc
+
+# Local build trees and run output.
+qemu-build/
+qemu-build-eb/
+build/
+runs/
+env.sh
