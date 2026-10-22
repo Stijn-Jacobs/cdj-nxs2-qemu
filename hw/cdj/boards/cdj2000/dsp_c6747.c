@@ -329,6 +329,13 @@ static void hpi_note_write(CdjC6747 *s, uint32_t addr)
     }
 }
 
+static CdjHpiWatch *hpi_watch;
+
+void cdj_c6747_watch_hpi(CdjHpiWatch *watch)
+{
+    hpi_watch = watch;
+}
+
 static uint64_t hpi_read(void *opaque, hwaddr off, unsigned size)
 {
     CdjC6747 *s = opaque;
@@ -341,6 +348,9 @@ static uint64_t hpi_read(void *opaque, hwaddr off, unsigned size)
         return s->hpia;
     default:
         val = cdj_dsp_host_read_word(&s->host, s->hpia);
+        if (hpi_watch) {
+            hpi_watch('R', s->hpia, val);
+        }
         s->reads++;
         cdj_dsp_count(&s->polls, s->hpia, val);
         if ((off >> 18) == 2) {
@@ -369,6 +379,9 @@ static void hpi_write(void *opaque, hwaddr off, uint64_t val, unsigned size)
         s->hpia = val;
         break;
     default:
+        if (hpi_watch) {
+            hpi_watch('W', s->hpia, val);
+        }
         if (!cdj_dsp_host_write_word(&s->host, s->hpia, val)) {
             s->dropped++;
         }
