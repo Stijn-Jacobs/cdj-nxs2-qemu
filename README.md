@@ -964,6 +964,7 @@ difference; `mod_check.py --help` has the steps and the verdicts.
 | `scripts/media/` | the USB stick image builder; `collection_xml.py` and `bpm_estimate.py` turn a plain folder of music into the XML [baken](https://github.com/M-Igashi/baken) reads for the other USB step; `make_test_stick.py` builds a stick of synthetic test tracks whose grid, key and cues are known exactly |
 | `scripts/run/` | the run chain behind the launchers, the panel and monitor sockets, the controller relay and the run reports |
 | `scripts/net/` | the Pro DJ Link segment: DHCP server, capture, capture scorer, `tempo_master.py` (a tempo master player the decks can sync to), and `tap_setup.ps1` for the [TAP adapter](#rekordbox-ableton) |
+| `scripts/debug/` | the display processor's debugging aids: `bfin_trace.py` reads `CDJ_BF531_TRACE` tracepoint files, `gui_dump.py` dumps a GUI runtime's state over the `CDJ_BF531_GDB` debugger |
 | `midi/` | the MIDI controller bridge, controller profiles, mappings and the learn tool |
 | `app/` | the [virtual deck app](#virtual-deck): the drawn player around the emulated screen |
 | `tests/`, `scripts/test/` | the offline unit tests (`python -m pytest tests`, no firmware needed) and the quick check: `scripts/test/quick.sh` runs them beside a replay of DSP recordings and a headless boot of each deck to its first stable screen (`deck_smoke.py`), in a couple of minutes; `mod_check.py` compares a modified MAIN image's screens with stock |

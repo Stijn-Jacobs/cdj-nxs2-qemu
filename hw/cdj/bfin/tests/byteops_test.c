@@ -84,9 +84,63 @@ static void set_r(bfin_core *c, unsigned reg, uint32_t v)
     bfin_set_reg(c, 0, reg, v);
 }
 
+/* GNU Blackfin simulator decode_dsp32alu_0: aopcde8/aop3/x0/HL0
+ * copies AX+AW from !s to s without touching ASTAT. These are assembled
+ * architectural instructions, including the JPEG trap C408 E03F. */
+static void accumulator_copy(bfin_core *c)
+{
+    const uint64_t values[] = {0, 1, 0x7fffffffffull, 0x8000000000ull,
+        0xff12345678ull, 0x0112345678ull, 0x0080000000ull};
+    const uint32_t flags[] = {0, UINT32_MAX, 0xa55a5aa5};
+    for (unsigned dst = 0; dst < 2; dst++) {
+        for (unsigned v = 0; v < sizeof(values)/sizeof(values[0]); v++) {
+            for (unsigned f = 0; f < sizeof(flags)/sizeof(flags[0]); f++) {
+                insn(c, 0xc408, dst ? 0xe03f : 0xc03f);
+                unsigned src = !dst;
+                bfin_set_reg(c, 4, 2 * src, values[v] >> 32);
+                bfin_set_reg(c, 4, 2 * src + 1, values[v]);
+                bfin_set_reg(c, 4, 2 * dst, 0x42);
+                bfin_set_reg(c, 4, 2 * dst + 1, 0xdeadbeef);
+                for (unsigned r = 0; r < 8; r++) {set_r(c, r, 0x12340000 + r);}
+                c->astat = flags[f];
+                uint64_t before = bfin_cycles(c);
+                if (!run(c)) {printf("FAIL A%u copy trapped\n", dst); failures++;}
+                uint32_t x = (int32_t)(int8_t)(values[v] >> 32);
+                for (unsigned a = 0; a < 2; a++) {
+                    if (bfin_get_reg(c, 4, 2 * a) != x ||
+                        bfin_get_reg(c, 4, 2 * a + 1) != (uint32_t)values[v]) {
+                        printf("FAIL copy A%u: 40-bit value/source changed\n", dst); failures++;
+                    }
+                }
+                if (c->astat != flags[f]) {printf("FAIL copy changed ASTAT\n"); failures++;}
+                for (unsigned r = 0; r < 8; r++) {expect("copy data registers", c, r, 0x12340000 + r);}
+                if (c->pc != 4 || bfin_cycles(c) - before != 1) {
+                    printf("FAIL copy instruction extent/cycle\n"); failures++;
+                }
+            }
+        }
+        // Reserved copy forms are not silently treated as clear/move.
+        insn(c, 0xc408, (dst ? 0xe03f : 0xc03f) | 0x1000);
+        if (run(c)) {printf("FAIL copy X=1 accepted\n"); failures++;}
+        insn(c, 0xc428, dst ? 0xe03f : 0xc03f);
+        if (run(c)) {printf("FAIL copy HL=1 accepted\n"); failures++;}
+    }
+    // The three preexisting clear forms retain their exact accumulator effects.
+    for (unsigned aop = 0; aop < 3; aop++) {
+        insn(c, 0xc408, (aop << 14) | 0x3f);
+        c->a[0] = 0x123456789a; c->a[1] = -0x123456789a; c->astat = 0xa55a5aa5;
+        if (!run(c)) {printf("FAIL clear form trapped\n"); failures++;}
+        if (c->a[0] != (aop == 1 ? 0x123456789a : 0) ||
+            c->a[1] != (aop == 0 ? -0x123456789a : 0) || c->astat != 0xa55a5aa5) {
+            printf("FAIL clear form changed effects\n"); failures++;
+        }
+    }
+}
+
 int main(void)
 {
     bfin_core *c = new_core();
+    accumulator_copy(c);
 
     /* R4 = BYTEPACK (R1, R2) */
     insn(c, alu0(24, 0, 0), alu1(0, 0, 4, 0, 1, 2));
