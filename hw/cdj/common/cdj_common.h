@@ -96,6 +96,12 @@ typedef struct CdjBoardDesc {
     uint32_t sr_seed;
 
     uint32_t periph_hz;         /* TMU input clock, CDJ_PERIPH_HZ overrides */
+    /* FRQCR as the board's clock mode straps leave it; 0 keeps the SH7763
+     * default. */
+    uint32_t frqcr;
+    /* A stick in the port at power-on attaches as soon as the driver first
+     * arms BCHG, rather than 500 ms later like a plug-in. */
+    bool usb_attach_at_boot;
     /* CDJ_DMAC_DEBUG logs the first INTEVT reads in this vector window. */
     uint16_t ccn_trace_lo, ccn_trace_hi;
     /* Board lines printed after the IRQ counts at exit; may be NULL. */

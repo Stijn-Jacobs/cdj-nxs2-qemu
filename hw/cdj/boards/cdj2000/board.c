@@ -15,15 +15,22 @@
  * What the board models so far is what the boot needs first: the DMAC (the
  * firmware clears bss with DMAC channel 5 and polls TE), the clock register
  * the tick constant is chosen from, the interrupt controller, the timers
- * (the kernel tick is TMU channel 4) and both SCIFs. Every other
- * SH7763 block is a named unimplemented region, so the bring-up log
- * (scripts/run/boot_main.sh) lists what to model next.
+ * (TMU0 is the NORTi tick, TMU4 is Pioneer's periodic) and both SCIFs.
+ * Every other SH7763 block is a named unimplemented region, so the bring-up
+ * log (scripts/run/boot_main.sh) lists what to model next.
  */
 
-/* The kernel tick is TMU channel 4 at 13500 counts per interrupt: 1 ms at
- * 54 MHz. The firmware picks 13500 over 11250 when FRQCR's top nibble is 3. */
+/* NORTi uses TMU0; Pioneer uses TMU4/5. The stock MAIN reads FRQCR at
+ * 0x042C5B7E and never writes it: top nibble 3 (mode 2) gives TMU0 a period
+ * of 11250 counts, anything else 13500. The mode straps set FRQCR, and the
+ * NXS strap is mode 3 (reset value 0x40320044, SH7764 hardware manual
+ * table 10.2). NXS X2 is 26.965 MHz, PLL x12, Pphi /6: 53.93 MHz. The
+ * CDJ-2000 and CDJ-900 keep 0x30000000 and 54 MHz until their straps are
+ * read. */
 #define SH7763_PERIPH_HZ    54000000
 #define SH7763_FRQCR_BOOT   0x30000000
+#define CDJ2000NXS_PERIPH_HZ 53930000
+#define CDJ2000NXS_FRQCR_BOOT 0x40320044
 
 #define CDJ2000_USBH_BASE   0xFE400000
 
@@ -50,7 +57,12 @@ static const CdjBoardDesc cdj2000nxs_board = {
      * (0x04368888, 0x04368894) before 0x04368878 first writes it. */
     .sr_seed_slot = 0x04D13694,
     .sr_seed = 0x400000F0,
-    .periph_hz = SH7763_PERIPH_HZ,
+    .periph_hz = CDJ2000NXS_PERIPH_HZ,
+    .frqcr = CDJ2000NXS_FRQCR_BOOT,
+    /* Stock MAIN's updater gives up on media ~3 s after it starts and finds
+     * a stick present at power-on ~0.2-0.3 s before that; a 500 ms first
+     * attach sent it down its no-media path (phase_saved 0x80). */
+    .usb_attach_at_boot = true,
     .ccn_trace_lo = 0x640,              /* DMAC DMTE0..DMTE3 */
     .ccn_trace_hi = 0x6A0,
     .exit_report = cdj_sh7763_intc_report,
@@ -121,8 +133,8 @@ void sh7763_board_init(MachineState *machine, const CdjBoardDesc *desc,
     SuperHCPU *cpu = cdj_board_init(machine, desc);
     qemu_irq *irq;
     bool display;
-    static const CdjRegInit cpg[] = {
-        { 0x00, SH7763_FRQCR_BOOT },
+    const CdjRegInit cpg[] = {
+        { 0x00, desc->frqcr ? desc->frqcr : SH7763_FRQCR_BOOT },
         { 0 },
     };
 
@@ -142,7 +154,7 @@ void sh7763_board_init(MachineState *machine, const CdjBoardDesc *desc,
                  cdj_count_irq(irq[S63_TMU2], "TMU2"));
     cdj_tmu_init(sysmem, 0x1FDC0000,
                  cdj_count_irq(irq[S63_TMU3], "TMU3"),
-                 cdj_count_irq(irq[S63_TMU4], "TMU4 tick"),
+                 cdj_count_irq(irq[S63_TMU4], "TMU4 Pioneer"),
                  cdj_count_irq(irq[S63_TMU5], "TMU5"));
     cdj_irqcount_exit.notify = cdj_irqcount_dump;
     cdj_add_exit_report(&cdj_irqcount_exit);

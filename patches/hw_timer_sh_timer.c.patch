@@ -1,5 +1,5 @@
 diff --git a/hw/timer/sh_timer.c b/hw/timer/sh_timer.c
-index 7788939..34fb405 100644
+index 7788939..0876372 100644
 --- a/hw/timer/sh_timer.c
 +++ b/hw/timer/sh_timer.c
 @@ -15,7 +15,9 @@
@@ -12,10 +12,113 @@ index 7788939..34fb405 100644
  
  #define TIMER_TCR_TPSC          (7 << 0)
  #define TIMER_TCR_CKEG          (3 << 3)
-@@ -216,15 +218,56 @@ static void sh_timer_start_stop(void *opaque, int enable)
+@@ -25,6 +27,13 @@
+ #define TIMER_TCR_ICPF          (1 << 9)
+ #define TIMER_TCR_RESERVED      (0x3f << 10)
+ 
++/*
++ * Underflows kept for a guest that has not acknowledged yet: one second of
++ * the 1 kHz kernel tick. A guest held off longer is behind the host, and
++ * replaying every late tick back to back would only keep it there.
++ */
++#define TIMER_MISSED_MAX  1000
++
+ #define TIMER_FEAT_CAPT   (1 << 0)
+ #define TIMER_FEAT_EXTCLK (1 << 1)
+ 
+@@ -42,6 +51,7 @@ typedef struct {
+     int freq;
+     int int_level;
+     int old_level;
++    uint64_t missed;
+     int feat;
+     int enabled;
+     qemu_irq irq;
+@@ -53,11 +63,16 @@ static void sh_timer_update(SHTimerState *s)
+ {
+     int new_level = s->int_level && (s->tcr & TIMER_TCR_UNIE);
+ 
++    /*
++     * int_level is TCR.UNF: an underflow latches it whether or not UNIE is
++     * set; only the interrupt line follows UNIE. Folding UNIE into it hid
++     * every underflow of a channel run without its interrupt (a free-running
++     * clock that counts its wraps by polling UNF).
++     */
+     if (new_level != s->old_level) {
+         qemu_set_irq(s->irq, new_level);
      }
-     ptimer_transaction_commit(s->timer);
+-    s->old_level = s->int_level;
+-    s->int_level = new_level;
++    s->old_level = new_level;
+ }
+ 
+ static uint32_t sh_timer_read(void *opaque, hwaddr offset)
+@@ -85,6 +100,7 @@ static void sh_timer_write(void *opaque, hwaddr offset, uint32_t value)
+ {
+     SHTimerState *s = opaque;
+     int freq;
++    bool clock_changed;
+ 
+     switch (offset >> 2) {
+     case OFFSET_TCOR:
+@@ -100,8 +116,13 @@ static void sh_timer_write(void *opaque, hwaddr offset, uint32_t value)
+         ptimer_transaction_commit(s->timer);
+         break;
+     case OFFSET_TCR:
++        /* Acknowledge/UNIE writes must not restart the countdown. In
++         * particular, stopping at a rounded TCNT of zero and restarting
++         * with the legacy policy synthesizes an extra underflow. */
++        clock_changed = !s->enabled ||
++            (value & TIMER_TCR_TPSC) != (s->tcr & TIMER_TCR_TPSC);
+         ptimer_transaction_begin(s->timer);
+-        if (s->enabled) {
++        if (s->enabled && clock_changed) {
+             /*
+              * Pause the timer if it is running. This may cause some inaccuracy
+              * due to rounding, but avoids a whole lot of other messiness
+@@ -164,7 +185,11 @@ static void sh_timer_write(void *opaque, hwaddr offset, uint32_t value)
+                           "%s: Reserved ICPE value\n", __func__);
+         }
+         if ((value & TIMER_TCR_UNF) == 0) {
+-            s->int_level = 0;
++            if (s->int_level && s->missed) {
++                s->missed--;
++            } else {
++                s->int_level = 0;
++            }
+         }
+ 
+         value &= ~TIMER_TCR_UNF;
+@@ -181,11 +206,11 @@ static void sh_timer_write(void *opaque, hwaddr offset, uint32_t value)
+                           "%s: Reserved TCR bits set\n", __func__);
+         }
+         s->tcr = value;
+-        ptimer_set_limit(s->timer, s->tcor, 0);
+-        ptimer_set_freq(s->timer, freq);
+-        if (s->enabled) {
+-            /* Restart the timer if still enabled.  */
+-            ptimer_run(s->timer, 0);
++        if (clock_changed) {
++            ptimer_set_freq(s->timer, freq);
++            if (s->enabled) {
++                ptimer_run(s->timer, 0);
++            }
+         }
+         ptimer_transaction_commit(s->timer);
+         break;
+@@ -214,17 +239,74 @@ static void sh_timer_start_stop(void *opaque, int enable)
+     if (!s->enabled && enable) {
+         ptimer_run(s->timer, 0);
+     }
+-    ptimer_transaction_commit(s->timer);
++    /*
++     * Enabled before the commit: a channel started at TCNT 0 underflows on
++     * the next count, and the commit runs that tick right away. Set after it,
++     * the tick saw a stopped channel and the underflow was lost (the channel
++     * just reloaded from TCOR), as on no real SH-4.
++     */
      s->enabled = !!enable;
++    ptimer_transaction_commit(s->timer);
 +
 +    /*
 +     * Deassert on stop. Without this a channel that underflowed once keeps its
@@ -25,6 +128,7 @@ index 7788939..34fb405 100644
 +     * permanent interrupt storm.
 +     */
 +    if (!s->enabled) {
++        s->missed = 0;
 +        s->int_level = 0;
 +        s->old_level = 0;
 +        qemu_set_irq(s->irq, 0);
@@ -45,13 +149,21 @@ index 7788939..34fb405 100644
 +        }
 +    }
 +
++    /* Keep interrupt-enabled expiries that arrive before acknowledgement.
++     * UNF alone is still a latch for polling channels (UNIE clear).
++     * Each clear retires one expiry; asserting an already-high line does
++     * not create an event. */
++    if (s->enabled && s->int_level && (s->tcr & TIMER_TCR_UNIE) &&
++        s->missed < TIMER_MISSED_MAX) {
++        s->missed++;
++    }
      s->int_level = s->enabled;
      sh_timer_update(s);
  }
  
 +static const VMStateDescription vmstate_sh_timer = {
 +    .name = "sh_timer",
-+    .version_id = 1,
++    .version_id = 2,
 +    .minimum_version_id = 1,
 +    .fields = (const VMStateField[]) {
 +        VMSTATE_PTIMER(timer, SHTimerState),
@@ -62,6 +174,7 @@ index 7788939..34fb405 100644
 +        VMSTATE_INT32(int_level, SHTimerState),
 +        VMSTATE_INT32(old_level, SHTimerState),
 +        VMSTATE_INT32(enabled, SHTimerState),
++        VMSTATE_UINT64_V(missed, SHTimerState, 2),
 +        VMSTATE_END_OF_LIST()
 +    }
 +};
@@ -69,7 +182,16 @@ index 7788939..34fb405 100644
  static void *sh_timer_init(uint32_t freq, int feat, qemu_irq irq)
  {
      SHTimerState *s;
-@@ -245,7 +288,7 @@ static void *sh_timer_init(uint32_t freq, int feat, qemu_irq irq)
+@@ -240,12 +322,16 @@ static void *sh_timer_init(uint32_t freq, int feat, qemu_irq irq)
+     s->irq = irq;
+ 
+     s->timer = ptimer_init(sh_timer_tick, s, PTIMER_POLICY_LEGACY);
++    /* TSTR may be written before TCR; the reset prescaler is /4. */
++    ptimer_transaction_begin(s->timer);
++    ptimer_set_freq(s->timer, freq >> 2);
++    ptimer_transaction_commit(s->timer);
+ 
+     sh_timer_write(s, OFFSET_TCOR >> 2, s->tcor);
      sh_timer_write(s, OFFSET_TCNT >> 2, s->tcnt);
      sh_timer_write(s, OFFSET_TCPR >> 2, s->tcpr);
      sh_timer_write(s, OFFSET_TCR  >> 2, s->tcpr);
@@ -78,7 +200,7 @@ index 7788939..34fb405 100644
      return s;
  }
  
-@@ -344,6 +387,55 @@ static const MemoryRegionOps tmu012_ops = {
+@@ -344,6 +430,56 @@ static const MemoryRegionOps tmu012_ops = {
      .endianness = DEVICE_NATIVE_ENDIAN,
  };
  
@@ -98,6 +220,7 @@ index 7788939..34fb405 100644
 +    ptimer_transaction_commit(s->timer);
 +    s->enabled = 0;
 +    s->int_level = 0;
++    s->missed = 0;
 +    s->old_level = 0;
 +    s->tcor = 0xffffffff;
 +    s->tcnt = 0xffffffff;
@@ -134,7 +257,7 @@ index 7788939..34fb405 100644
  void tmu012_init(MemoryRegion *sysmem, hwaddr base, int feat, uint32_t freq,
                   qemu_irq ch0_irq, qemu_irq ch1_irq,
                   qemu_irq ch2_irq0, qemu_irq ch2_irq1)
-@@ -369,5 +461,6 @@ void tmu012_init(MemoryRegion *sysmem, hwaddr base, int feat, uint32_t freq,
+@@ -369,5 +505,6 @@ void tmu012_init(MemoryRegion *sysmem, hwaddr base, int feat, uint32_t freq,
      memory_region_init_alias(&s->iomem_a7, NULL, "timer-a7",
                               &s->iomem, 0, memory_region_size(&s->iomem));
      memory_region_add_subregion(sysmem, A7ADDR(base), &s->iomem_a7);
