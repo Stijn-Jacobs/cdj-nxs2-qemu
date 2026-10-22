@@ -8,6 +8,7 @@
  */
 #include "bf531.h"
 #include <stdarg.h>
+#include <inttypes.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -36,6 +37,7 @@
 enum {
     PLL_CTL = 0x000, PLL_DIV = 0x004, PLL_STAT = 0x00C, CHIPID = 0x014,
     SIC_IMASK = 0x10C, SIC_IAR0 = 0x110, SIC_ISR = 0x120, SIC_IWR = 0x124,
+    WDOG_CTL = 0x200, WDOG_CNT = 0x204, WDOG_STAT = 0x208,
     SPI_CTL = 0x500, SPI_STAT = 0x508, SPI_TDBR = 0x50C, SPI_RDBR = 0x510,
     SPORT1_TCR1 = 0x900,
     TIMER0 = 0x600, TIMER_ENABLE = 0x640, TIMER_DISABLE = 0x644,
@@ -59,6 +61,7 @@ enum {
 #define TSPEN       0x0001
 #define DMA2D       0x0010
 #define DI_EN       0x0080
+#define DI_SEL      0x0100
 #define DMA_DONE    0x0001
 #define DMA_RUN     0x0008
 
@@ -84,6 +87,20 @@ struct bf531 {
     bfin_core *core;
     bf531_host host;
     FILE *log;
+    /* Host-side flash config and bookkeeping: not in the snapshot. */
+    bool     fl_mapped;             /* the core reads the array directly */
+    bool     code_range_on;
+    uint32_t code_lo, code_hi;
+    /* Host-only diagnostics, excluded from every snapshot run. */
+    bf531_ppi_injection ppi_injection;
+    bool ppi_injection_configured, ppi_started;
+    bf531_watchdog_timing ownership_watchdog[2];
+    uint64_t ownership_overflow, ownership_arm;
+    struct {
+        bool active, expired, sampled;
+        unsigned phase;
+        uint64_t id, scheduled, observed;
+    } ownership_pending;
 
     uint8_t *sdram;
     uint32_t sdram_size;
@@ -97,6 +114,9 @@ struct bf531 {
 
     bf531_timer timer[3];
     uint32_t timer_status;
+    uint64_t wdog_stamp;
+    uint32_t wdog_left, wdog_fraction;
+    bool wdog_unsupported;
     bf531_dma dma[8];
     uint16_t *fb;
     uint64_t frames;
@@ -107,7 +127,25 @@ struct bf531 {
     uint8_t  sport1_rx[2048];
     size_t   sport1_rx_len;
     bool     sport1_rx_armed;
+    /* Packets that land while one is standing wait here in order
+     * (a free-running link sends without waiting for an answer). Lives after
+     * sport1_rx, so the snapshot's tail run carries it. */
+    uint8_t  sport1_q[16][2048];
+    uint16_t sport1_q_len[16];
+    unsigned sport1_q_head, sport1_q_count;
+    uint64_t sport1_q_dropped;
+    uint64_t sport1_rx_waits;   /* arms too small for the standing record */
+    /* The flash's command state (AMD command set). After sport1_rx, so the
+     * snapshot's tail run carries it. */
+    uint8_t  fl_mode, fl_cyc, fl_op, fl_toggle;
+    uint16_t fl_data;
+    uint16_t fl_pad;
+    uint32_t fl_reads;
+    uint64_t fl_until;
+    uint32_t fl_words, fl_sectors;
 };
+
+static void bus_write(void *opaque, uint32_t addr, uint32_t val, unsigned size);
 
 static void __attribute__((format(printf, 2, 3))) slog(bf531 *s, const char *fmt, ...)
 {
@@ -138,6 +176,8 @@ static void sic_update(bf531 *s)
     uint32_t pend = s->sic_isr & s->mmr[SIC_IMASK / 4];
     uint32_t level = 0;
 
+    bfin_set_wake(s->core, !!(s->sic_isr & s->mmr[SIC_IWR / 4]));
+
     for (int n = 0; n < 24; n++) {
         if (pend & (1u << n)) {
             level |= 1u << (((s->mmr[SIC_IAR0 / 4 + n / 8] >> (4 * (n % 8))) & 0xF) + 7);
@@ -156,6 +196,278 @@ static void sic_set(bf531 *s, int irq, int on)
         s->sic_isr &= ~(1u << irq);
     }
     sic_update(s);
+}
+
+/* ---- opt-in host ownership observations -------------------------------- */
+static void ownership_add(bf531 *s, uint64_t *field, uint64_t n)
+{
+    if (UINT64_MAX - *field < n) {
+        *field = UINT64_MAX;
+        if (s->ownership_overflow != UINT64_MAX) { s->ownership_overflow++; }
+    } else { *field += n; }
+}
+static uint64_t wdog_due(bf531 *s);
+static void ownership_carry_at(bf531 *s, uint64_t deadline)
+{
+    if (s->ownership_pending.active && !s->ownership_pending.expired &&
+        s->ownership_pending.phase == 0 && bfin_timing_phase(s->core) == 1) {
+        bfin_ownership_timing t;
+        bfin_timing_read(s->core, &t);
+        /* Attribute a late observation by its actual deadline, not the read. */
+        if (deadline < t.start_cycle) { return; }
+        s->ownership_pending.phase = 1;
+        ownership_add(s, &s->ownership_watchdog[1].carried_arms, 1);
+    }
+}
+static void ownership_carry(bf531 *s)
+{
+    ownership_carry_at(s, wdog_due(s));
+}
+static void ownership_finish(bf531 *s)
+{
+    if (!s->ownership_pending.active) { return; }
+    ownership_carry(s);
+    bf531_watchdog_timing *w = &s->ownership_watchdog[s->ownership_pending.phase];
+    if (!s->ownership_pending.expired) { ownership_add(s, &w->cancelled_before_expiry, 1); }
+    else if (!s->ownership_pending.sampled) { ownership_add(s, &w->expired_without_sample, 1); }
+    s->ownership_pending.active = false;
+}
+static void ownership_arm(bf531 *s)
+{
+    int phase = bfin_timing_phase(s->core);
+    if (phase < 0) { return; }
+    ownership_finish(s);
+    if (s->ownership_arm == UINT64_MAX) {
+        if (s->ownership_overflow != UINT64_MAX) { s->ownership_overflow++; }
+        return;
+    }
+    s->ownership_pending = (typeof(s->ownership_pending)){
+        .active = true, .phase = phase, .id = ++s->ownership_arm,
+    };
+    ownership_add(s, &s->ownership_watchdog[phase].arms, 1);
+}
+static void ownership_expire(bf531 *s, uint64_t scheduled)
+{
+    if (!s->ownership_pending.active || s->ownership_pending.expired) { return; }
+    ownership_carry_at(s, scheduled);
+    bf531_watchdog_timing *w = &s->ownership_watchdog[s->ownership_pending.phase];
+    uint64_t now = bfin_cycles(s->core);
+    s->ownership_pending.expired = true;
+    s->ownership_pending.scheduled = scheduled;
+    s->ownership_pending.observed = now;
+    ownership_add(s, &w->expiries, 1);
+    uint64_t delay = now - scheduled;
+    if (delay > w->max_observation_delay_cycles) { w->max_observation_delay_cycles = delay; }
+}
+static void ownership_stat(bf531 *s)
+{
+    if (!s->ownership_pending.active || !s->ownership_pending.expired || s->ownership_pending.sampled) { return; }
+    bf531_watchdog_timing *w = &s->ownership_watchdog[s->ownership_pending.phase];
+    bf531_timing_sample sample = { s->ownership_pending.id,
+        s->ownership_pending.scheduled, s->ownership_pending.observed, bfin_cycles(s->core) };
+    uint64_t delay = sample.stat_cycle - sample.scheduled_cycle;
+    s->ownership_pending.sampled = true;
+    ownership_add(s, &w->stat_samples, 1);
+    ownership_add(s, &w->total_expiry_to_stat_cycles, delay);
+    w->last_sample = sample;
+    if (!w->worst_sample.arm || delay > w->max_expiry_to_stat_cycles) {
+        w->worst_sample = sample; w->max_expiry_to_stat_cycles = delay;
+    }
+}
+int bf531_timing_enable(bf531 *s, int configured, uint32_t pc)
+{
+    return bfin_timing_enable(s->core, configured, pc);
+}
+void bf531_timing_read(bf531 *s, bf531_ownership_timing *out)
+{
+    ownership_carry(s);
+    bfin_timing_read(s->core, &out->core);
+    memcpy(out->watchdog, s->ownership_watchdog, sizeof(out->watchdog));
+    out->overflow = s->ownership_overflow;
+    if (UINT64_MAX - out->overflow < out->core.overflow) { out->overflow = UINT64_MAX; }
+    else { out->overflow += out->core.overflow; }
+    if (s->ownership_pending.active && s->ownership_pending.expired && !s->ownership_pending.sampled) {
+        bf531_watchdog_timing *w = &out->watchdog[s->ownership_pending.phase];
+        w->pending_expiry = 1;
+        if (w->expired_without_sample == UINT64_MAX) { out->overflow = UINT64_MAX; }
+        else { w->expired_without_sample++; }
+    }
+}
+static void timing_mask_json(FILE *f, const bfin_mask_timing *m)
+{
+    fprintf(f, "{\"intervals\":%" PRIu64 ",\"total_cycles\":%" PRIu64
+        ",\"total_awake_cycles\":%" PRIu64 ",\"total_idle_cycles\":%" PRIu64
+        ",\"max_cycles\":%" PRIu64 ",\"max_awake_cycles\":%" PRIu64 ",\"max_idle_cycles\":%" PRIu64
+        ",\"open\":%s,\"censored_intervals\":%" PRIu64 ",\"censored_cycles\":%" PRIu64
+        ",\"censored_idle_cycles\":%" PRIu64 "}", m->intervals, m->total_cycles,
+        m->total_awake_cycles, m->total_idle_cycles, m->max_cycles, m->max_awake_cycles,
+        m->max_idle_cycles, m->open ? "true" : "false", m->censored_intervals,
+        m->censored_cycles, m->censored_idle_cycles);
+}
+static void timing_sample_json(FILE *f, const bf531_timing_sample *s)
+{
+    if (!s->arm) { fputs("null", f); return; }
+    fprintf(f, "{\"arm\":%" PRIu64 ",\"scheduled_cycle\":%" PRIu64
+        ",\"observed_cycle\":%" PRIu64 ",\"stat_cycle\":%" PRIu64 "}",
+        s->arm, s->scheduled_cycle, s->observed_cycle, s->stat_cycle);
+}
+static void timing_watchdog_json(FILE *f, const bf531_watchdog_timing *w)
+{
+    fprintf(f, "{\"arms\":%" PRIu64 ",\"carried_arms\":%" PRIu64 ",\"expiries\":%" PRIu64
+        ",\"stat_samples\":%" PRIu64 ",\"cancelled_before_expiry\":%" PRIu64
+        ",\"expired_without_sample\":%" PRIu64 ",\"max_observation_delay_cycles\":%" PRIu64
+        ",\"max_expiry_to_stat_cycles\":%" PRIu64 ",\"total_expiry_to_stat_cycles\":%" PRIu64
+        ",\"pending_expiry\":%s,\"last_sample\":", w->arms, w->carried_arms, w->expiries,
+        w->stat_samples, w->cancelled_before_expiry, w->expired_without_sample,
+        w->max_observation_delay_cycles, w->max_expiry_to_stat_cycles,
+        w->total_expiry_to_stat_cycles, w->pending_expiry ? "true" : "false");
+    timing_sample_json(f, &w->last_sample); fputs(",\"worst_sample\":", f);
+    timing_sample_json(f, &w->worst_sample); fputc('}', f);
+}
+int bf531_timing_json(bf531 *s, FILE *f)
+{
+    bf531_ownership_timing t;
+    bf531_timing_read(s, &t);
+    fprintf(f, "{\"schema\":1,\"units\":\"elapsed_model_cycles\",\"cycles_per_second\":%" PRIu64
+        ",\"start_pc\":", (uint64_t)BF531_CCLK_HZ);
+    if (t.core.start_configured) { fprintf(f, "\"0x%08x\"", t.core.start_pc); } else { fputs("null", f); }
+    fprintf(f, ",\"start_seen\":%s,\"start_cycle\":", t.core.start_seen ? "true" : "false");
+    if (t.core.start_seen) { fprintf(f, "%" PRIu64, t.core.start_cycle); } else { fputs("null", f); }
+    fprintf(f, ",\"end_cycle\":%" PRIu64 ",\"snapshot_loaded\":%s,\"overflow\":%" PRIu64,
+        t.core.end_cycle, t.core.snapshot_loaded ? "true" : "false", t.overflow);
+    for (unsigned phase = 0; phase < 2; phase++) {
+        fprintf(f, ",\"%s\":{", phase ? "runtime" : "boot");
+        if (phase) { fprintf(f, "\"status\":\"%s\",", t.core.start_seen && !t.core.snapshot_loaded ? "measured" : "unavailable"); }
+        fputs("\"imask\":", f); timing_mask_json(f, &t.core.phase[phase].imask);
+        fputs(",\"ipend_global\":", f); timing_mask_json(f, &t.core.phase[phase].ipend_global);
+        fputs(",\"watchdog\":", f); timing_watchdog_json(f, &t.watchdog[phase]); fputc('}', f);
+    }
+    fputs("}\n", f);
+    return ferror(f) ? -1 : 0;
+}
+
+int bf531_ppi_delay_configure(bf531 *s, uint32_t delay_us, uint32_t count)
+{
+    if (delay_us > 50000 || count > 1024 || s->ppi_started ||
+        s->ppi_injection_configured || (s->dma[0].reg[D_CONFIG / 4] & DMAEN) ||
+        (delay_us && !count)) { return -1; }
+    s->ppi_injection.delay_us = delay_us;
+    s->ppi_injection.requested_count = count;
+    s->ppi_injection_configured = true;
+    return 0;
+}
+void bf531_ppi_delay_read(const bf531 *s, bf531_ppi_injection *out)
+{
+    *out = s->ppi_injection;
+}
+int bf531_ppi_delay_json(const bf531 *s, FILE *f)
+{
+    bfin_ownership_timing t;
+    const bf531_ppi_injection *i = &s->ppi_injection;
+    bfin_timing_read(s->core, &t);
+    fprintf(f, "{\"schema\":1,\"units\":\"elapsed_model_cycles\",\"cycles_per_second\":%" PRIu64
+        ",\"delay_us\":%u,\"requested_count\":%u,\"applied_count\":%u,\"runtime_seen\":%s"
+        ",\"snapshot_loaded\":%s,\"start_cycle\":", (uint64_t)BF531_CCLK_HZ,
+        i->delay_us, i->requested_count, i->applied_count, t.start_seen ? "true" : "false",
+        t.snapshot_loaded ? "true" : "false");
+    if (t.start_seen) { fprintf(f, "%" PRIu64, t.start_cycle); } else { fputs("null", f); }
+    fprintf(f, ",\"end_cycle\":%" PRIu64 ",\"status\":\"%s\",\"last\":", t.end_cycle,
+        i->applied_count && !t.snapshot_loaded ? "applied" : "unavailable");
+    if (i->applied_count) {
+        fprintf(f, "{\"scheduled_cycle\":%" PRIu64 ",\"original_due_cycle\":%" PRIu64
+            ",\"delayed_due_cycle\":%" PRIu64 "}", i->scheduled_cycle,
+            i->original_due_cycle, i->delayed_due_cycle);
+    } else { fputs("null", f); }
+    fputs("}\n", f);
+    return ferror(f) ? -1 : 0;
+}
+
+/* ---- SCLK watchdog (BF53x HRM15-50..54) ------------------------------- */
+
+/* As the ADSP-BF533 Hardware Reference (Rev. 3.6, chapter 15) gives it: the
+ * WDEN disable key, CNT preloaded while disabled and reloaded into STAT while
+ * enabled, a countdown that stops at zero, and WDRO sticky until cleared after
+ * a disable. It counts elapsed time at the current PLL_DIV ratio. Of the
+ * expiry events the general-purpose interrupt and none are modelled; reset
+ * and NMI stop the model (BFIN_STOP_UNDEF) with a diagnostic. */
+#define WDRO 0x8000u
+#define WD_DISABLE 0x0ad0u
+static int wdog_enabled(bf531 *s) { return (s->mmr[WDOG_CTL / 4] & 0xff0) != WD_DISABLE; }
+static void wdog_irq(bf531 *s)
+{
+    uint32_t control = s->mmr[WDOG_CTL / 4];
+    sic_set(s, 23, (control & (WDRO | 6)) == (WDRO | 4));
+}
+static void wdog_expire(bf531 *s, uint64_t scheduled)
+{
+    s->wdog_left = 0;
+    ownership_expire(s, scheduled); /* per arm, including reload with sticky WDRO */
+    if (!(s->mmr[WDOG_CTL / 4] & WDRO)) {
+        unsigned event = s->mmr[WDOG_CTL / 4] & 6;
+        s->mmr[WDOG_CTL / 4] |= WDRO;
+        if (event == 0 || event == 2) {
+            slog(s, "watchdog reset/NMI expiry is unsupported (WDEV=%u)", event >> 1);
+            s->wdog_unsupported = true;
+        }
+    }
+    wdog_irq(s);
+}
+static void wdog_sync(bf531 *s)
+{
+    uint64_t now = bfin_cycles(s->core), stamp = s->wdog_stamp, delta = now - stamp;
+    s->wdog_stamp = now;
+    if (!wdog_enabled(s)) { return; }
+    if (!s->wdog_left) { wdog_expire(s, now); return; }
+    uint32_t divider = s->mmr[PLL_DIV / 4];
+    unsigned ssel = divider & 15 ? divider & 15 : 5;
+    unsigned scale = 1u << ((divider >> 4) & 3);
+    uint64_t left = (uint64_t)s->wdog_left * ssel - s->wdog_fraction;
+    if (delta >= (left + scale - 1) / scale) {
+        wdog_expire(s, stamp + (left + scale - 1) / scale); return;
+    }
+    uint64_t ticks = delta * scale + s->wdog_fraction;
+    s->wdog_left -= ticks / ssel;
+    s->wdog_fraction = ticks % ssel;
+}
+static uint64_t wdog_due(bf531 *s)
+{
+    if (!wdog_enabled(s) || !s->wdog_left) { return NEVER; }
+    uint32_t divider = s->mmr[PLL_DIV / 4];
+    unsigned ssel = divider & 15 ? divider & 15 : 5;
+    unsigned scale = 1u << ((divider >> 4) & 3);
+    uint64_t left = (uint64_t)s->wdog_left * ssel - s->wdog_fraction;
+    return s->wdog_stamp + (left + scale - 1) / scale;
+}
+static int wdog_access(uint32_t off, unsigned size)
+{
+    return (off == WDOG_CTL && size == 2) ||
+           ((off == WDOG_CNT || off == WDOG_STAT) && size == 4);
+}
+static void wdog_write(bf531 *s, uint32_t off, uint32_t value, unsigned size)
+{
+    if (!wdog_access(off, size)) { slog(s, "invalid watchdog write width/address"); return; }
+    wdog_sync(s);
+    if (off == WDOG_CTL) {
+        uint32_t sticky = s->mmr[WDOG_CTL / 4] & WDRO;
+        if (!wdog_enabled(s) && (value & WDRO)) { sticky = 0; }
+        int enabled = wdog_enabled(s);
+        s->mmr[WDOG_CTL / 4] = (value & 0xff6) | sticky;
+        if (!enabled && wdog_enabled(s)) { ownership_arm(s); }
+        else if (enabled && !wdog_enabled(s)) { ownership_finish(s); }
+        wdog_sync(s); /* enabling a zero count expires immediately */
+        wdog_irq(s);
+    } else if (off == WDOG_CNT) {
+        if (!wdog_enabled(s)) {
+            s->mmr[WDOG_CNT / 4] = s->wdog_left = value;
+            s->wdog_fraction = 0;
+        }
+    } else if (wdog_enabled(s)) {
+        ownership_arm(s);
+        s->wdog_left = s->mmr[WDOG_CNT / 4];
+        s->wdog_fraction = 0;
+        if (!s->wdog_left) { wdog_expire(s, bfin_cycles(s->core)); }
+    }
+    bfin_yield(s->core); /* expose a changed deadline to the SoC runner */
 }
 
 /* ---- GP timers ---------------------------------------------------------- */
@@ -247,7 +559,7 @@ static void timer_write(bf531 *s, uint32_t off, uint32_t v)
 
 /* ---- DMA and the PPI ---------------------------------------------------- */
 
-static uint8_t *load_target(bf531 *s, uint32_t addr, uint32_t len)
+static uint8_t *load_target(bf531 *s, uint32_t addr, size_t len)
 {
     if (addr < s->sdram_size && len <= s->sdram_size - addr) {
         return s->sdram + addr;
@@ -261,10 +573,315 @@ static uint8_t *load_target(bf531 *s, uint32_t addr, uint32_t len)
     if (addr - L1_DATA_B < sizeof(s->l1_data_b) && len <= sizeof(s->l1_data_b) - (addr - L1_DATA_B)) {
         return s->l1_data_b + (addr - L1_DATA_B);
     }
+    if (addr - L1_SCRATCH < sizeof(s->l1_scratch) && len <= sizeof(s->l1_scratch) - (addr - L1_SCRATCH)) {
+        return s->l1_scratch + (addr - L1_SCRATCH);
+    }
     return NULL;
 }
 
 static uint32_t mem_read(bf531 *s, uint32_t addr, unsigned size);
+
+/* ---- the flash ---------------------------------------------------------- */
+
+/*
+ * 2 MiB, x16, AMD/JEDEC command set (CFI cmdset 0x0002), top boot: 31
+ * sectors of 64 KiB, then 8 of 8 KiB (see FL_BOOT). Written from the
+ * command-set description, not from any other simulator. The ID pair is
+ * FL_ID_MAN/FL_ID_DEV below; drivers that care read the CFI table instead.
+ *
+ * Reads: in read-array mode the core reads the flash array directly (a ROM
+ * bank); in every other mode (autoselect, CFI query, a program or erase in
+ * flight) the bank is unmapped and every read, data or instruction, goes
+ * through the bus to fl_read16.
+ */
+enum { FL_ARRAY, FL_AUTO, FL_CFI, FL_BUSY };
+enum { FLOP_PROGRAM, FLOP_SECTOR, FLOP_CHIP };
+#define FL_SECTOR     0x10000u
+#define FL_ID_MAN   0x0089   /* as the CFI model the stock GUI is known to update against reports */
+#define FL_ID_DEV   0x00AD
+
+static void __attribute__((format(printf, 2, 3))) flog(bf531 *s, const char *fmt, ...)
+{
+    va_list ap;
+
+    if (s->log) {
+        va_start(ap, fmt);
+        fprintf(s->log, "cdj_bf531: ");
+        vfprintf(s->log, fmt, ap);
+        fputc('\n', s->log);
+        va_end(ap);
+    }
+}
+
+static void fl_sync(bf531 *s)
+{
+    bool want = s->fl_mode == FL_ARRAY;
+
+    if (want && !s->fl_mapped) {
+        bfin_map_rom(s->core, ASYNC_BASE, FLASH_SIZE, s->flash);
+    } else if (!want && s->fl_mapped) {
+        bfin_unmap_rom(s->core, ASYNC_BASE);
+    }
+    s->fl_mapped = want;
+}
+
+static uint16_t fl_cfi(unsigned w)
+{
+    static const uint8_t t[0x50] = {
+        [0x10] = 'Q', 'R', 'Y', 0x02, 0x00, 0x40, 0x00, 0x00, 0x00,
+        [0x1B] = 0x27, 0x36, 0x00, 0x00, 0x04, 0x00, 0x0A, 0x0F, 0x05, 0x00,
+                 0x04, 0x04,
+        [0x27] = 0x15, 0x01, 0x00, 0x00, 0x00, 0x02,   /* 2^21, x16, 2 regions */
+        [0x2D] = 0x1E, 0x00, 0x00, 0x01,               /* 31 x 64 KiB */
+                 0x07, 0x00, 0x20, 0x00,               /* then 8 x 8 KiB (top boot) */
+        [0x40] = 'P', 'R', 'I', '1', '3',
+        [0x4F] = 0x03,                                 /* top boot */
+    };
+
+    return w < sizeof(t) ? t[w] : 0;
+}
+
+static void fl_finish(bf531 *s)
+{
+    s->fl_mode = FL_ARRAY;
+    fl_sync(s);
+}
+
+/* RY/BY#: busy ends by the modelled time when nothing polls the status bits. */
+static uint32_t fl_ready(bf531 *s)
+{
+    if (s->fl_mode == FL_BUSY && bfin_cycles(s->core) >= s->fl_until) {
+        fl_finish(s);
+    }
+    return s->fl_mode != FL_BUSY;
+}
+
+/* CDJ_BF531_FLASH_LOG=1: every command write and how each operation ended. */
+static int fl_log = -1;
+
+static bool fl_logging(void)
+{
+    if (fl_log < 0) {
+        fl_log = getenv("CDJ_BF531_FLASH_LOG") != NULL;
+    }
+    return fl_log;
+}
+
+static uint16_t fl_read16(bf531 *s, uint32_t addr)
+{
+    uint32_t off = (addr - ASYNC_BASE) & ~1u;
+    unsigned w = (off >> 1) & 0xFF;
+    uint16_t v;
+
+    if (s->fl_mode == FL_BUSY) {
+        s->fl_reads++;
+        /* Busy ends by status reads or by model time, whichever comes
+         * first, so polling that never advances the core clock still ends. */
+        if (s->fl_reads > s->fl_op * 32u + 4 ||
+            bfin_cycles(s->core) >= s->fl_until) {
+            if (fl_logging()) {
+                flog(s, "flash op %d done after %u status reads, pc 0x%08x",
+                     s->fl_op, s->fl_reads, bfin_get_pc(s->core));
+            }
+            fl_finish(s);
+        } else {
+            s->fl_toggle ^= 0x40;
+            v = s->fl_toggle;
+            if (s->fl_op == FLOP_PROGRAM) {
+                v |= ~s->fl_data & 0x80;                /* DQ7 is data# */
+            } else {
+                v |= 0x08 | (s->fl_toggle >> 4 & 0x04); /* DQ3, DQ2 toggles */
+            }
+            return v;
+        }
+    }
+    switch (s->fl_mode) {
+    case FL_AUTO:
+        return w == 0 ? FL_ID_MAN : w == 1 ? FL_ID_DEV : 0;
+    case FL_CFI:
+        return fl_cfi(w) ;
+    default:
+        memcpy(&v, s->flash + off, 2);
+        return v;
+    }
+}
+
+static uint32_t fl_read(bf531 *s, uint32_t addr, unsigned size)
+{
+    uint32_t v;
+
+    if (size == 4) {
+        v = fl_read16(s, addr);
+        return v | (uint32_t)fl_read16(s, addr + 2) << 16;
+    }
+    v = fl_read16(s, addr);
+    return size == 1 ? (v >> (8 * (addr & 1))) & 0xFF : v;
+}
+
+static void fl_busy(bf531 *s, int op, uint16_t data)
+{
+    static const uint64_t cycles[] = { 2000, 400000, 8000000 };
+
+    s->fl_mode = FL_BUSY;
+    s->fl_op = op;
+    s->fl_data = data;
+    s->fl_reads = 0;
+    s->fl_toggle = 0;
+    s->fl_until = bfin_cycles(s->core) + cycles[op];
+    fl_sync(s);
+}
+
+/* Top-boot geometry: 31 x 64 KiB, then 8 x 8 KiB boot sectors from 0x1F0000.
+ * The GUI keeps its journal in the 8 KiB sector at 0x1FC000 and erases the
+ * one at 0x1FA000 on its own; a uniform 64 KiB top sector wiped them all. */
+#define FL_BOOT       0x1F0000u
+#define FL_BOOT_SEC   0x2000u
+
+static void fl_erase(bf531 *s, uint32_t off)
+{
+    uint32_t len = off >= FL_BOOT ? FL_BOOT_SEC : FL_SECTOR;
+
+    off &= ~(len - 1);
+    memset(s->flash + off, 0xFF, len);
+    flog(s, "flash erase 0x%08x +0x%x", ASYNC_BASE + off, len);
+    s->fl_sectors++;
+}
+
+static void fl_write16(bf531 *s, uint32_t addr, uint16_t val)
+{
+    uint32_t off = (addr - ASYNC_BASE) & ~1u;
+    unsigned w = (off >> 1) & 0x7FF, v = val & 0xFF;
+
+    if (fl_logging()) {
+        flog(s, "flash w 0x%08x = 0x%04x (cycle %u, mode %d, pc 0x%08x)",
+             addr, val, s->fl_cyc, s->fl_mode, bfin_get_pc(s->core));
+    }
+
+    if (s->fl_mode == FL_BUSY) {
+        fl_read16(s, addr);     /* busy ends by time as well as reads */
+        if (s->fl_mode == FL_BUSY) {
+            return;             /* writes during a program or erase are ignored */
+        }
+    }
+    if (s->fl_cyc == 6) {       /* the program cycle: the AND of old and new */
+        uint16_t old;
+
+        memcpy(&old, s->flash + off, 2);
+        old &= val;
+        memcpy(s->flash + off, &old, 2);
+        s->fl_words++;
+        s->fl_cyc = 0;
+        fl_busy(s, FLOP_PROGRAM, old);
+        return;
+    }
+    if (v == 0xF0) {
+        s->fl_cyc = 0;
+        fl_finish(s);
+        return;
+    }
+    if (v == 0x98 && w == 0x55 && s->fl_cyc == 0) {
+        s->fl_mode = FL_CFI;
+        fl_sync(s);
+        return;
+    }
+    switch (s->fl_cyc) {
+    case 0: case 3:
+        s->fl_cyc = w == 0x555 && v == 0xAA ? s->fl_cyc + 1 : 0;
+        break;
+    case 1: case 4:
+        s->fl_cyc = w == 0x2AA && v == 0x55 ? s->fl_cyc + 1 : 0;
+        break;
+    case 2:
+        s->fl_cyc = 0;
+        if (w == 0x555 && v == 0x90) {
+            s->fl_mode = FL_AUTO;
+            fl_sync(s);
+        } else if (w == 0x555 && v == 0xA0) {
+            s->fl_cyc = 6;
+        } else if (w == 0x555 && v == 0x80) {
+            s->fl_cyc = 3;
+        }
+        break;
+    case 5:
+        s->fl_cyc = 0;
+        if (v == 0x30) {
+            fl_erase(s, off);
+            fl_busy(s, FLOP_SECTOR, 0);
+        } else if (w == 0x555 && v == 0x10) {
+            for (uint32_t o = 0; o < FLASH_SIZE;
+                 o += o >= FL_BOOT ? FL_BOOT_SEC : FL_SECTOR) {
+                fl_erase(s, o);
+            }
+            fl_busy(s, FLOP_CHIP, 0);
+        }
+        break;
+    default:
+        s->fl_cyc = 0;
+    }
+}
+
+static void fl_write(bf531 *s, uint32_t addr, uint32_t val, unsigned size)
+{
+    if (size == 4) {
+        fl_write16(s, addr, val);
+        fl_write16(s, addr + 2, val >> 16);
+    } else if (size == 2) {
+        fl_write16(s, addr, val);
+    } else {
+        flog(s, "flash byte write 0x%08x = 0x%x ignored (x16 part)", addr, val);
+    }
+}
+
+int bf531_flash_load(bf531 *s, const uint8_t *img, size_t len)
+{
+    if (len != FLASH_SIZE) {
+        return -1;
+    }
+    memcpy(s->flash, img, len);
+    return 0;
+}
+
+int bf531_flash_save(const bf531 *s, const char *path)
+{
+    FILE *f = fopen(path, "wb");
+    int ok = f && fwrite(s->flash, 1, FLASH_SIZE, f) == FLASH_SIZE;
+
+    if (f && fclose(f)) {
+        ok = 0;
+    }
+    return ok ? 0 : -1;
+}
+
+void bf531_flash_report(bf531 *s)
+{
+    flog(s, "flash %u words programmed, %u sectors erased", s->fl_words, s->fl_sectors);
+}
+
+void bf531_code_range(bf531 *s, uint32_t lo, uint32_t hi)
+{
+    s->code_range_on = true;
+    s->code_lo = lo;
+    s->code_hi = hi;
+    bfin_exec_track(s->core);
+}
+
+void bf531_code_range_report(bf531 *s)
+{
+    if (s->code_range_on) {
+        flog(s, "RANGE 0x%x:0x%x lines_run=%u", s->code_lo, s->code_hi,
+             bfin_exec_lines(s->core, s->code_lo, s->code_hi));
+    }
+}
+
+uint32_t bf531_bus_read(bf531 *s, uint32_t addr, unsigned size)
+{
+    return mem_read(s, addr, size);
+}
+
+void bf531_bus_write(bf531 *s, uint32_t addr, uint32_t val, unsigned size)
+{
+    bus_write(s, addr, val, size);
+}
 
 static uint16_t desc_word(bf531 *s, uint32_t *p)
 {
@@ -325,7 +942,24 @@ static void dma_start_unit(bf531 *s, bf531_dma *d)
 
     d->reg[D_CURR_ADDR / 4] = d->reg[D_START / 4];
     d->reg[D_IRQ_STATUS / 4] |= DMA_RUN;
-    d->due = bfin_cycles(s->core) + lines * (BF531_CCLK_HZ / 60 / 262);
+    uint64_t now = bfin_cycles(s->core);
+    d->due = now + lines * (BF531_CCLK_HZ / 60 / 262);
+    if (d == &s->dma[0]) {
+        bf531_ppi_injection *i = &s->ppi_injection;
+        s->ppi_started = true;
+        if (i->delay_us && i->applied_count < i->requested_count &&
+            bfin_timing_started(s->core)) {
+            uint64_t delay = i->delay_us * (BF531_CCLK_HZ / 1000000);
+            /* Never wrap a test delay into an immediate completion. */
+            if (d->due >= now && d->due <= UINT64_MAX - delay) {
+                i->scheduled_cycle = now;
+                i->original_due_cycle = d->due;
+                d->due += delay;
+                i->delayed_due_cycle = d->due;
+                i->applied_count++;
+            }
+        }
+    }
     bfin_yield(s->core);
 }
 
@@ -393,15 +1027,82 @@ static void dma_unit_done(bf531 *s, int ch)
  * set here too. */
 static void sport1_rx_complete(bf531 *s, int ch)
 {
+    /* Short bursts leave the current counts for firmware to poll. In 2D,
+     * pump one row per event so each DI_SEL interrupt can be serviced. */
     bf531_dma *d = &s->dma[ch];
-    size_t want = (d->reg[D_XCOUNT / 4] & 0xFFFF) * 2;
-    size_t len = s->sport1_rx_len < want ? s->sport1_rx_len : want;
-    uint8_t *to = load_target(s, d->reg[D_START / 4], len);
+    uint32_t *r = d->reg;
+    bool two_d = r[D_CONFIG / 4] & DMA2D;
+    size_t room = (d->reg[D_CURR_X / 4] & 0xFFFF) * 2;
+    size_t len;
+    uint8_t *to;
 
-    if (to) {
-        memcpy(to, s->sport1_rx, len);
+    if (two_d) {
+        unsigned y = r[D_CURR_Y / 4] & 0xFFFF;
+
+        room = y ? room + (size_t)(y - 1) * (r[D_XCOUNT / 4] & 0xFFFF) * 2 : 0;
     }
-    s->sport1_rx_len = 0;
+    len = s->sport1_rx_len < room ? s->sport1_rx_len : room;
+    d->due = NEVER;
+    /* A record goes in whole or waits for a receive that holds it. The
+     * stock GUI arms each receive for the record it expects (32 words for a
+     * header, 1024 for a 2 KB update record) and polls with a 100-word probe
+     * in between; splitting a 2 KB record across the probe corrupted every
+     * update chunk. A GUI that arms the full 2048 bytes always fits. */
+    if (s->sport1_rx_len > room) {
+        s->sport1_rx_waits++;
+        return;
+    }
+    if (two_d) {
+        size_t row = (r[D_CURR_X / 4] & 0xFFFF) * 2;
+        int32_t xmod = (int16_t)r[D_XMOD / 4];
+        int32_t ymod = (int16_t)r[D_YMOD / 4];
+
+        if (len > row) {
+            len = row;
+        }
+        for (size_t i = 0; i < len; i += 2) {
+            to = load_target(s, r[D_CURR_ADDR / 4], 2);
+            if (to) {
+                memcpy(to, s->sport1_rx + i, len - i < 2 ? 1 : 2);
+            }
+            r[D_CURR_X / 4]--;
+            /* HRM: Y_MODIFY replaces the last X_MODIFY of a row. */
+            r[D_CURR_ADDR / 4] += r[D_CURR_X / 4] ? xmod : ymod;
+        }
+        if (len && !r[D_CURR_X / 4]) {
+            r[D_CURR_X / 4] = r[D_XCOUNT / 4] & 0xFFFF;
+            r[D_CURR_Y / 4]--;
+            if (r[D_CURR_Y / 4] &&
+                (r[D_CONFIG / 4] & (DI_EN | DI_SEL)) == (DI_EN | DI_SEL)) {
+                r[D_IRQ_STATUS / 4] |= DMA_DONE;
+                s->mmr[SIC_IMASK / 4] |= 1u << (IRQ_PPI_DMA + ch);
+                sic_set(s, IRQ_PPI_DMA + ch, 1);
+            }
+        }
+    } else {
+        to = load_target(s, d->reg[D_CURR_ADDR / 4], len);
+        if (to) {
+            memcpy(to, s->sport1_rx, len);
+        }
+        d->reg[D_CURR_ADDR / 4] += len;
+        d->reg[D_CURR_X / 4] = (room - len) / 2;
+    }
+    memmove(s->sport1_rx, s->sport1_rx + len, s->sport1_rx_len - len);
+    s->sport1_rx_len -= len;
+    if (!s->sport1_rx_len && s->sport1_q_count) {
+        unsigned h = s->sport1_q_head;
+
+        memcpy(s->sport1_rx, s->sport1_q[h], s->sport1_q_len[h]);
+        s->sport1_rx_len = s->sport1_q_len[h];
+        s->sport1_q_head = (h + 1) % 16;
+        s->sport1_q_count--;
+    }
+    if (room > len) {
+        if (s->sport1_rx_len) {
+            d->due = bfin_cycles(s->core);
+        }
+        return;
+    }
     s->sport1_rx_armed = false;
     s->mmr[SIC_IMASK / 4] |= 1u << (IRQ_PPI_DMA + ch);
     dma_unit_done(s, ch);
@@ -463,6 +1164,12 @@ static void dma_write(bf531 *s, uint32_t off, uint32_t v)
         slog(s, "DMA%u enabled, config 0x%04x, start 0x%08x, %u words", ch, v,
              d->reg[D_START / 4], d->reg[D_XCOUNT / 4] & 0xFFFF);
         if (ch == 3) {
+            d->reg[D_CURR_ADDR / 4] = d->reg[D_START / 4];
+            d->reg[D_CURR_X / 4] = d->reg[D_XCOUNT / 4] & 0xFFFF;
+            if (v & DMA2D) {
+                d->reg[D_CURR_Y / 4] = dma_rows(d);
+                d->reg[D_IRQ_STATUS / 4] |= DMA_RUN;
+            }
             s->sport1_rx_armed = true;
             if (s->sport1_rx_len) {
                 sport1_rx_complete(s, ch);
@@ -491,8 +1198,14 @@ static int mmr_modelled(uint32_t off)
            (off >= DMA0 && off < DMA_END) || (off >= PPI_CONTROL && off < 0x1014);
 }
 
-static uint32_t sys_read(bf531 *s, uint32_t off)
+static uint32_t sys_read(bf531 *s, uint32_t off, unsigned size)
 {
+    if (off >= WDOG_CTL && off < WDOG_STAT + 4) {
+        if (!wdog_access(off, size)) { slog(s, "invalid watchdog read width/address"); return 0; }
+        wdog_sync(s);
+        if (off == WDOG_STAT) { ownership_stat(s); }
+        return off == WDOG_STAT ? s->wdog_left : s->mmr[off / 4];
+    }
     if (!mmr_modelled(off) && !s->logged[off / 4]) {
         s->logged[off / 4] = 1;
         slog(s, "read 0x%08x (unmodelled)", SYS_BASE + off);
@@ -509,15 +1222,25 @@ static uint32_t sys_read(bf531 *s, uint32_t off)
     case SIC_ISR:   return s->sic_isr;
     case SPI_STAT:  return 0x21;              /* SPIF, RXS: a transfer is done */
     case SPI_RDBR:  return 0;
-    case FIO_FLAG_C: case FIO_FLAG_S: case FIO_FLAG_T:
-        return s->mmr[FIO_FLAG_D / 4];
+    case FIO_FLAG_D: case FIO_FLAG_C: case FIO_FLAG_S: case FIO_FLAG_T: {
+        uint32_t v = s->mmr[FIO_FLAG_D / 4];
+
+        /* PF0 is the flash's RY/BY# when it is an input: the stock flash
+         * driver waits on it after every erase (low busy, high ready). */
+        if (!(s->mmr[FIO_DIR / 4] & 1)) {
+            v = (v & ~1u) | fl_ready(s);
+        }
+        return v;
+    }
     case EBIU_SDSTAT: return 0x8;             /* SDRS: SDRAM powered up */
     }
     return s->mmr[off / 4];
 }
 
-static void sys_write(bf531 *s, uint32_t off, uint32_t v)
+static void sys_write(bf531 *s, uint32_t off, uint32_t v, unsigned size)
 {
+    if (off >= WDOG_CTL && off < WDOG_STAT + 4) { wdog_write(s, off, v, size); return; }
+    if (off == PLL_DIV) { wdog_sync(s); s->wdog_fraction = 0; }
     if (!mmr_modelled(off) && !s->logged[off / 4]) {
         s->logged[off / 4] = 1;
         slog(s, "write 0x%08x = 0x%x (unmodelled)", SYS_BASE + off, v);
@@ -551,7 +1274,7 @@ static void sys_write(bf531 *s, uint32_t off, uint32_t v)
     case FIO_FLAG_T: s->mmr[FIO_FLAG_D / 4] ^= v; return;
     }
     s->mmr[off / 4] = v;
-    if (off == SIC_IMASK || (off >= SIC_IAR0 && off < SIC_IAR0 + 12)) {
+    if (off == SIC_IMASK || off == SIC_IWR || (off >= SIC_IAR0 && off < SIC_IAR0 + 12)) {
         sic_update(s);
     }
 }
@@ -564,14 +1287,14 @@ static uint32_t mem_read(bf531 *s, uint32_t addr, unsigned size)
     uint32_t v = 0;
 
     if (!h && addr - ASYNC_BASE < FLASH_SIZE) {
-        h = s->flash + (addr - ASYNC_BASE);
+        return fl_read(s, addr, size);
     }
     if (h) {
         memcpy(&v, h, size);
         return v;
     }
     if (addr - SYS_BASE < SYS_SIZE) {
-        return sys_read(s, addr - SYS_BASE);
+        return sys_read(s, addr - SYS_BASE, size);
     }
     slog(s, "read 0x%08x size %u (unmapped)", addr, size);
     return 0;
@@ -587,9 +1310,9 @@ static void bus_write(void *opaque, uint32_t addr, uint32_t val, unsigned size)
     bf531 *s = opaque;
 
     if (addr - SYS_BASE < SYS_SIZE) {
-        sys_write(s, addr - SYS_BASE, val);
+        sys_write(s, addr - SYS_BASE, val, size);
     } else if (addr - ASYNC_BASE < FLASH_SIZE) {
-        slog(s, "flash write 0x%08x = 0x%x", addr, val);
+        fl_write(s, addr, val, size);
     } else {
         slog(s, "write 0x%08x = 0x%x (unmapped)", addr, val);
     }
@@ -615,10 +1338,13 @@ bf531 *bf531_new(uint32_t sdram_size, const bf531_host *host, FILE *log)
     bfin_map_ram(s->core, L1_DATA_B, sizeof(s->l1_data_b), s->l1_data_b);
     bfin_map_ram(s->core, L1_SCRATCH, sizeof(s->l1_scratch), s->l1_scratch);
     bfin_map_rom(s->core, ASYNC_BASE, FLASH_SIZE, s->flash);
+    s->fl_mapped = true;
 
     /* Reset values: PLL_DIV SSEL 5, the default SIC assignment (PPI DMA
      * IVG8, SPORT DMA IVG9, the timers IVG11). */
     s->mmr[PLL_DIV / 4] = 0x0005;
+    s->mmr[SIC_IWR / 4] = 0xffffffffu;
+    s->mmr[WDOG_CTL / 4] = WD_DISABLE;
     for (int n = 0; n < 3; n++) {
         s->mmr[SIC_IAR0 / 4 + n] = iar[n];
         s->timer[n].due = NEVER;
@@ -642,10 +1368,29 @@ void bf531_sport1_rx(bf531 *s, const uint8_t *data, size_t len)
     if (len > sizeof(s->sport1_rx)) {
         len = sizeof(s->sport1_rx);
     }
-    if (data) {
-        memcpy(s->sport1_rx, data, len);
+    if (!data) {
+        s->sport1_rx_len = 0;
+        s->sport1_q_count = 0;
+        return;
     }
-    s->sport1_rx_len = data ? len : 0;
+    if (s->sport1_rx_len) {
+        unsigned t;
+
+        if (s->sport1_q_count == 16) {
+            /* Fail loud: a dropped link packet is a broken run. */
+            if (!s->sport1_q_dropped++) {
+                fprintf(stderr, "bf531: SPORT1 RX queue full, oldest packet dropped\n");
+            }
+            s->sport1_q_head = (s->sport1_q_head + 1) % 16;
+            s->sport1_q_count--;
+        }
+        t = (s->sport1_q_head + s->sport1_q_count++) % 16;
+        memcpy(s->sport1_q[t], data, len);
+        s->sport1_q_len[t] = len;
+        return;
+    }
+    memcpy(s->sport1_rx, data, len);
+    s->sport1_rx_len = len;
     /* Lands as the chip's next event, not from the host's call, so the
      * interrupt it raises reaches the core inside bf531_run. */
     if (data && s->sport1_rx_armed) {
@@ -689,15 +1434,10 @@ static void first_section(const uint8_t **img, size_t *len)
     }
 }
 
-int bf531_load_update(bf531 *s, const uint8_t *img, size_t len)
+/* The LDR stream at img[off..len): each block loaded where it says, then the
+ * core starts at the boot entry. 0, or -1 for a malformed stream. */
+static int ldr_boot(bf531 *s, const uint8_t *img, size_t off, size_t len)
 {
-    size_t off = 0x20;
-
-    first_section(&img, &len);
-    if (len - off > FLASH_SIZE - FLASH_APP) {
-        return -1;
-    }
-    memcpy(s->flash + FLASH_APP, img + off, len - off);
     while (off + 10 <= len) {
         uint32_t dest, count;
         uint16_t flags;
@@ -733,9 +1473,32 @@ int bf531_load_update(bf531 *s, const uint8_t *img, size_t len)
     return -1;
 }
 
+int bf531_load_update(bf531 *s, const uint8_t *img, size_t len)
+{
+    size_t off = 0x20;
+
+    first_section(&img, &len);
+    if (len < off + 4 || len - off > FLASH_SIZE - FLASH_APP) {
+        return -1;
+    }
+    /* The section ends in a 4-byte checksum the update tool checks; it is
+     * not flash content, and copying it put 0xED into the settings sector
+     * at 0x1FC000. */
+    memcpy(s->flash + FLASH_APP, img + off, len - off - 4);
+    return ldr_boot(s, img, off, len);
+}
+
+int bf531_flash_boot(bf531 *s)
+{
+    flog(s, "booting the flash's LDR at 0x%x", FLASH_APP);
+    return ldr_boot(s, s->flash, FLASH_APP, FLASH_SIZE);
+}
+
 static uint64_t next_event(bf531 *s)
 {
     uint64_t due = NEVER, core = bfin_timer_due(s->core);
+    uint64_t watchdog = wdog_due(s);
+    if (watchdog < due) { due = watchdog; }
 
     for (int n = 0; n < 3; n++) {
         due = s->timer[n].due < due ? s->timer[n].due : due;
@@ -752,6 +1515,7 @@ static uint64_t next_event(bf531 *s)
 static void advance(bf531 *s)
 {
     uint64_t now = bfin_cycles(s->core);
+    wdog_sync(s);
 
     for (int n = 0; n < 3; n++) {
         while (s->timer[n].due <= now) {
@@ -772,13 +1536,15 @@ bfin_stop bf531_run(bf531 *s, uint64_t n)
     uint64_t end = bfin_cycles(s->core) + n;
 
     while (bfin_cycles(s->core) < end) {
+        if (s->wdog_unsupported) { return BFIN_STOP_UNDEF; }
         uint64_t now = bfin_cycles(s->core), due = next_event(s);
         uint64_t stop_at = due < end ? due : end;
         bfin_stop stop;
 
         /* At least one cycle: an expired core timer is serviced by the step. */
         stop = bfin_step(s->core, stop_at > now ? stop_at - now : 1, NULL);
-        if (stop == BFIN_STOP_UNDEF || stop == BFIN_STOP_BREAK) {
+        if (stop == BFIN_STOP_UNDEF || stop == BFIN_STOP_BREAK ||
+            stop == BFIN_STOP_WATCH) {
             return stop;
         }
         if (stop == BFIN_STOP_IDLE) {
@@ -790,13 +1556,37 @@ bfin_stop bf531_run(bf531 *s, uint64_t n)
             }
         }
         advance(s);
+        if (s->wdog_unsupported) { return BFIN_STOP_UNDEF; }
     }
     return BFIN_STOP_BUDGET;
+}
+
+/* One instruction or bundle, then the peripherals catch up with the cycles
+ * it took. An IDLE that nothing wakes just moves time to the next event. */
+bfin_stop bf531_stepi(bf531 *s)
+{
+    if (s->wdog_unsupported) { return BFIN_STOP_UNDEF; }
+    bfin_stop stop = bfin_stepi(s->core);
+
+    if (stop == BFIN_STOP_IDLE) {
+        uint64_t due = next_event(s), now = bfin_cycles(s->core);
+
+        if (due != NEVER && due > now) {
+            bfin_skip_cycles(s->core, due - now);
+        }
+    }
+    advance(s);
+    return s->wdog_unsupported ? BFIN_STOP_UNDEF : stop;
 }
 
 bfin_core *bf531_core(bf531 *s)
 {
     return s->core;
+}
+
+uint64_t bf531_sport1_waits(const bf531 *s)
+{
+    return s->sport1_rx_waits;
 }
 
 uint64_t bf531_frames(const bf531 *s)
@@ -812,7 +1602,7 @@ uint64_t bf531_frames(const bf531 *s)
 #define SNAP_RUN(first, end) { offsetof(bf531, first),                                offsetof(bf531, end) - offsetof(bf531, first) }
 
 static const struct { size_t off, len; } snap_runs[] = {
-    SNAP_RUN(l1_data_a, flash),
+    SNAP_RUN(l1_data_a, mmr),     /* the L1 banks and the flash */
     SNAP_RUN(mmr, fb),
     { offsetof(bf531, frames), sizeof(uint64_t) },
     { offsetof(bf531, sport1_rx), sizeof(bf531) - offsetof(bf531, sport1_rx) },
@@ -843,10 +1633,62 @@ void bf531_load(bf531 *s, const uint8_t *buf)
     }
     memcpy(s->sdram, buf, s->sdram_size);
     bfin_snap_load(s->core, buf + s->sdram_size);
+    fl_sync(s);
+}
+
+/* Host view of len bytes of the chip's memory at addr (SDRAM or L1), or NULL. */
+uint8_t *bf531_mem(bf531 *s, uint32_t addr, size_t len)
+{
+    return load_target(s, addr, len);
 }
 
 const uint8_t *bf531_sdram(const bf531 *s, uint32_t *size)
 {
     *size = s->sdram_size;
     return s->sdram;
+}
+
+/* Reads without side effects for a debugger: RAM, the boot flash, core MMRs
+ * and the SoC's registers (whose reads only log). Returns 0, or -1 for an
+ * address nothing answers at. */
+int bf531_peek(bf531 *s, uint32_t addr, uint8_t *buf, size_t len)
+{
+    for (size_t n = 0; n < len; n++, addr++) {
+        uint8_t *h = load_target(s, addr, 1);
+        uint32_t w;
+
+        if (!h && addr - ASYNC_BASE < FLASH_SIZE) {
+            h = s->flash + (addr - ASYNC_BASE);
+        }
+        if (h) {
+            buf[n] = *h;
+        } else if (addr >= 0xFFE00000) {
+            w = bfin_get_mmr(s->core, addr & ~3u);
+            buf[n] = w >> (8 * (addr & 3));
+        } else if (addr - SYS_BASE < SYS_SIZE) {
+            uint32_t off = (addr - SYS_BASE) & ~3u;
+            /* Debugger peeks must not latch expiry or change SIC state. */
+            if (off >= WDOG_CTL && off <= WDOG_STAT) {
+                w = off == WDOG_STAT ? s->wdog_left : s->mmr[off / 4];
+            } else {
+                w = sys_read(s, off, 4);
+            }
+            buf[n] = w >> (8 * (addr & 3));
+        } else {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/* Writes RAM only (no register has a side effect from a debugger). */
+int bf531_poke(bf531 *s, uint32_t addr, const uint8_t *buf, size_t len)
+{
+    uint8_t *h = load_target(s, addr, len);
+
+    if (!h) {
+        return -1;
+    }
+    memcpy(h, buf, len);
+    return 0;
 }

@@ -54,9 +54,9 @@ echo "installed hw/sh4/cdj/ (board sources)"
 # The TMS320C6655 DSP: the C66x core and the SoC models. The offline tools
 # (runner, tests, image loader) stay out of the machine. It sits under cdj/ so
 # the board's '#include "c6x/c66x.h"' resolves.
-C6X_FILES=(c66x.h c66x_core_int.h c66x_priv.h c66x_decode.c c66x_decode.h c66x_ext_table.h
-           c66x_core.c c66x_mem.c c66x_exec.c c66x_step.c c66x_jit.c)
-C6X_SRCS=(c66x_core.c c66x_mem.c c66x_exec.c c66x_step.c c66x_jit.c c66x_decode.c)
+C6X_FILES=(c66x.h c66x_core_int.h c66x_priv.h c66x_native_int.h c66x_decode.c c66x_decode.h c66x_ext_table.h
+           c66x_core.c c66x_mem.c c66x_exec.c c66x_step.c c66x_jit.c c66x_native.c c66x_native_play.c c66x_native_engine.c c66x_native_ring.c c66x_native_levels.c c66x_native_phase.c c66x_native_c6747.c)
+C6X_SRCS=(c66x_core.c c66x_mem.c c66x_exec.c c66x_step.c c66x_jit.c c66x_native.c c66x_native_play.c c66x_native_engine.c c66x_native_ring.c c66x_native_levels.c c66x_native_phase.c c66x_native_c6747.c c66x_decode.c)
 for f in "$HERE"/../../hw/cdj/c6x/soc_*.[ch]; do
     C6X_FILES+=("${f#$HERE/../../hw/cdj/c6x/}")
     case "$f" in *.c) C6X_SRCS+=("${f#$HERE/../../hw/cdj/c6x/}") ;; esac
@@ -98,9 +98,14 @@ echo "hw/sh4/cdj/c6x/meson.build: ${#C6X_SRCS[@]} sources"
 
 # Anything in hw/sh4/cdj/ this run did not write is stale (a file deleted from
 # the project, an old split output): remove it so it cannot be built or read.
+# Not a pipe into grep -q: with pipefail, grep's early exit can kill printf
+# with SIGPIPE, and a file that WAS installed gets removed as stale at random.
+INSTALLED_LIST="$(mktemp)"
+printf '%s\n' "${INSTALLED[@]}" > "$INSTALLED_LIST"
 while IFS= read -r f; do
-    printf '%s\n' "${INSTALLED[@]}" | grep -qxF "$f" || { rm -f "$f"; echo "removed stale ${f#$Q/}"; }
+    grep -qxF -- "$f" "$INSTALLED_LIST" || { rm -f "$f"; echo "removed stale ${f#$Q/}"; }
 done < <(find "$D" -type f)
+rm -f "$INSTALLED_LIST"
 
 # --- hw/sh4/meson.build -----------------------------------------------------
 # Strip every earlier form (the two flat board lines, the marked c6x block and
@@ -141,6 +146,7 @@ config CDJ_COMMON
     select SH_TIMER
     select UNIMP
     select PFLASH_CFI02
+    select SD
 
 config CDJ2000NXS2
     bool

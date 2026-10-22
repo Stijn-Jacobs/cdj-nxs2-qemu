@@ -101,6 +101,7 @@ static void cdj_panel_update(void *opaque)
     char line[128];
     uint8_t fl[16];
     uint8_t cbuf[80];
+    const char *ram_diag;
     unsigned i;
     int y;
     uint64_t tx;
@@ -232,19 +233,25 @@ static void cdj_panel_update(void *opaque)
     cdj_text(ds, 16, y, "FIRMWARE CONSOLE  (RAM buffer 0x0BFBDB60)",
              COL_ACCENT);
     y += 22;
-    cpu_physical_memory_read(0x0BFBDB60, cbuf, sizeof(cbuf) - 1);
-    cbuf[sizeof(cbuf) - 1] = 0;
-    for (i = 0; i < sizeof(cbuf) - 1; i++) {
-        if (cbuf[i] && (cbuf[i] < 0x20 || cbuf[i] >= 0x7F)) {
-            cbuf[i] = '.';
-        }
-    }
-    if (cbuf[0]) {
-        snprintf(line, sizeof(line), "\"%s\"", (char *)cbuf);
-        cdj_text(ds, 24, y, line, COL_TEXT);
+    /* The buffer is the CDJ-2000NXS2 1.87 image's: CDJ_RAM_DIAG=0 on any other. */
+    ram_diag = getenv("CDJ_RAM_DIAG");
+    if (ram_diag && !strcmp(ram_diag, "0")) {
+        cdj_text(ds, 24, y, "(not read: not the CDJ-2000NXS2 1.87 image)", COL_DIM);
     } else {
-        cdj_text(ds, 24, y, "(empty -- firmware emits no log; "
-                 "logging is gated off)", COL_DIM);
+        cpu_physical_memory_read(0x0BFBDB60, cbuf, sizeof(cbuf) - 1);
+        cbuf[sizeof(cbuf) - 1] = 0;
+        for (i = 0; i < sizeof(cbuf) - 1; i++) {
+            if (cbuf[i] && (cbuf[i] < 0x20 || cbuf[i] >= 0x7F)) {
+                cbuf[i] = '.';
+            }
+        }
+        if (cbuf[0]) {
+            snprintf(line, sizeof(line), "\"%s\"", (char *)cbuf);
+            cdj_text(ds, 24, y, line, COL_TEXT);
+        } else {
+            cdj_text(ds, 24, y, "(empty -- firmware emits no log; "
+                     "logging is gated off)", COL_DIM);
+        }
     }
 
     /* Redraw counter and spinner, to tell a frozen console from an idle one. */

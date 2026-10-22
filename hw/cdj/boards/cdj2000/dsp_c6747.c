@@ -31,6 +31,7 @@
  *   CDJ_C6747_MHZ=<n>       DSP clock (default 300)
  *   CDJ_C6747=0             no core: the host port is plain memory
  *   CDJ_C6X_RECORD=<path>   record what the core receives, for c6xreplay
+ *   CDJ_NXS_DSP_EVENTS=<path> append the NXS host-port JSON-lines transcript
  *   CDJ_C6747_IDLE=<head>:<stack_lo>:<stack_hi>[:<reads>]  the busy-wait
  *                           loop the core skips (c66x_set_idle_loop) in
  *                           place of the board's; 0 turns the skip off
@@ -256,6 +257,7 @@ static void dsp_bus_write(void *opaque, uint32_t addr, uint32_t val,
 
     if (addr == UHPI_HPIC) {
         cdj_dsp_host_dsp_hpic(&s->host, val);
+        cdj_dsp_host_event(&s->host, "dsp_hpic_write", 0, addr, val, size);
     } else if (addr - EDMA3_BASE < EDMA3_SIZE) {
         cdj_edma3_write(&s->edma, addr, val);
     } else if (gpio_reg(addr, &pair, &reg)) {
@@ -329,22 +331,47 @@ static void hpi_note_write(CdjC6747 *s, uint32_t addr)
     }
 }
 
+static CdjHpiWatch *hpi_watch;
+
+void cdj_c6747_watch_hpi(CdjHpiWatch *watch)
+{
+    hpi_watch = watch;
+}
+
 static uint64_t hpi_read(void *opaque, hwaddr off, unsigned size)
 {
     CdjC6747 *s = opaque;
     uint32_t val;
+    uint32_t address = s->hpia;
+    CDJ_DSP_HOST_EVENT_GUARD(&s->host);
 
     switch (off >> 18) {
-    case 0:
-        return cdj_dsp_host_hpic(&s->host);
+    case 0: {
+        /* UHPI HPIC as the C6747 reads it back (SPRUFL8): reserved bits 6:5=2
+         * and 3=1, HWOB also in HWOBSTAT (bit 8), the half-word mirrored to
+         * both halves. MAIN writes it back, so the transcript shows it.
+         * HPIRST, DUALHPIA and HPIASEL are not modelled: MAIN never sets
+         * them. */
+        uint32_t hpic = cdj_dsp_host_hpic(&s->host);
+        uint32_t v = 0x48 | (hpic & HPIC_HWOB ? 0x101 : 0) |
+                     (hpic & (HPIC_HINT | HPIC_DSPINT));
+        return v | v << 16;
+    }
     case 1:
         return s->hpia;
     default:
         val = cdj_dsp_host_read_word(&s->host, s->hpia);
+        if (hpi_watch) {
+            hpi_watch('R', s->hpia, val);
+        }
         s->reads++;
         cdj_dsp_count(&s->polls, s->hpia, val);
         if ((off >> 18) == 2) {
             s->hpia += 4;
+        }
+        if (s->host.event_log && dsp_ram(s, address & ~3u)) {
+            cdj_dsp_host_event(&s->host, "hpi_host_data_read", off,
+                               address, val, size);
         }
         return val;
     }
@@ -353,11 +380,17 @@ static uint64_t hpi_read(void *opaque, hwaddr off, unsigned size)
 static void hpi_write(void *opaque, hwaddr off, uint64_t val, unsigned size)
 {
     CdjC6747 *s = opaque;
+    uint32_t address = s->hpia;
 
     switch (off >> 18) {
-    case 0:
+    case 0: {
+        bool dspint;
+
         cdj_dsp_host_lock(&s->host);
-        if (cdj_dsp_host_main_hpic(&s->host, val)) {
+        dspint = cdj_dsp_host_main_hpic(&s->host, val);
+        cdj_dsp_host_event(&s->host, "hpi_host_control_write", off,
+                           address, val, size);
+        if (dspint) {
             s->dspints++;
             if (s->host.enabled && !s->host.core) {
                 dsp_start(s);
@@ -365,11 +398,29 @@ static void hpi_write(void *opaque, hwaddr off, uint64_t val, unsigned size)
         }
         cdj_dsp_host_unlock(&s->host);
         break;
-    case 1:
+    }
+    case 1: {
+        CDJ_DSP_HOST_EVENT_GUARD(&s->host);
+
         s->hpia = val;
+        cdj_dsp_host_event(&s->host, "hpi_host_address_write", off,
+                           address, val, size);
         break;
-    default:
-        if (!cdj_dsp_host_write_word(&s->host, s->hpia, val)) {
+    }
+    default: {
+        CDJ_DSP_HOST_EVENT_GUARD(&s->host);
+        bool written;
+
+        if (hpi_watch) {
+            hpi_watch('W', address, val);
+        }
+        /* Under the lock the store cannot be posted: it lands in order with
+         * the event. */
+        written = s->host.event_log ?
+            cdj_dsp_host_write_word_locked(&s->host, address, val) :
+            cdj_dsp_host_write_word(&s->host, address, val);
+
+        if (!written) {
             s->dropped++;
         }
         s->writes++;
@@ -377,7 +428,14 @@ static void hpi_write(void *opaque, hwaddr off, uint64_t val, unsigned size)
         if ((off >> 18) == 2) {
             s->hpia += 4;
         }
+        if (written) {
+            cdj_dsp_host_event(&s->host,
+                               (off >> 18) == 2 ?
+                               "hpi_host_data_autoincrement_write" :
+                               "hpi_host_data_fixed_write", off, address, val, size);
+        }
         break;
+    }
     }
 }
 
@@ -459,6 +517,12 @@ static void c6747_exit_report(Notifier *n, void *data)
         c66x_record_close(s->host.core);
         cdj_dsp_host_unlock(&s->host);
     }
+    cdj_dsp_host_lock(&s->host);
+    if (s->host.event_log) {
+        fclose(s->host.event_log);
+        s->host.event_log = NULL;
+    }
+    cdj_dsp_host_unlock(&s->host);
 }
 
 void cdj_c6747_set_idle_loop(uint32_t head, uint32_t stack_lo,
@@ -508,6 +572,7 @@ const CdjDspWires *cdj_c6747_init(MemoryRegion *sysmem, hwaddr hpi_base)
     s->l1d = cdj_dsp_ram(&s->l1d_ram, "c6747.l1d", L1_SIZE);
     s->shram = cdj_dsp_ram(&s->shram_ram, "c6747.shram", SHRAM_SIZE);
     s->sdram = cdj_dsp_ram(&s->sdram_ram, "c6747.sdram", SDRAM_SIZE);
+    cdj_dsp_host_events_init(&s->host, getenv("CDJ_NXS_DSP_EVENTS"));
     cdj_dsp_host_init(&s->host, "c6747", "C6747", 300, set_command_pins, s);
     cdj_dsp_audio_arm();
     s->mcasps = (DspMcasps){ MCASP_BASE, MCASP_STRIDE };

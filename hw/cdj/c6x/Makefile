@@ -17,7 +17,7 @@ GLIB_LIBS   := $(shell pkg-config --libs gmodule-2.0 2>/dev/null)
 CFLAGS += $(GLIB_CFLAGS)
 SRC     = $(abspath .)
 
-CORE    = c66x_decode.c c66x_image.c c66x_core.c c66x_mem.c c66x_exec.c c66x_step.c c66x_jit.c
+CORE    = c66x_decode.c c66x_image.c c66x_core.c c66x_mem.c c66x_exec.c c66x_step.c c66x_jit.c c66x_native.c c66x_native_play.c c66x_native_engine.c c66x_native_ring.c c66x_native_levels.c c66x_native_phase.c c66x_native_c6747.c
 CORE_O  = $(patsubst %.c,$(O)/%.o,$(CORE))
 HDRS    = $(wildcard *.h binutils/*.h)
 
@@ -79,10 +79,22 @@ $(O)/ext_test: tests/ext_test.c $(CORE_O) | $(O)
 ext-test: $(O)/ext_test
 	$(O)/ext_test
 
+# The DSP program MAIN ships, from the default player's extract.
+MAIN_UNPACKED = $(firstword $(wildcard ../../../extract/main_unpacked.bin ../../../../extract/main_unpacked.bin))
+
+$(O)/native_test: tests/native_test.c $(CORE_O) | $(O)
+	$(CC) $(CFLAGS) $^ -o $@ -lm $(GLIB_LIBS)
+
+native-test: $(O)/native_test
+	$(O)/native_test $(MAIN_UNPACKED)
+
+copy-burst-test:
+	CC="$(CC)" python3 tests/test_jit_copy_burst.py
+
 m1: $(O)/c6xdis
-	python3 tools/c1_m1diff.py $(O)/c6xdis $(firstword $(wildcard ../../../extract/main_unpacked.bin ../../../../extract/main_unpacked.bin))
+	python3 tools/c1_m1diff.py $(O)/c6xdis $(MAIN_UNPACKED)
 
 clean:
 	rm -rf $(O)
 
-.PHONY: all m1 core-test ext-test clean
+.PHONY: all m1 core-test ext-test native-test copy-burst-test clean

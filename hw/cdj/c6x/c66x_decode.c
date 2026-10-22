@@ -254,7 +254,7 @@ static int decode_ext(uint32_t w, c66x_insn *d, char *text, unsigned textlen)
             unsigned base = ((side == 2) ^ cross) ? 32 : 0;
             int is_dst = e->o[k].fld == XFLD_DST;
             o->rw = is_dst ? tic6x_rw_write : tic6x_rw_read;
-            o->low_first = o->low_last = o->high_first = o->high_last = is_dst ? e->slots + 1 : 1;
+            o->low_first = o->high_first = is_dst ? e->slots + 1 : 1;
             o->xpath = cross;
             switch (e->o[k].type) {
             case XT_REG: case XT_XREG:
@@ -549,9 +549,7 @@ int c66x_decode(c66x_fp_reader rd, void *opaque, uint32_t addr,
             o->size = oi->size;
             o->rw = oi->rw;
             o->low_first = oi->low_first;
-            o->low_last = oi->low_last;
             o->high_first = oi->high_first;
-            o->high_last = oi->high_last;
 
             switch (oi->form) {
             case tic6x_operand_b15reg:

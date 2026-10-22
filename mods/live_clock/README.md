@@ -4,6 +4,10 @@ Repaints the REMAIN / elapsed clock on every frame instead of about three
 times a second. The digits count smoothly with the waveform instead of
 jumping.
 
+<img src="../../docs/img/mods/live_clock.gif" alt="The clock of a playing deck, stock above and with live_clock below" width="640">
+
+*Three seconds of a playing deck: the stock clock above, live_clock below.*
+
 | | |
 |---|---|
 | knob | `CDJ_GUI_CLOCK_DT` |

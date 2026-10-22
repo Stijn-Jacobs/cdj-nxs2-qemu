@@ -19,13 +19,13 @@ already there:
                     that baken (github.com/M-Igashi/baken, MIT) analyses --
                     no rekordbox needed
   5 DSP module      the DSP's hot code compiled to a native module in ~/c14gen
-                    from two 30 s plays of your own firmware (20-40 min; asked,
+                    from two 60 s plays of your own firmware (20-40 min; asked,
                     or skipped with --skip-dsp). Built again when it was made
                     from other code
   6 your setup      one deck or two, Pro DJ Link, audio, a MIDI controller,
                     saved to cdj.conf -- which ./start.sh then uses
   7 mods            small on/off tweaks to how the deck behaves (see
-                    mods/mods.conf), all defaults in one answer or one
+                    mods/<mod>/mod.conf), all defaults in one answer or one
                     at a time, saved alongside your setup
 
 options:
@@ -41,6 +41,9 @@ options:
                          DSP module (step 5) for the ones with a DSP profile
   --firmware <file>      your update file for that player (re-installs the images);
                          C2KNXS2.UPD for the CDJ-2000NXS2
+  --any-firmware         with --firmware: install any update for that player, not just the
+                         supported version (a modded file or another version); unsupported,
+                         warns about what differs and may not boot
   --music <folder>       the rekordbox USB export to image (re-makes the stick)
   --tracks <folder>      a plain folder of music to image instead, analysed by baken
   --decks 1|2            --name <deck name>    --djlink on|off   --audio on|off
@@ -81,6 +84,7 @@ ON_OFF = ("on", "1", "yes", "y", "off", "0", "no", "n")
 class Options:
     def __init__(self):
         self.dry = self.yes = self.skip_build = self.rebuild = self.skip_dsp = self.reconfigure = False
+        self.any_firmware = False
         self.model = self.firmware = self.music = self.tracks = self.decks = self.name = self.djlink = ""
         self.audio = self.controller = self.relay = self.build_dir = ""
 
@@ -102,6 +106,8 @@ def parse_args(argv):
             o.reconfigure = True
         elif a == "--skip-dsp":
             o.skip_dsp = True
+        elif a == "--any-firmware":
+            o.any_firmware = True
         elif a in VALUE_OPTS:
             attr, what = VALUE_OPTS[a]
             if i + 1 >= len(argv) or not argv[i + 1]:
@@ -139,6 +145,17 @@ def _mb(path):
             except OSError:
                 pass
     return -(-total // (1 << 20))
+
+
+STICK_MAX_MB = 2000  # FAT16's limit, as make_usb_image.py formats it
+
+
+def stick_size_mb(folder):
+    """(folder_mb, image_mb): the folder's size, and the size of a stick image
+    that holds it with room to spare -- 15 % and 64 MB more, in whole 64 MB,
+    at least 256 MB. make_test_stick.py sizes its image the same way."""
+    mb = _mb(folder)
+    return mb, max(256, (mb * 115 // 100 + 64 + 63) // 64 * 64)
 
 
 def _onoff(v):
@@ -474,13 +491,18 @@ class Setup:
         force = any(os.path.exists(os.path.join(self.fw_dir, f)) for f in m.images)
         label = "unpacking and verifying %s" % os.path.basename(upd)
         log = os.path.join(lay.logs, "firmware.log")
-        argv, env = launcher_cmd("firmware", "--model", m.id, "--install", *(["--force"] if force else []), upd)
-        if not con.run_phase(label, log, "only the v%s update (sha256 %s...) is supported; "
-                             "the log says which image differed" % (m.fw_version, m.upd_sha256[0][:8]),
-                             argv, rel=lay.emu, env=env):
+        argv, env = launcher_cmd("firmware", "--model", m.id, "--install", *(["--force"] if force else []),
+                                 *(["--any-firmware"] if o.any_firmware else []), upd)
+        hint = ("the log says what could not be unpacked" if o.any_firmware else
+                "only the v%s update (sha256 %s...) is supported; the log says which image differed; "
+                "--any-firmware installs another one anyway" % (m.fw_version, m.upd_sha256[0][:8]))
+        if not con.run_phase(label, log, hint, argv, rel=lay.emu, env=env):
             con.die("the firmware was not installed; nothing in %s/ changed" % shown)
         if self.firmware_ready() and not o.dry:
             con.good("%d images installed in %s/" % (len(m.images), shown))
+            differ = firmware.differing_images(self.fw_dir, m)
+            if differ:
+                con.warn("unsupported firmware: %s not the v%s images" % (" ".join(differ), m.fw_version))
 
     def make_image(self, folder, expect_pioneer=True):
         con, lay = self.con, self.lay
@@ -488,9 +510,8 @@ class Setup:
             con.warn("no PIONEER/ folder in %s: the deck browses rekordbox's database, so\n"
                      "      loose files will not show up. Export a playlist to a folder with rekordbox (Export\n"
                      "      mode, 'USB') and use that folder." % folder)
-        mb = _mb(folder)
-        size = max(256, (mb * 115 // 100 + 64 + 63) // 64 * 64)
-        if size > 2000:
+        mb, size = stick_size_mb(folder)
+        if size > STICK_MAX_MB:
             con.fail("%s holds %d MB; the stick image is FAT16, at most 2 GB. Export fewer tracks." % (folder, mb))
             return False
         py = self.py_tools
@@ -544,8 +565,7 @@ class Setup:
                         con.warn(line[len("note: "):])
             device = os.path.join(stage, "device")
             os.makedirs(device, exist_ok=True)
-            argv = [baken_bin, "expressport", "--device", device, "--generate-analysis",
-                    "--no-settings", xml_path]
+            argv = baken.expressport_argv(baken_bin, xml_path, device)
             if not con.run_phase("baken: writing the device export from %s"
                                  % os.path.basename(tracks.rstrip("/\\")),
                                  os.path.join(lay.logs, "baken-expressport.log"),
@@ -632,6 +652,9 @@ class Setup:
         if not m.builds_dsp_module:
             con.dim("not needed for the %s: its DSP is not emulated" % m.title)
             return
+        if not m.is_rig and firmware.differing_images(self.fw_dir, m):
+            con.dim("not built for unsupported firmware: the generator needs the DSP idle loop of the supported update")
+            return
         shown = "~/c14gen" if not lay.packaged else lay.jit_cache
         module = dsp_module.check(lay, m)
         if module.path and not module.notice:
@@ -695,7 +718,7 @@ class Setup:
         if self.ask5:
             self._questions()
             if not o.dry:
-                conf.save(lay.conf, self._conf_values(mods.load(lay)))
+                conf.save(lay.conf, self._conf_values(mods.load(lay, self.model.id)))
         # A kept setup still takes the Pythons found now, e.g. after installing mido.
         if not self.ask5 and not lay.packaged and (
                 (self.py_midi and not _same(self.py_midi, c["CDJ_MIDI_PYTHON"]))
@@ -733,14 +756,14 @@ class Setup:
     def step_mods(self):
         con, o, c, lay = self.con, self.o, self.c, self.lay
         con.step(7, "Mods")
-        if not self.model.is_rig:
-            con.dim("the mods patch the CDJ-2000NXS2's firmware: skipped for the %s" % self.model.title)
+        mod_list = mods.load(lay, self.model.id)
+        if not mod_list:
+            con.dim("no mods are offered for the %s yet: skipped" % self.model.title)
             if self.ask5:
                 self._save_conf([])
             return
         con.info("Small on/off tweaks to how the deck behaves, each with its own default;")
         con.info("./setup.sh --reconfigure asks again, or edit cdj.conf by hand.")
-        mod_list = mods.load(lay)
         if self.configured and not o.reconfigure:
             con.good("keeping your mods in cdj.conf (./setup.sh --reconfigure to change them)")
             ask7 = False
@@ -867,7 +890,7 @@ class Setup:
         con.info("controller   %s%s" % (ctl, " (relay on 127.0.0.1:%s)" % c["CDJ_RELAY_PORT"] if ctl != "none" else ""))
         con.info("DSP module   %s" % self._module_summary())
         mod_line = ", ".join("%s=%s" % (m.key, "on" if c.get(mods.conf_key(m.env)) == m.on else "off")
-                              for m in mods.load(lay))
+                              for m in mods.load(lay, self.model.id))
         con.info("mods         %s" % mod_line)
         con.info("start it:    %s%s%s      stop: Ctrl-C (or %s stop from another shell)" % (con.B, run, con.N, run))
         return self.offer_start()

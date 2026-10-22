@@ -13,7 +13,7 @@ import re
 import shutil
 import time
 
-from . import chain
+from . import chain, sites
 from . import model as cdj_model
 from .chain import export_default, nonempty
 from .layout import Layout
@@ -23,7 +23,7 @@ def batch_env(env, lay, prefix=""):
     """The batch's knobs. Returns (deck duration in s, private media, media dir)."""
     env["CDJ_ATA"] = "1"
     env["CDJ_IIC_CH"] = "both"
-    # 0x49 is the CDJ-TOUR1's DAC sensor; no other model addresses it.
+    # 0x49 is a DAC sensor that only one rig player addresses.
     env["CDJ_IIC_ADDR"] = "0x30,0x2c,0x10,0x49"
     # The DSP reply knobs are defaults only, so a caller's own values win.
     export_default(env, "CDJ_DSP_REPLY", "1")
@@ -41,6 +41,11 @@ def batch_env(env, lay, prefix=""):
     # the decks and leaves them to the user for FILMN x MOTION_MS.
     if nonempty(env, "AUTOLOAD", "1") == "1":
         env["DRIVER"] = os.path.join(lay.run, "load_track.py")
+        found = sites.find(lay)
+        if found.has("deck_ready"):
+            export_default(env, "READY_ADDR", "0x%08X" % found.get("deck_ready"))
+        else:
+            export_default(env, "READY_WAIT", "0")
         dur = 2
     else:
         chain.unset(env, "DRIVER")

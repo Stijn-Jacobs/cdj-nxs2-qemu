@@ -330,9 +330,9 @@ def run_deck(d, record, tier2, lock_wait, use_snapshot=False):
     argv = d.argv()
     restoring = bool(d.point) and snapshot.saved(d.point, ("main.vm",))
     if restoring:
-        argv += ["-incoming", "file:%s/main.vm" % d.point.replace("\\", "/")]
+        argv += snapshot.restore_args(d.point)
     elif d.point:
-        argv += ["-global", "migration.store-global-state=off"]
+        argv += snapshot.SAVE_ARGS
     with open(d.log, "wb") as log:
         q = subprocess.Popen(argv, env=env, stdout=log, stderr=subprocess.STDOUT)
     try:

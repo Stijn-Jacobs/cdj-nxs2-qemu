@@ -7,6 +7,7 @@ Everything below builds its own tiny synthetic images -- the real firmware is
 never needed for these. A handful of tests at the bottom exercise the real
 fw/unzipped/C2KNXS2.UPD and skip when it is not present, the same way the
 rest of the suite treats firmware-gated tests."""
+import collections
 import os
 import re
 import struct
@@ -22,8 +23,10 @@ import main_decode
 import main_encode
 import patch_gui
 import patch_main
+import modelfw
 import patch_update
 import sigpatch
+import validate
 from helpers import path, run_script
 
 
@@ -112,7 +115,7 @@ def build_synthetic_image():
     halfwords; erased flash right after it for a new segment to land in."""
     flash_base, ram_base = 0x1000, 0x2000000
     profile = sigpatch.ImageProfile(flash_base=flash_base, loadtab_off=0x10,
-                                    loadtab_n=8, ram_base=ram_base, ram_end=ram_base + 0x1000)
+                                    loadtab_n=8, ram_base=ram_base, ram_end=ram_base + 0x2000)
     sig = [0xAAA1, 0x2222, 0x3333, 0x4444, 0x5555, 0x6666, 0x7777, 0x8888, 0x9999, 0xBBB2]
     code = [0x1010, 0x2020, 0x3030] + sig + [0xE0E0, 0xF0F0, 0xC0C0]
     assert len(code) == 16
@@ -153,13 +156,15 @@ def test_sigpatch_places_the_routine_and_splices_the_call_site(tmp_path):
     assert out[0x70 + 2 * 4:0x70 + 2 * 12] != data[0x70 + 2 * 4:0x70 + 2 * 12]
 
 
-def test_sigpatch_refuses_a_signature_found_zero_or_twice(tmp_path):
+def test_sigpatch_leaves_out_a_mod_whose_signature_is_not_found(tmp_path):
     profile, data, mods = build_synthetic_image()
     mods["synth"] = mods["synth"]._replace(sig=[0xDEAD, 0xBEEF, 0xF00D])
     blob = tmp_path / "synth.bin"
     blob.write_bytes(b"\0" * 4)
-    with pytest.raises(SystemExit, match="found 0 times"):
-        sigpatch.patch(profile, lambda name: str(blob), data, mods, ["synth"])
+    report = {}
+    out = sigpatch.patch(profile, lambda name: str(blob), data, mods, ["synth"], report=report)
+    assert out == data
+    assert report["synth"] == ("skipped", "call site found 0 times")
 
 
 # -- sigpatch.py: two mods must stack, in either order, without colliding -------
@@ -171,7 +176,7 @@ def build_two_mod_image():
     mods are selected or in what order."""
     flash_base, ram_base = 0x1000, 0x2000000
     profile = sigpatch.ImageProfile(flash_base=flash_base, loadtab_off=0x10,
-                                    loadtab_n=8, ram_base=ram_base, ram_end=ram_base + 0x1000)
+                                    loadtab_n=8, ram_base=ram_base, ram_end=ram_base + 0x2000)
     sig_a = [0xAAA1, 0x2222, 0x3333, 0x4444, 0x5555, 0x6666, 0x7777, 0x8888, 0x9999, 0xBBB2]
     sig_b = [0xCCC1, 0x1112, 0x1113, 0x1114, 0x1115, 0x1116, 0x1117, 0x1118, 0x1119, 0xDDD2]
     code = ([0x1010, 0x2020, 0x3030] + sig_a + [0xE0E0, 0xF0F0, 0xC0C0]
@@ -195,13 +200,13 @@ def build_two_mod_image():
     return profile, bytes(d), {"mod_a": mod_a, "mod_b": mod_b}
 
 
-def write_blobs(tmp_path, mods):
+def write_blobs(tmp_path, mods, size=4):
     """A routine file per mod, deliberately different sizes so padding to the
     next 16 bytes isn't accidentally the same for both."""
     paths = {}
     for i, name in enumerate(sorted(mods)):
         p = tmp_path / (name + ".bin")
-        p.write_bytes(bytes([0x10 + i]) * (4 + 3 * i))
+        p.write_bytes(bytes([0x10 + i]) * (size + 3 * i))
         paths[name] = str(p)
     return lambda name: paths[name]
 
@@ -232,23 +237,27 @@ def test_mods_stack_regardless_of_order(tmp_path):
     assert both_ab[lo:hi] == alone_a[lo:hi] == routine_a
 
 
-def test_mods_refuse_to_combine_when_signatures_overlap(tmp_path):
+def test_a_mod_overlapping_another_is_left_out(tmp_path):
     profile, data, mods = build_two_mod_image()
     mods["mod_a_dup"] = mods["mod_a"]._replace(what="mod A duplicate")
     bp = write_blobs(tmp_path, mods)
-    with pytest.raises(SystemExit, match="overlap"):
-        sigpatch.patch(profile, bp, data, mods, ["mod_a", "mod_a_dup"])
+    report = {}
+    out = sigpatch.patch(profile, bp, data, mods, ["mod_a", "mod_a_dup"], report=report)
+    assert report["mod_a"][0] == "applied"
+    assert report["mod_a_dup"][0] == "skipped" and "overlaps" in report["mod_a_dup"][1]
+    assert out == sigpatch.patch(profile, bp, data, mods, ["mod_a"])
 
 
-def test_patching_one_at_a_time_and_chaining_is_refused_not_silently_wrong(tmp_path):
-    # The only supported way to combine mods is one patch() call with all of
-    # them named. Feeding one call's output into another must not produce a
-    # second, colliding routine placement -- it must fail loudly instead.
+def test_a_mod_added_to_a_patched_image_lands_where_patching_both_puts_it(tmp_path):
+    # The segment layout is fixed by the registry, so adding mod_b to an image
+    # that already has mod_a is the same image as patching both at once.
     profile, data, mods = build_two_mod_image()
-    bp = write_blobs(tmp_path, mods)
+    bp = write_blobs(tmp_path, mods, size=16)
     once = sigpatch.patch(profile, bp, data, mods, ["mod_a"])
-    with pytest.raises(SystemExit):
-        sigpatch.patch(profile, bp, once, mods, ["mod_b"])
+    report = {}
+    later = sigpatch.patch(profile, bp, once, mods, ["mod_a", "mod_b"], report=report)
+    assert report == {"mod_a": ("present", ""), "mod_b": ("applied", "")}
+    assert later == sigpatch.patch(profile, bp, data, mods, ["mod_a", "mod_b"])
 
 
 # -- patch_gui.py keeps sigpatch under the hood, CLI unchanged -------------------
@@ -256,7 +265,8 @@ def test_patching_one_at_a_time_and_chaining_is_refused_not_silently_wrong(tmp_p
 def test_patch_gui_list_still_prints_name_then_description():
     r = run_script("mods/patch_gui.py", "--list")
     assert r.returncode == 0, r.stderr
-    assert r.stdout.split()[0] == "wave3"
+    name, what = r.stdout.splitlines()[0].split(None, 1)
+    assert what == patch_gui.MODS[name].what
 
 
 # -- patch_update.py: the container-level tool -----------------------------------
@@ -272,14 +282,14 @@ def build_upd(*sections):
 
 
 def test_registry_only_lists_firmware_patchable_mods():
-    reg = patch_update.registry()
-    assert set(reg) == set(patch_gui.MODS) | set(patch_main.MODS)
-    # the emulator-only knobs from mods.conf must never appear here
-    conf = open(path("mods", "mods.conf"), encoding="utf-8").read()
-    knob_names = re.findall(r"^(\w+)\|", conf, re.M)
+    reg = patch_update.registry("cdj2000nxs2")
+    assert set(reg) == set(patch_gui.MODS) | set(patch_gui.TABLES) | set(patch_main.MODS) | set(patch_main.TABLES)
+    # the emulator-only knobs must never appear here
     assert "high_fps" not in reg and "live_clock" not in reg
     assert "three_band" not in reg          # that row's key, not the mod names
-    assert knob_names == ["high_fps", "live_clock", "three_band", "phrase", "osc", "usb_midi", "ableton_link", "tcnet"]
+    rows = list(patch_update.conf_rows())
+    assert rows[:2] == ["high_fps", "live_clock"] and rows[2:] == sorted(rows[2:])
+    assert {"ableton_link", "osc", "phrase", "tcnet", "three_band", "track_filter", "usb_midi"} <= set(rows)
 
 
 def test_list_cli_shows_target_and_versions():
@@ -349,12 +359,18 @@ class FakeTarget:
         self.MODS = mods
         self._profile = profile
         self._blob_path = blob_path
+        self.PATCH_SETS = collections.defaultdict(lambda: sigpatch.PatchSet(profile, mods))
 
-    def patch(self, image, names):
-        return sigpatch.patch(self._profile, self._blob_path, image, self.MODS, names)
+    def mods_for(self, model):
+        return self.MODS
+
+    def patch(self, image, names, model=None, report=None, spans=None):
+        return sigpatch.patch(self._profile, self._blob_path, image, self.MODS, names, report=report, spans=spans)
 
 
 def run_patch_update(monkeypatch, *args):
+    # The made-up display images carry none of the real renderer sites.
+    monkeypatch.setattr(validate, "known_gui_sites", lambda img, profile: [(0, len(img))])
     monkeypatch.setattr(sys, "argv", ["patch_update.py"] + [str(a) for a in args])
     patch_update.main()
 
@@ -368,7 +384,8 @@ def test_patch_update_combines_two_mods_on_one_target(tmp_path, monkeypatch):
     profile, image, mods = build_two_mod_image()
     bp = write_blobs(tmp_path, mods)
     fake = FakeTarget(profile, mods, bp)
-    monkeypatch.setitem(patch_update.TARGETS, "gui", (gui_decode.decode, gui_encode.encode, fake))
+    monkeypatch.setitem(patch_update.TARGETS, "gui", (lambda section, fw: gui_decode.decode(section),
+                                                       lambda section, image, fw: gui_encode.encode(section[:32], image), fake))
 
     src = tmp_path / "in.UPD"
     src.write_bytes(build_upd(fake_section("FAKE-GUI Ver9.99", image)))
@@ -378,13 +395,13 @@ def test_patch_update_combines_two_mods_on_one_target(tmp_path, monkeypatch):
     run_patch_update(monkeypatch, src, out_ba, "mod_b", "mod_a")
     assert out_ab.read_bytes() == out_ba.read_bytes()          # order does not reach the .UPD either
 
-    sizes, hdrlen = patch_update.parse_manifest(out_ab.read_bytes())
+    sizes, hdrlen = modelfw.parse_manifest(out_ab.read_bytes())
     new_section = out_ab.read_bytes()[hdrlen:hdrlen + sizes[0]]
     _, _, _, patched_image = gui_decode.decode(new_section)
     assert patched_image == sigpatch.patch(profile, bp, image, mods, ["mod_a", "mod_b"])
 
 
-def test_patch_update_patches_two_targets_in_one_run(tmp_path, monkeypatch):
+def test_patch_update_patches_two_targets_in_one_run(tmp_path, monkeypatch, synthetic_main):
     # The shape the phrase mod has: one mod for the display image,
     # others for MAIN, applied together -- each must only touch its own section.
     gui_profile, gui_image, gui_mods = build_two_mod_image()
@@ -396,14 +413,17 @@ def test_patch_update_patches_two_targets_in_one_run(tmp_path, monkeypatch):
 
     fake_gui = FakeTarget(gui_profile, gui_mods, gui_bp)
     fake_main = FakeTarget(main_profile, main_mods, main_bp)
-    monkeypatch.setitem(patch_update.TARGETS, "gui", (gui_decode.decode, gui_encode.encode, fake_gui))
+    monkeypatch.setitem(patch_update.TARGETS, "gui", (lambda section, fw: gui_decode.decode(section),
+                         lambda section, image, fw: gui_encode.encode(section[:32], image), fake_gui))
     # main() calls a 'main' target's encode with the whole original section
     # (the real main_encode.encode() needs it, to carry its bootloader/
     # emergency-updater S-records forward unchanged); this fake only needs
     # gui_decode/gui_encode's flat-blob shape, so it slices the header itself.
     monkeypatch.setitem(patch_update.TARGETS, "main",
-                        (gui_decode.decode, lambda section, image: gui_encode.encode(section[:32], image), fake_main))
-    monkeypatch.setitem(patch_update.SECTION_OF, "main", 2)
+                        (lambda section, fw: gui_decode.decode(section),
+                         lambda section, image, fw: gui_encode.encode(section[:32], image), fake_main))
+    monkeypatch.setattr(patch_update.modelfw, "load",
+                        lambda model: modelfw.Firmware({"gui": 1, "main": 2}, 0x50000))
 
     src = tmp_path / "in.UPD"
     src.write_bytes(build_upd(fake_section("FAKE-GUI Ver9.99", gui_image),
@@ -411,7 +431,7 @@ def test_patch_update_patches_two_targets_in_one_run(tmp_path, monkeypatch):
     out = tmp_path / "out.UPD"
     run_patch_update(monkeypatch, src, out, "mod_a", "synth")
 
-    sizes, hdrlen = patch_update.parse_manifest(out.read_bytes())
+    sizes, hdrlen = modelfw.parse_manifest(out.read_bytes())
     blob = out.read_bytes()
     _, _, _, patched_gui = gui_decode.decode(blob[hdrlen:hdrlen + sizes[0]])
     _, _, _, patched_main = gui_decode.decode(blob[hdrlen + sizes[0]:hdrlen + sizes[0] + sizes[1]])
@@ -438,7 +458,7 @@ def test_real_upd_repacks_byte_identical_with_no_mods(tmp_path):
 
 
 def test_repack_keeps_the_bytes_after_the_last_section(tmp_path):
-    upd = build_upd(gui_section(), b"driv-section", b"main-section", b"panl-section") + b"TOUR1TABLET" * 50
+    upd = build_upd(gui_section(), b"driv-section", b"main-section", b"panl-section") + b"TRAILER" * 50
     src = tmp_path / "in.UPD"
     src.write_bytes(upd)
     out = tmp_path / "out.UPD"
@@ -449,7 +469,7 @@ def test_repack_keeps_the_bytes_after_the_last_section(tmp_path):
 
 @needs_real_upd
 def test_real_gui_section_lzss_round_trips_through_our_own_encoder():
-    sizes, hdrlen = patch_update.parse_manifest(open(REAL_UPD, "rb").read())
+    sizes, hdrlen = modelfw.parse_manifest(open(REAL_UPD, "rb").read())
     data = open(REAL_UPD, "rb").read()
     section = data[hdrlen:hdrlen + sizes[0]]
     header, declared, avail, decoded = gui_decode.decode(section)
@@ -488,18 +508,18 @@ def test_a_mods_conf_row_names_every_patch_it_switches_on():
 def test_an_emulator_only_row_is_refused(tmp_path):
     r = run_script("mods/patch_update.py", tmp_path / "in.UPD", tmp_path / "out.UPD", "high_fps")
     assert r.returncode != 0
-    assert "only changes the emulator" in r.stderr
+    assert "has nothing to write" in r.stderr
 
 
 def test_a_row_name_wins_over_a_patch_of_the_same_name(tmp_path, monkeypatch):
     # `osc` is both a row and its first patch; the row must bring oscbeat too
     patched = []
-    monkeypatch.setattr(patch_main, "patch", lambda image, names: patched.extend(names) or image)
+    monkeypatch.setattr(patch_main, "patch", lambda image, names, model, report, spans=None: patched.extend(names) or report.update(dict.fromkeys(names, ("applied", ""))) or image)
     upd = build_upd(gui_section(), b"driv-section", b"main-section", b"panl-section")
     src = tmp_path / "in.UPD"
     src.write_bytes(upd)
     monkeypatch.setattr(patch_update, "TARGETS", dict(patch_update.TARGETS, main=(
-        lambda section: ("Ver1.87", 0, 0, section), lambda section, image: image, patch_main)))
+        lambda section, fw: ("Ver1.87", 0, 0, section), lambda section, image, fw: image, patch_main)))
     monkeypatch.setattr(sys, "argv", ["patch_update.py", str(src), str(tmp_path / "out.UPD"), "osc"])
     patch_update.main()
     assert patched == ["osc", "oscbeat"]

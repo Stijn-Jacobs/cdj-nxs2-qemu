@@ -36,16 +36,21 @@ DSP, SH7269 GUI processor).
 | `MODEL_UPD_SHA256` | their SHA-256s, in the same order |
 | `MODEL_MAIN_SECTION`, `MODEL_GUI_SECTION` | which section holds MAIN and the GUI image |
 | `MODEL_MAIN_LZSS` | offset of MAIN's LZSS stream in the S-record image (after its 4-byte length) |
+| `MODEL_MAIN_BASE` | where the unpacked MAIN image starts in the main CPU's address space: 0x04000000 on the SH7763 players, which unpack it to DRAM; 0x08000000 on the SH7724 players, which run it in place |
+| `MODEL_RAM_SNAPSHOT` | the MAIN RAM region (address:length) `scripts/run/instrumented_batch.sh` snapshots unless SNAP names one; absent = no snapshot |
+| `MODEL_UPDATE_WINDOW_END` | where the player's updater stops erasing and programming the MAIN region of a public update (see `mods/modelfw.py`); absent while the updater has not been read |
 | `MODEL_FW_STEPS` | the `prepare_firmware.sh` steps to run, in order |
 | `MODEL_EXPECTED` | each output image and its SHA-256 |
 | `MODEL_LAUNCH` | `rig` (default): the NXS2's two-board real-DSP rig, started by `rig.py`. `deck`: one MAIN emulator that draws the screen itself or runs its display board inside it, started by `deck.py`; the DSP warm-up, Pro DJ Link, mods, controller and virtual deck app are skipped for it |
 | `MODEL_DISPLAY_UPD` | the update file the display board loads (a `deck` model only); the install keeps a copy as `display.upd` beside the main images |
 | `MODEL_DISPLAY_FLASH` | the flash image of a display processor that runs inside the MAIN emulator, named in `MODEL_EXPECTED` and cut from the GUI section by the `srec_flat` step; the deck passes it as `CDJ_M16C_GUI` |
 | `MODEL_DSP_IDLE` | a `deck` model with a generated DSP module: the C6747's busy-wait loop as `<head>:<stack_lo>:<stack_hi>`. The machine skips it (`CDJ_C6747_IDLE`), and `build_dsp_module.sh` generates and replays the module against the same head. A `rig` model whose C6655 program is not the NXS2's names its main loop the same way with `MODEL_DSP_IDLE_KNOB=CDJ_C6X_IDLE`; the rig then skips that loop and loads `curated-<id>` instead of the NXS2's modules |
+| `MODEL_DSP_MHZ` | the C6747 clock in MHz (`CDJ_C6747_MHZ`, default 300). The XDJ decks decode ~6 s of MP3 in one burst every 5.94 s; the core runs that code at about 0.45x of the steady code on this host, so at 300 MHz it falls 0.4-0.7 s behind and the sound underruns. Below ~163 MHz the burst keeps up |
 | `MODEL_DSP_ISR_FAST` | `1` keeps the DSP's interrupt handlers on the core's fast store paths while the skip is armed (`C66X_IDLE_ISR_FAST`) |
 | `MODEL_DSP_GEN_ARGS` | generator options that model's DSP program needs, added to the common set in `build_dsp_module.sh` |
 | `MODEL_RIG_ENV` | a `rig` model: `NAME=value` words the rig exports unless the caller already set them (the knobs whose NXS2 addresses do not hold in that model's MAIN) |
-| `MODEL_TABLET_PEER` | `1`: the rig also starts `scripts/net/tablet_peer.py` on the Pro DJ Link segment (the CDJ-TOUR1 forwards its browse keys to a tablet until one tells it not to) |
+| `MODEL_APP_FACE` | a `deck` model the virtual deck app can draw: the face file in `app/faces/` (`<name>.json`). Without it `./start.sh --app` falls back to the plain window |
+| `MODEL_TABLET_PEER` | `1`: the rig also starts `scripts/net/tablet_peer.py` on the Pro DJ Link segment (a player that forwards its browse keys to a tablet until one tells it not to) |
 | `MODEL_IDLE_S`, `MODEL_LOAD_STEPS` | how a `deck` model reaches its snapshot points (`SNAPSHOT=idle\|loaded`): seconds from power-on to the settled screen, then the `;`-separated steps that load a track (`sendkey <key> <ms>`, `key <panel payload>`, `wait <s>`; see `scripts/run/snapshot_deck.py`) |
 
 ## Adding a model

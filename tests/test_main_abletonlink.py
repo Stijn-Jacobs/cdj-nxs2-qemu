@@ -12,10 +12,15 @@ import struct
 
 import pytest
 
+import modelfw
 import patch_main
 import sigpatch
+from players import cdj2000nxs2 as nxs2
 from test_main_osc import OscCpu, Sh4, WRAPPER
 from test_main_usbmidi import UsbMidiCpu
+from helpers import mod_row, stock_mods
+
+ABLETON_LINK = modelfw.mod_patch('ableton_link', 'cdj2000nxs2')
 
 BASE = 0
 BEAT_OFF = 0x300
@@ -45,7 +50,7 @@ def build_image():
     wrapper literal its span loads), the Link receive signature (with the two
     literals its span loads) and an erased cave for every registered routine."""
     d = bytearray(0x5000)
-    for off, site in ((BEAT_OFF, patch_main.BEAT_SEND), (RECV_OFF, patch_main.LINK_RECEIVE)):
+    for off, site in ((BEAT_OFF, nxs2.BEAT_SEND), (RECV_OFF, ABLETON_LINK.LINK_RECEIVE)):
         for k, op in enumerate(site['sig']):
             struct.pack_into('<H', d, off + 2 * k, op)
     struct.pack_into('<I', d, ((BEAT_OFF + 4) & ~3) + 4 + 46 * 4, WRAPPER)
@@ -65,7 +70,7 @@ ALL = ('abletonlink', 'abletonlinkpong', 'oscbeat')       # the mods whose sites
 @functools.lru_cache(maxsize=None)
 def patched_image(names):
     profile, data = build_image()
-    return sigpatch.patch(profile, patch_main.blob_path, data, patch_main.MODS, list(names))
+    return sigpatch.patch(profile, patch_main.blob_path, data, stock_mods(patch_main.MODS), list(names))
 
 
 def patched(names):
@@ -74,19 +79,16 @@ def patched(names):
 
 def test_registered_for_main_as_hooks_on_the_beat_send_and_the_link_receive():
     alive, pong = patch_main.MODS['abletonlink'], patch_main.MODS['abletonlinkpong']
-    for mod, site in ((alive, patch_main.BEAT_SEND), (pong, patch_main.LINK_RECEIVE)):
+    for mod, site in ((alive, nxs2.BEAT_SEND), (pong, ABLETON_LINK.LINK_RECEIVE)):
         assert mod.target == 'main' and mod.hook and not mod.literal
         assert dict(sig=mod.sig, start=mod.start, end=mod.end) == site
     assert pong.end - pong.start == 7
 
 
 def test_the_registry_row_enables_both_mods_and_defaults_off():
-    path = os.path.join(os.path.dirname(patch_main.__file__), 'mods.conf')
-    rows = [line.split('|') for line in open(path, encoding='utf-8')
-            if line.strip() and not line.startswith('#')]
-    (row,) = [r for r in rows if r[0] == 'ableton_link']
-    assert row[1].split('+') == ['CDJ_MAIN_ABLETONLINK', 'CDJ_MAIN_ABLETONLINKPONG']
-    assert row[2:5] == ['1', '0', 'off']
+    row = mod_row('ableton_link')
+    assert row.env.split('+') == ['CDJ_MAIN_ABLETONLINK', 'CDJ_MAIN_ABLETONLINKPONG']
+    assert (row.on, row.off, row.default) == ('1', '0', 'off')
 
 
 def test_jumps_to_the_trampolines_are_written_at_both_sites():
@@ -113,7 +115,7 @@ REAL_MAIN = os.path.join(os.path.dirname(__file__), '..', '..', 'extract', 'main
 @pytest.mark.skipif(not os.path.exists(REAL_MAIN), reason='extract/main_unpacked.bin not present')
 def test_real_main_has_each_signature_exactly_once_where_the_design_puts_it():
     with open(REAL_MAIN, 'rb') as f:
-        img = sigpatch.Image(patch_main.MAIN_PROFILE, f.read())
+        img = sigpatch.Image(nxs2.MAIN_PROFILE, f.read())
     for name, span in (('abletonlink', 0x082DB248), ('abletonlinkpong', 0x083E1B8A)):
         mod = patch_main.MODS[name]
         assert img.addr_of(sigpatch.find_sig(img, mod) + 2 * mod.start) == span
@@ -162,8 +164,8 @@ class LinkCpu(UsbMidiCpu, OscCpu):
     """The usbmidi interpreter plus what the Link routines add, with the
     firmware's fixed addresses mapped onto scratch memory and the firmware
     functions they call replaced by recorders."""
-    WINDOWS = ((TICK, 0x3800, 4), (TCNT4, 0x3810, 8), (DEVICE, 0x3820, 1),
-               (CEP, 0x3830, 4), (POOL, 0x3840, 4))
+    WINDOWS = ((TICK, 0x8000, 4), (TCNT4, 0x8010, 8), (DEVICE, 0x8020, 1),
+               (CEP, 0x8030, 4), (POOL, 0x8040, 4))
 
     def __init__(self, image):
         Sh4.__init__(self, image, 0)

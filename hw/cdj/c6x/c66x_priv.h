@@ -19,6 +19,9 @@
 #include "c66x.h"
 
 #include <fenv.h>
+#ifdef __SSE2__
+#include <xmmintrin.h>
+#endif
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -146,6 +149,8 @@ void idle_rs_clear(c66x_core *c);
 uint32_t mem_read(c66x_core *c, uint32_t a, unsigned n);
 void mem_write(c66x_core *c, uint32_t a, uint32_t v, unsigned n, int in_isr, uint32_t pc);
 c66x_insn *fetch_insn(c66x_core *c, uint32_t a);
+void *line_alloc(size_t n);
+void line_free(void *b);
 
 /* c66x_exec.c */
 int fop_run(c66x_core *c, const c66x_insn *in, uint32_t next_pc);
@@ -170,6 +175,32 @@ void jit_prof(c66x_core *c, uint32_t pc);
 void jit_auto_poll(c66x_core *c);
 void jit_init(c66x_core *c);
 void jit_free(c66x_core *c);
+
+/* c66x_native.c */
+void native_init(c66x_core *c);
+void native_free(c66x_core *c);
+int native_entry(c66x_core *c, uint32_t pc);
+int native_run(c66x_core *c, uint64_t end);
+int native_find(c66x_core *c, const char *name, uint32_t *at, uint32_t addr[2]);
+
+#ifdef __SSE2__
+/* Host float maths is SSE, so the rounding mode is one MXCSR field; the
+ * C library's fesetround also rewrites the x87 control word, which cost a
+ * fifth of the DSP thread on a firmware that runs in a directed mode. */
+static inline void host_round(unsigned rm)
+{
+    static const uint32_t rc[4] = { 0, 3u << 13, 2u << 13, 1u << 13 };
+
+    _mm_setcsr((_mm_getcsr() & ~(3u << 13)) | rc[rm]);
+}
+#else
+static const int fe_mode[4] = { FE_TONEAREST, FE_TOWARDZERO, FE_UPWARD, FE_DOWNWARD };
+
+static inline void host_round(unsigned rm)
+{
+    fesetround(fe_mode[rm]);
+}
+#endif
 
 /* ------------------------------------------------------------------------ */
 /* memory (c66x_mem.c)                                                        */

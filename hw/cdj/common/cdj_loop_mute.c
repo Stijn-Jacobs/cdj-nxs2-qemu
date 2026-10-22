@@ -48,6 +48,7 @@
 struct CdjLoopMute {
     CdjLoopMuteCfg cfg;
     const char *label;
+    uint32_t lags[4], nlags;            /* the exact-compare lags            */
     uint32_t run, miss;                 /* exact-match streaks               */
     uint32_t lag;                       /* correlation fallback: locked lag  */
     uint32_t zero_run;                  /* consecutive exact-zero frames     */
@@ -66,6 +67,16 @@ CdjLoopMute *cdj_loop_mute_new(const CdjLoopMuteCfg *cfg, const char *label)
     m->cfg = *cfg;
     m->cfg.period = MIN(cfg->period, CDJ_LOOP_HIST - 1);
     m->label = label;
+    m->lags[m->nlags++] = m->cfg.period;
+    if (cfg->replay) {
+        m->lags[m->nlags++] = cfg->replay;
+    }
+    if (cfg->period2) {
+        m->lags[m->nlags++] = cfg->period2;
+    }
+    if (cfg->replay2) {
+        m->lags[m->nlags++] = cfg->replay2;
+    }
     return m;
 }
 
@@ -143,14 +154,15 @@ static void unmute(CdjLoopMute *m)
 bool cdj_loop_mute_frame(CdjLoopMute *m, int16_t l, int16_t r)
 {
     uint32_t f = ((uint32_t)(uint16_t)l << 16) | (uint16_t)r;
-    bool same;
+    bool same = false;
+    uint32_t i;
 
     if (!m->cfg.period) {
         return false;
     }
-    same = m->hist[(m->pos - m->cfg.period) & (CDJ_LOOP_HIST - 1)] == f ||
-           (m->cfg.replay &&
-            m->hist[(m->pos - m->cfg.replay) & (CDJ_LOOP_HIST - 1)] == f);
+    for (i = 0; i < m->nlags; i++) {
+        same |= m->hist[(m->pos - m->lags[i]) & (CDJ_LOOP_HIST - 1)] == f;
+    }
     m->hist[m->pos & (CDJ_LOOP_HIST - 1)] = f;
     m->pos++;
     m->zero_run = f ? 0 : m->zero_run + 1;

@@ -5,7 +5,10 @@ setup and start share. The stamp names what the module was built from:
   generator  c14_jitgen.py's GENERATOR_VERSION; the generated C changed meaning
   abi        C66X_JIT_ABI, the core structs the module is compiled against
   firmware   the sha256 of the player's main_unpacked.bin, the DSP program's source
+             (the installed image's; the supported update's when none is installed)
   model      the player
+
+The same stamp covers m.extra.so when the build installs a supplemental pass.
 
 The core refuses a module of another ABI by itself and every compiled region
 checks its code bytes, so a module of another firmware only loses speed. A
@@ -22,7 +25,7 @@ import os
 import re
 import sys
 
-from . import model
+from . import firmware, host, model
 from .layout import Layout
 
 STAMP = "m.stamp"
@@ -30,9 +33,37 @@ STAMP = "m.stamp"
 Module = collections.namedtuple("Module", "path notice")
 
 
+def paths(path):
+    """The curated module followed by its optional, jointly stamped supplement."""
+    if not path:
+        return []
+    extra = os.path.join(os.path.dirname(path), "m.extra.so")
+    return [path] + ([extra] if os.path.isfile(extra) else [])
+
+
+def _chain_sep():
+    return ";" if host.is_windows() else ":"
+
+
+def native_chain(path):
+    return _chain_sep().join(host.native(p) for p in paths(path))
+
+
+def chain_files(env):
+    """The modules C66X_JIT names that exist, in load order."""
+    return [p for p in env.get("C66X_JIT", "").split(_chain_sep()) if os.path.isfile(p)]
+
+
 def _constant(path, pattern):
     with open(path, encoding="utf-8") as f:
         return re.search(pattern, f.read(), re.MULTILINE).group(1)
+
+
+def _main_sha256(lay, m):
+    installed = os.path.join(model.extract_dir(lay, m), "main_unpacked.bin")
+    if os.path.isfile(installed):
+        return firmware.sha256(installed)
+    return firmware.stock_main_sha256(m)
 
 
 def current(lay, m):
@@ -40,7 +71,7 @@ def current(lay, m):
     c6x = os.path.join(lay.emu, "hw", "cdj", "c6x")
     return {"generator": _constant(os.path.join(c6x, "tools", "c14_jitgen.py"), r"^GENERATOR_VERSION = (\d+)"),
             "abi": _constant(os.path.join(c6x, "c66x_core_int.h"), r"^#define C66X_JIT_ABI (\d+)"),
-            "firmware": next(sha for rel, sha in m.expected if rel.endswith("main_unpacked.bin")),
+            "firmware": _main_sha256(lay, m),
             "model": m.id}
 
 

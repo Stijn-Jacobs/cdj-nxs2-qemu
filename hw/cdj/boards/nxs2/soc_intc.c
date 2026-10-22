@@ -181,8 +181,8 @@ void cdj_intc_init(MemoryRegion *sysmem, SuperHCPU *cpu)
 }
 
 /* CDJ_IRQ5_PROBE_MS=<period>: toggle IRQ5 on a timer. The firmware enables
- * IRQ5 but nothing on this board drives it; probably the SCIFA4 peer's
- * signal line. A probe, not a model. */
+ * IRQ5, the PHY's INT# pin (cdj_ether.c drives it). A probe on top of that
+ * model, not a model. */
 static QEMUTimer *cdj_irq5_timer;
 static int64_t cdj_irq5_period_ms;
 static unsigned cdj_irq5_pulses;

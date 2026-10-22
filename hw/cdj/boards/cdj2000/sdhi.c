@@ -73,9 +73,14 @@ static const VMStateDescription vmstate_sdhi = {
     }
 };
 
-void cdj2000_sdhi_init(MemoryRegion *sysmem)
+void cdj2000_sdhi_init(MemoryRegion *sysmem, qemu_irq irq, qemu_irq dmte5)
 {
-    CdjSdhi *s = g_new0(CdjSdhi, 1);
+    CdjSdhi *s;
+
+    if (cdj2000_sdhi_card_init(sysmem, irq, dmte5)) {
+        return;
+    }
+    s = g_new0(CdjSdhi, 1);
 
     vmstate_register_any(NULL, &vmstate_sdhi, s);
     memory_region_init_io(&s->iomem, NULL, &sdhi_ops, s, "sh7763.sdhi",

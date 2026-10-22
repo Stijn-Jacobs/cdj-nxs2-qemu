@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "cdj_ether.h"
 #include "cdj_getenv.h"
+#include "cdj_netsim.h"
 #include "net/net.h"
 /*
  * SH7724-family EtherMAC: E-DMAC + EtherC, register layout shared by the
@@ -16,10 +17,13 @@
  *   CDJ_ETHER_UNBACKED=1   reads return zero
  *   CDJ_ETHER_NO_PHY=1     nothing answers MDIO frames
  *   CDJ_ETHER_NETDEV=<id>  netdev to attach to (default "djlink")
+ *   CDJ_NETSIM=<endpoint> synchronised segment; overrides the netdev,
+ *                          -icount sleep=off or CDJ_NETSIM_CLOCK=wall
  *   CDJ_ETHER_MAC=<xx:..>  this board's hardware address, see
  *                          cdj_ether_mac_override()
  *   CDJ_ETHER_NOLINK=1     PSR reports the cable unplugged
  *   CDJ_ETHER_NOLCHNG=1    never assert ECSR.LCHNG
+ *   CDJ_ETHER_NOPHYINT=1   never assert the PHY's INT# pin
  */
 #define CDJ_ETHER_SIZE 0x10000
 #define CDJ_ETHER_PIR  0x0120        /* EtherC PIR */
@@ -148,11 +152,18 @@ typedef struct {
      * keeps the position between transmit requests. */
     NICState *nic;
     NICConf conf;
+    bool netsim;
+    NetClientState *netsim_peer;     /* injects into the NIC's receive queue */
     /* Must not be NULL: QEMU dereferences the NIC's reentrancy guard on the
      * receive path (net/net.c) without a check. This is not a DeviceState, so
      * it owns the guard itself. */
     MemReentrancyGuard reentrancy_guard;
     qemu_irq irq;
+    qemu_irq phy_irq;                /* the PHY's INT# pin; NULL if not wired */
+    bool phy_int;                    /* INT# is asserted */
+    bool phy_int_due;                /* reset seen, INT# waits for RX start;
+                                      * only set during the driver's init, so
+                                      * snapshots never need it */
     QEMUTimer *rx_retry;             /* re-offers frames held on a full ring */
     uint32_t tx_cur;
     uint32_t rx_cur;
@@ -266,6 +277,17 @@ static unsigned cdj_ether_mdio_ta(const CdjEtherState *s)
     return e ? (unsigned)strtoul(e, NULL, 0) : s->mdio_ta;
 }
 
+/* The PHY's INT# pin is a level: it goes high on a link-up and stays until the
+ * firmware reads the PHY's status register, PHY 0 register 0x10, the first
+ * thing its handler does. */
+static void cdj_ether_phy_int(CdjEtherState *s, bool asserted)
+{
+    s->phy_int = asserted;
+    if (s->phy_irq) {
+        qemu_set_irq(s->phy_irq, asserted ? 1 : 0);
+    }
+}
+
 static uint16_t cdj_ether_phy_read(CdjEtherState *s, unsigned reg)
 {
     switch (reg) {
@@ -330,6 +352,9 @@ static void cdj_ether_mdio_bit(CdjEtherState *s, bool bit)
             return;                  /* no PHY there: the line stays idle */
         }
         if (op == 0x2) {
+            if (phyad == 0 && regad == 0x10 && s->phy_int) {
+                cdj_ether_phy_int(s, false);
+            }
             s->out = cdj_ether_phy_read(s, regad);
             /* 16 data bits preceded by this board's MDIO_TA lead-in bits. */
             s->out_bits = 16 + cdj_ether_mdio_ta(s);
@@ -418,7 +443,8 @@ static void cdj_ether_update_irq(CdjEtherState *s)
  * re-asserting it would storm the interrupt. */
 static void cdj_ether_link_change(CdjEtherState *s)
 {
-    if (getenv("CDJ_ETHER_NOLCHNG") || getenv("CDJ_ETHER_NOLINK")) {
+    if (getenv("CDJ_ETHER_NOLCHNG") ||
+        (s->netsim ? !cdj_netsim_active() : getenv("CDJ_ETHER_NOLINK") != NULL)) {
         return;
     }
     s->reg[CDJ_ETHER_ECSR / 4] |= CDJ_ECSR_LCHNG;
@@ -546,7 +572,11 @@ static void cdj_ether_tx(CdjEtherState *s)
             }
             if (s->nic) {
                 cdj_ether_linklog("tx", s->txbuf, s->txlen);
-                qemu_send_packet(qemu_get_queue(s->nic), s->txbuf, s->txlen);
+                if (s->netsim) {
+                    cdj_netsim_send(s->txbuf, s->txlen);
+                } else {
+                    qemu_send_packet(qemu_get_queue(s->nic), s->txbuf, s->txlen);
+                }
                 s->ntx++;
             } else {
                 s->ntx_nonet++;
@@ -746,6 +776,29 @@ static NetClientInfo cdj_ether_net_info = {
     .receive = cdj_ether_receive,
 };
 
+/* Use the same queued delivery as a netdev: can_receive gates on RR, and a
+ * full ring retains frames until cdj_ether_rx_retry flushes the NIC queue.
+ * qemu_receive_packet() alone would discard those deferred frames. */
+static void cdj_ether_netsim_frame(void *opaque, const uint8_t *buf, unsigned len)
+{
+    CdjEtherState *s = opaque;
+
+    qemu_send_packet(s->netsim_peer, buf, len);
+}
+
+/* TX goes directly to netsim; this internal peer only supplies queued RX. */
+static ssize_t cdj_ether_netsim_discard(NetClientState *nc,
+                                      const uint8_t *buf, size_t size)
+{
+    return size;
+}
+
+static NetClientInfo cdj_ether_netsim_info = {
+    .type = NET_CLIENT_DRIVER_SOCKET,
+    .size = sizeof(NetClientState),
+    .receive = cdj_ether_netsim_discard,
+};
+
 /* CDJ_ETHER_UNBACKED=1 makes every register read as zero. */
 static bool cdj_ether_backed(void)
 {
@@ -803,7 +856,10 @@ static uint64_t cdj_ether_read(void *opaque, hwaddr off, unsigned size)
      * and refuses to send while it reads 0; the SH7763 boards' send routine
      * does the opposite and fails while bit 0 is set. */
     if (off == CDJ_ETHER_PSR) {
-        v = (getenv("CDJ_ETHER_NOLINK") != NULL) == s->lmon_low ? CDJ_PSR_LMON : 0;
+        bool present = s->netsim ? cdj_netsim_active()
+                                : getenv("CDJ_ETHER_NOLINK") == NULL;
+
+        v = present != s->lmon_low ? CDJ_PSR_LMON : 0;
     }
     cdj_ether_trace(s, off, v, false);
     return v;
@@ -845,6 +901,8 @@ static void cdj_ether_write(void *opaque, hwaddr off, uint64_t val,
          * the driver arms ECSIPR. */
         cdj_ether_link_change(s);
         cdj_ether_update_irq(s);
+        s->phy_int_due = !getenv("CDJ_ETHER_NOLINK") &&
+                         !getenv("CDJ_ETHER_NOPHYINT");
     }
 
     /* EESR is write-1-to-clear; ECI is read-only. */
@@ -925,6 +983,14 @@ static void cdj_ether_write(void *opaque, hwaddr off, uint64_t val,
     if (off == CDJ_ETHER_EDTRR && (val & CDJ_EDTRR_TR)) {
         cdj_ether_tx(s);
     } else if (off == CDJ_ETHER_EDRRR && (val & CDJ_EDRRR_RR)) {
+        /* The PHY reports the link once the driver's init is over. The
+         * handler on that pin enables the MAC, and the NXS2's init writes
+         * ECMR 0 after its reset, so a pin raised at the reset has the MAC
+         * opened and closed again. Starting RX is the init's last step. */
+        if (s->phy_int_due) {
+            s->phy_int_due = false;
+            cdj_ether_phy_int(s, true);
+        }
         /* Flush frames queued while RR was clear. */
         if (s->nic) {
             qemu_flush_queued_packets(qemu_get_queue(s->nic));
@@ -967,13 +1033,14 @@ static void cdj_ether_dump(Notifier *n, void *unused)
 
 static const VMStateDescription vmstate_cdj_ether = {
     .name = "cdj-ether",
-    .version_id = 1,
-    .minimum_version_id = 1,
+    .version_id = 2,
+    .minimum_version_id = 2,
     .fields = (const VMStateField[]) {
         CDJ_VMSTATE_SPAN(CdjEtherState, reg, phy),
         VMSTATE_TIMER_PTR(rx_retry, CdjEtherState),
         CDJ_VMSTATE_SPAN(CdjEtherState, tx_cur, txlen),
         VMSTATE_BOOL(rx_stalled, CdjEtherState),
+        VMSTATE_BOOL(phy_int, CdjEtherState),
         VMSTATE_END_OF_LIST()
     }
 };
@@ -984,7 +1051,8 @@ static const VMStateDescription vmstate_cdj_ether = {
  *
  * Without it the link comes up but frames go nowhere. */
 void cdj_ether_init(MemoryRegion *sysmem, const char *name, hwaddr base,
-                    qemu_irq irq, unsigned mdio_ta_default, bool lmon_low)
+                    qemu_irq irq, qemu_irq phy_irq, unsigned mdio_ta_default,
+                    bool lmon_low)
 {
     CdjEtherState *s = g_new0(CdjEtherState, 1);
     const char *id = getenv("CDJ_ETHER_NETDEV");
@@ -998,9 +1066,17 @@ void cdj_ether_init(MemoryRegion *sysmem, const char *name, hwaddr base,
     s->exit.notify = cdj_ether_dump;
     cdj_add_exit_report(&s->exit);
     s->irq = irq;
+    s->phy_irq = phy_irq;
+    s->netsim = cdj_netsim_init(cdj_ether_netsim_frame, s);
     cdj_ether_link_change(s);        /* the cable is in at power on */
 
-    peer = qemu_find_netdev(id && *id ? id : "djlink");
+    if (s->netsim) {
+        s->netsim_peer = qemu_new_net_client(&cdj_ether_netsim_info, NULL,
+                                            "cdj.netsim", "ether-netsim");
+        peer = s->netsim_peer;
+    } else {
+        peer = qemu_find_netdev(id && *id ? id : "djlink");
+    }
     if (!peer) {
         info_report("%s: no '%s' netdev -- the EtherMAC will bring "
                     "its link up but no frame will leave the machine",
@@ -1013,6 +1089,11 @@ void cdj_ether_init(MemoryRegion *sysmem, const char *name, hwaddr base,
                           "ether", &s->reentrancy_guard, s);
     s->rx_retry = timer_new_ns(QEMU_CLOCK_VIRTUAL, cdj_ether_rx_retry, s);
     vmstate_register_any(NULL, &vmstate_cdj_ether, s);
-    info_report("%s: EtherMAC attached to netdev '%s'",
-                cdj_board->name, id && *id ? id : "djlink");
+    if (s->netsim) {
+        info_report("%s: EtherMAC attached to the synchronised Link segment",
+                    cdj_board->name);
+    } else {
+        info_report("%s: EtherMAC attached to netdev '%s'",
+                    cdj_board->name, id && *id ? id : "djlink");
+    }
 }

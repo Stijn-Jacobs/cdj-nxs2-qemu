@@ -422,8 +422,8 @@ static void jit_write_profile(c66x_core *c, const char *dir, int sparse)
                         (unsigned long long)j->prof[i].n_free);
     } else {
         for (unsigned i = 0; i < PKC_SIZE; i++)
-            if (c->pkc[i].hits && c->pkc[i].first)
-                fprintf(f, "prof 0x%08x %u %u\n", c->pkc[i].pc, c->pkc[i].hits, c->pkc[i].hits);
+            if (c->pkx[i].hits && c->pkc[i].first)
+                fprintf(f, "prof 0x%08x %u %u\n", c->pkc[i].pc, c->pkx[i].hits, c->pkx[i].hits);
     }
     for (unsigned i = 0; i < JIT_MAP; i++)
         if (j->map[i].r)
@@ -565,9 +565,8 @@ static void jit_auto_mark(c66x_core *c)
         return;
     }
     for (unsigned i = 0; i < PKC_SIZE; i++) {
-        pkc_ent *e = &c->pkc[i];
-        if (e->hits >= j->auto_min && !e->region && e->first)
-            jit_auto_tried(j, e->pc, 1);
+        if (c->pkx[i].hits >= j->auto_min && !c->pkx[i].region && c->pkc[i].first)
+            jit_auto_tried(j, c->pkc[i].pc, 1);
     }
 }
 
@@ -589,12 +588,13 @@ void jit_auto_poll(c66x_core *c)
                 for (unsigned i = 0; i < PKC_SIZE; i++) {
                     if (!c->pkc[i].first)
                         continue;
-                    if (!c->pkc[i].region)
-                        c->pkc[i].region = jit_lookup(c, c->pkc[i].pc);
-                    if (!c->pkc[i].region0)
-                        c->pkc[i].region0 = jit_lookup0(c, c->pkc[i].pc);
-                    if (!c->pkc[i].qregion)
-                        c->pkc[i].qregion = jit_lookupq(c, c->pkc[i].pc);
+                    pkc_aux *x = &c->pkx[i];
+                    if (!x->region)
+                        x->region = jit_lookup(c, c->pkc[i].pc);
+                    if (!x->region0)
+                        x->region0 = jit_lookup0(c, c->pkc[i].pc);
+                    if (!x->qregion)
+                        x->qregion = jit_lookupq(c, c->pkc[i].pc);
                 }
             }
         } else {
@@ -611,9 +611,9 @@ void jit_auto_poll(c66x_core *c)
      * or kernel it could not compile would otherwise start one every interval. */
     int any = 0;
     for (unsigned i = 0; i < PKC_SIZE && !any; i++) {
-        pkc_ent *e = &c->pkc[i];
-        if (e->hits >= j->auto_min && !e->region && e->first && j->auto_ntried < 0xc000)
-            any = !jit_auto_tried(j, e->pc, 0);
+        if (c->pkx[i].hits >= j->auto_min && !c->pkx[i].region && c->pkc[i].first
+            && j->auto_ntried < 0xc000)
+            any = !jit_auto_tried(j, c->pkc[i].pc, 0);
     }
     for (unsigned i = 0; j->kprof && i < j->nkprof; i++)
         if (!j->kprof[i].tried && j->kprof[i].cycles >= (uint64_t)j->auto_min * 50) {

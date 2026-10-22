@@ -663,6 +663,31 @@ static void sh2a_ack(SuperHCPU *cpu, uint16_t vec)
     sh2a_irq_pump(NULL);        /* let anything queued behind it through */
 }
 
+/*
+ * The pump presents the highest level first, so a request taken from the
+ * middle of the ring leaves a hole that is only reclaimed once the head gets
+ * there. A masked request at the head lets the holes behind it fill the ring,
+ * and a dropped DEI4 kills the display link, so a full ring is squeezed
+ * before anything is added to it.
+ */
+static void sh2a_irq_compact(void)
+{
+    unsigned i, n;
+
+    if ((sh2a_irq.tail + 1) % SH2A_IRQ_QUEUE_LEN != sh2a_irq.head) {
+        return;
+    }
+    n = sh2a_irq.head;
+    for (i = sh2a_irq.head; i != sh2a_irq.tail;
+         i = (i + 1) % SH2A_IRQ_QUEUE_LEN) {
+        if (sh2a_irq.q[i].used) {
+            sh2a_irq.q[n] = sh2a_irq.q[i];
+            n = (n + 1) % SH2A_IRQ_QUEUE_LEN;
+        }
+    }
+    sh2a_irq.tail = n;
+}
+
 static void sh2a_irq_pump(void *opaque)
 {
     CPUState *cs;
@@ -680,8 +705,13 @@ static void sh2a_irq_pump(void *opaque)
      * Present the highest-level pending request, not the oldest. SH-2A only
      * accepts a request above SR.IMASK; strict FIFO let a masked DEI (level 3)
      * block every CMI0 tick (level 8) queued behind it. A higher-level raise
-     * preempts a standing request, which goes back in the queue.
+     * preempts a standing request, which goes back in the queue, but only
+     * while the CPU cannot take it: the vCPU accepts a request only after the
+     * main loop drops the BQL, and the pump and the CMI0 timer expire in the
+     * same pass, so a tick allowed to displace an unmasked DEI would do so
+     * every pass and the link task would time out on the lost transfer end.
      */
+    sh2a_irq_compact();
     {
         unsigned i, best = SH2A_IRQ_QUEUE_LEN;
         int best_level = -1;
@@ -705,7 +735,9 @@ static void sh2a_irq_pump(void *opaque)
         if (best != SH2A_IRQ_QUEUE_LEN &&
             (cs->interrupt_request & CPU_INTERRUPT_HARD) && prio &&
             sh2a_irq.cur_valid &&
-            sh2a_irq.q[best].level > sh2a_irq.cur_level) {
+            sh2a_irq.q[best].level > sh2a_irq.cur_level &&
+            ((sh2a_irq.cpu->env.sr & (1u << SR_BL)) ||
+             sh2a_irq.cur_level <= ((sh2a_irq.cpu->env.sr >> 4) & 0xf))) {
             /* Preempt: the standing request goes back into the queue. */
             unsigned n = (sh2a_irq.tail + 1) % SH2A_IRQ_QUEUE_LEN;
 
@@ -849,6 +881,7 @@ static void sh2a_raise(SuperHCPU *cpu, uint16_t vec, uint8_t level)
         }
     }
 
+    sh2a_irq_compact();
     next = (sh2a_irq.tail + 1) % SH2A_IRQ_QUEUE_LEN;
     if (next == sh2a_irq.head) {
         /* Full. */

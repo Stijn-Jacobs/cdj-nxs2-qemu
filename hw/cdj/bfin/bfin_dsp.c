@@ -349,7 +349,12 @@ void bfin_dsp32alu(bfin_core *c, uint16_t iw0, uint16_t iw1)
         bfin_flags_v(c, ov);
         return;
     }
-    case 8:                                     /* A0 = 0 ... */
+    case 8:                                     /* accumulator clear or copy */
+        if (aop == 3) {                         /* A[s] = A[!s], full 40 bits */
+            if (x || hl) { break; }
+            c->a[s] = c->a[!s];                 /* ASTAT is unaffected */
+            return;
+        }
         if (s) {
             break;
         }
@@ -357,7 +362,6 @@ void bfin_dsp32alu(bfin_core *c, uint16_t iw0, uint16_t iw1)
         case 0: c->a[0] = 0; return;
         case 1: c->a[1] = 0; return;
         case 2: c->a[0] = c->a[1] = 0; return;
-        case 3: c->a[0] = c->a[1]; return;
         }
         break;
     case 9:                                     /* A0 = Rs, A0.L = Rs.L ... */

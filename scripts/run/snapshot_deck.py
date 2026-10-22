@@ -19,6 +19,8 @@ sendkey), 'key <payload>' (one datagram to the panel key socket,
 CDJ_PANEL_KEYSOCK) and 'wait <seconds>'.
 """
 
+import contextlib
+import hashlib
 import os
 import re
 import socket
@@ -29,6 +31,14 @@ import cdj_monsock
 
 LINK_DRAIN_S = 1.0
 SAVE_TIMEOUT_S = 120
+
+# A booting deck redraws its screen in steps and sits on each for a while (the
+# CDJ-2000NXS, with its host slowed to a 125 s boot: up to 25 s); the idle
+# screen it ends on never changes again.
+SETTLE_S = 45
+SETTLE_POLL_S = 2
+SETTLE_TIMEOUT_S = 300
+SCREENDUMP_TIMEOUT_S = 10
 
 
 def _command(mon, line, deadline):
@@ -48,6 +58,57 @@ def _status(mon, deadline):
     out = _command(mon, "info migrate", deadline).decode("utf-8", "replace")
     m = re.search(r"Migration status:\s*(\S+)", out)
     return m.group(1) if m else ""
+
+
+def _read_to_prompt(sock):
+    """Reads the monitor up to its next prompt. A socket closed with a reply
+    still unread is reset on Windows, which can leave the monitor dead."""
+    sock.settimeout(0.25)
+    seen, end = b"", time.time() + SCREENDUMP_TIMEOUT_S
+    while not seen.rstrip().endswith(b"(qemu)") and time.time() < end:
+        try:
+            part = sock.recv(65536)
+        except socket.timeout:
+            continue
+        if not part:
+            return
+        seen += part
+
+
+def screendump(mon, path):
+    """Writes the deck's screen to path and returns its digest, None if the
+    monitor gave no picture."""
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+    try:
+        with contextlib.closing(cdj_monsock.connect(mon)) as sock:
+            _read_to_prompt(sock)
+            sock.sendall(("screendump %s\n" % path.replace("\\", "/")).encode())
+            _read_to_prompt(sock)
+        with open(path, "rb") as f:
+            return hashlib.md5(f.read()).hexdigest()
+    except OSError:
+        return None
+
+
+def wait_settled(mon, idle_s, screen_path):
+    """Waits for the deck to finish booting: at least idle_s seconds, and the
+    screen unchanged for SETTLE_S. False once SETTLE_TIMEOUT_S has passed
+    without that. screen_path keeps the last picture taken."""
+    start = time.time()
+    shown, since = None, start
+    while True:
+        now = time.time()
+        digest = screendump(mon, screen_path)
+        if digest != shown:
+            shown, since = digest, now
+        if now - start >= idle_s and now - since >= SETTLE_S:
+            return True
+        if now - start >= SETTLE_TIMEOUT_S:
+            return False
+        time.sleep(SETTLE_POLL_S)
 
 
 def save(main_mon, gui_mon, out_dir):
@@ -82,17 +143,41 @@ def save(main_mon, gui_mon, out_dir):
     return ok
 
 
+def parse_steps(text):
+    """MODEL_LOAD_STEPS as ("wait", seconds), ("key", payload) and
+    ("sendkey", key, ms) tuples; ValueError names a step it cannot read."""
+    steps = []
+    for words in (s.split() for s in text.split(";") if s.strip()):
+        step = None
+        try:
+            if words[0] == "wait" and len(words) == 2:
+                step = ("wait", float(words[1]))
+            elif words[0] == "key" and len(words) == 2:
+                step = ("key", words[1])
+            elif words[0] == "sendkey" and len(words) in (2, 3):
+                step = ("sendkey", words[1], int(words[2]) if len(words) == 3 else 100)
+        except ValueError:
+            pass
+        if step is None:
+            raise ValueError("MODEL_LOAD_STEPS: cannot read step '%s'" % " ".join(words))
+        steps.append(step)
+    return steps
+
+
+def do_step(mon, step, keysock):
+    """Carry out one step of parse_steps."""
+    if step[0] == "wait":
+        time.sleep(step[1])
+    elif step[0] == "sendkey":
+        _command(mon, "sendkey %s %d" % (step[1], step[2]), time.time() + 10)
+    elif step[0] == "key":
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.sendto(step[1].encode(), ("127.0.0.1", keysock))
+
+
 def run_steps(mon, steps, keysock):
-    for step in (s.split() for s in steps.split(";") if s.strip()):
-        if step[0] == "wait":
-            time.sleep(float(step[1]))
-        elif step[0] == "sendkey":
-            _command(mon, "sendkey %s %s" % (step[1], step[2] if len(step) > 2 else "100"), time.time() + 10)
-        elif step[0] == "key":
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-                s.sendto(step[1].encode(), ("127.0.0.1", keysock))
-        else:
-            raise ValueError("MODEL_LOAD_STEPS: unknown step '%s'" % step[0])
+    for step in parse_steps(steps):
+        do_step(mon, step, keysock)
 
 
 def reach(point, mon, out_dir):

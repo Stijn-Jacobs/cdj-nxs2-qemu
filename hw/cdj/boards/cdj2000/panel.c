@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "sh7763.h"
 #include "cdj_pnl_link.h"
+#include "cdj_pnl_stateout.h"
 /*
  * SCIF2 (0xFFE20000): the front-panel MCU link. Same register layout and
  * DMA-fed exchange as the CDJ-2000NXS2's panel (cdj_panel.c, common/), but a
@@ -61,6 +62,16 @@ static void cdj2000_panel_lever(CdjPnlLinkState *s, void *extra,
                                 uint8_t *rx, int64_t now)
 {
     rx[0x0F] ^= 0x02;
+    /* NXS SD lid contact: physical closed pin, only fitted with a card model. */
+    if (cdj2000_sdhi_lid_closed()) {
+        rx[0x11] |= 0x04;
+    }
+}
+
+static void cdj2000_panel_on_frame(CdjPnlLinkState *s, void *extra,
+                                   const uint8_t *frame)
+{
+    cdj_pnl_stateout(frame, CDJ2000_PNL_FRAME);
 }
 
 /*
@@ -92,7 +103,7 @@ static uint8_t cdj2000_panel_link_byte(void *extra, uint8_t tx)
 void cdj2000_panel_init(MemoryRegion *sysmem, hwaddr addr,
                         const Cdj2000Display *display)
 {
-    static CdjPnlLinkHooks hooks;
+    static CdjPnlLinkHooks hooks = { .on_frame = cdj2000_panel_on_frame };
 
     hooks.build_defaults = cdj2000_panel_defaults;
 

@@ -1420,17 +1420,12 @@ static void cdj_c6x_report(const char *why)
             }
         }
     }
-    /* MAIN's own view of the DSP link and the DSP's shared struct. */
+    /* MAIN's own view of the DSP link and the DSP's shared struct. MAIN's
+     * words sit at fixed addresses of the CDJ-2000NXS2 1.87 image, so
+     * CDJ_RAM_DIAG=0 leaves that line out on any other. */
     {
-        uint32_t up = 0, frames = 0, st1 = 0, lvl = 0, stat = 0;
-        uint16_t ver[2] = { 0, 0 };
+        const char *ram_diag = getenv("CDJ_RAM_DIAG");
 
-        cpu_physical_memory_read(0x0995A138, &up, 4);
-        cpu_physical_memory_read(0x09959F20, &frames, 4);
-        cpu_physical_memory_read(0x0A35F71C, &st1, 4);
-        cpu_physical_memory_read(0x09944170, &lvl, 4);
-        cpu_physical_memory_read(0x09944168, &stat, 4);
-        cpu_physical_memory_read(0x10DBFC7C, ver, 4);
         {
             uint8_t *s158 = cdj_c6x_ram(0x008C8800 + 0x158, 4);
             uint8_t *b34 = cdj_c6x_ram(0x008C8800 + 0xB34, 4);
@@ -1466,9 +1461,20 @@ static void cdj_c6x_report(const char *why)
                         RD32(cdj_c6x_ram(0x008FFFE8, 4)), c->id1_p10_nonzero);
 #undef RD32
         }
-        info_report("c6x[%s]: MAIN: link up %u, frames %u, DSP registrar st[1] "
-                    "%u, version 0x%04x.%04x, status 0x150 0x%08x, level 0x158 "
-                    "0x%08x", why, up, frames, st1, ver[0], ver[1], stat, lvl);
+        if (!ram_diag || strcmp(ram_diag, "0")) {
+            uint32_t up = 0, frames = 0, st1 = 0, lvl = 0, stat = 0;
+            uint16_t ver[2] = { 0, 0 };
+
+            cpu_physical_memory_read(0x0995A138, &up, 4);
+            cpu_physical_memory_read(0x09959F20, &frames, 4);
+            cpu_physical_memory_read(0x0A35F71C, &st1, 4);
+            cpu_physical_memory_read(0x09944170, &lvl, 4);
+            cpu_physical_memory_read(0x09944168, &stat, 4);
+            cpu_physical_memory_read(0x10DBFC7C, ver, 4);
+            info_report("c6x[%s]: MAIN: link up %u, frames %u, DSP registrar st[1] "
+                        "%u, version 0x%04x.%04x, status 0x150 0x%08x, level 0x158 "
+                        "0x%08x", why, up, frames, st1, ver[0], ver[1], stat, lvl);
+        }
     }
     {
         GString *g = g_string_new("");

@@ -96,6 +96,12 @@ typedef struct CdjBoardDesc {
     uint32_t sr_seed;
 
     uint32_t periph_hz;         /* TMU input clock, CDJ_PERIPH_HZ overrides */
+    /* FRQCR as the board's clock mode straps leave it; 0 keeps the SH7763
+     * default. */
+    uint32_t frqcr;
+    /* A stick in the port at power-on attaches as soon as the driver first
+     * arms BCHG, rather than 500 ms later like a plug-in. */
+    bool usb_attach_at_boot;
     /* CDJ_DMAC_DEBUG logs the first INTEVT reads in this vector window. */
     uint16_t ccn_trace_lo, ccn_trace_hi;
     /* Board lines printed after the IRQ counts at exit; may be NULL. */
@@ -153,6 +159,9 @@ typedef struct CdjDmacDei {
 void cdj_dmac_init(MemoryRegion *sysmem, const char *name, hwaddr base,
                    hwaddr dreq_base, hwaddr dreq_size, const CdjDmacDei *dei);
 void cdj_dmac_dei_connect(unsigned ch, qemu_irq irq);
+/* Optional fixed FIFO endpoint; returns false until a complete burst is ready. */
+void cdj_dmac_fifo_connect(hwaddr port,
+                          bool (*transfer)(bool, uint8_t *, unsigned));
 void cdj_dmac_dreq(void);
 
 const char *cdj_getenv(const char *name);
@@ -160,6 +169,9 @@ const char *cdj_getenv(const char *name);
 /* Statistics the models print at start and exit are off unless CDJ_REPORT=1. */
 bool cdj_report_enabled(void);
 void cdj_add_exit_report(Notifier *n);
+
+/* The CDJ_MPOKE, CDJ_MCOPY, CDJ_MFILL and CDJ_LOADBIN memory holds. */
+void cdj_mpoke_init(void);
 
 /* Ask the host to run the calling thread on a performance core. */
 void cdj_thread_prefer_fast_core(void);

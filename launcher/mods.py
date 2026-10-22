@@ -1,25 +1,58 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""The mods registry: mods/mods.conf, one row per user-facing on/off knob,
-shared with the bash tree (see that file for the row format). setup.py asks
-about each row and saves the choice to cdj.conf; start.py applies it; rig.py
-falls back to a row's own default when nothing else set the knob.
+"""The mods registry: every on/off tweak to how the deck behaves, one row per
+mod folder, read from its mods/<mod>/mod.conf. setup.py asks about each row
+the chosen model is offered and saves the choice to cdj.conf; start.py applies
+it; rig.py falls back to a row's own default when nothing else set the knob.
+
+A mod.conf sets, in the form of models/*.conf:
+
+  MOD_ENV          the CDJ_* (or plain) knob the board actually reads, or
+                   several '+'-joined for a mod that spans more than one image
+  MOD_ON, MOD_OFF  the value that knob gets when the mod is enabled/disabled
+  MOD_DEFAULT      "on" or "off": what a fresh install ships with
+  MOD_MODELS       comma-separated model ids (models/*.conf) the mod is offered
+                   for, or * for every model; setup and start leave it out for
+                   any other
+  MOD_DESCRIPTION  one line, asked as "<description>?" at setup and shown in
+                   the README's Mods section
+
+The folder's name is the row's key, used for the setup prompt. A mod that
+patches the display firmware has a routine gui_<name> in one of its player
+folders, switched by the knob CDJ_GUI_<NAME> with on = 1; a MAIN routine
+main_<name> likewise has CDJ_MAIN_<NAME>. A mod with several routines joins
+their knobs with '+' in MOD_ENV, e.g. CDJ_GUI_WAVE3+CDJ_MAIN_WAVE3DATA; the
+choice is still saved once, under the first knob.
+
+cdj.conf keeps each choice under CDJ_<ENV> (already true for env names that
+start with CDJ_). SERVICE MODE is not a mod: it is a boot option (--service /
+CDJ_SERVICE), not a behaviour change, and setup does not ask about it.
 """
 
+import glob
 import os
 from collections import namedtuple
 
-Mod = namedtuple("Mod", "key env on off default description")
+from . import model
+
+Mod = namedtuple("Mod", "key env on off default models description")
 
 
-def load(lay):
+def supports(mod, model_id):
+    return mod.models == "*" or model_id in mod.models.split(",")
+
+
+def load(lay, model_id=None):
+    """Every row of the registry, or with a model id only the rows offered for
+    that model: the mods that are on by default first, so setup asks about
+    those before the optional ones."""
     mods = []
-    with open(os.path.join(lay.emu, "mods", "mods.conf"), encoding="utf-8") as f:
-        for line in f:
-            line = line.rstrip("\n")
-            if not line.strip() or line.lstrip().startswith("#"):
-                continue
-            mods.append(Mod(*line.split("|", 5)))
-    return mods
+    for conf in sorted(glob.glob(os.path.join(lay.emu, "mods", "*", "mod.conf"))):
+        with open(conf, encoding="utf-8") as f:
+            v = model.parse(f.read())
+        mods.append(Mod(os.path.basename(os.path.dirname(conf)), v["MOD_ENV"], v["MOD_ON"], v["MOD_OFF"],
+                        v["MOD_DEFAULT"], v["MOD_MODELS"], v["MOD_DESCRIPTION"]))
+    mods.sort(key=lambda m: m.default != "on")
+    return [m for m in mods if model_id is None or supports(m, model_id)]
 
 
 def env_names(env):
