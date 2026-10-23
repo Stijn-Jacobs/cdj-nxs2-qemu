@@ -550,6 +550,9 @@ class App:
         self.relay.close()
         for win in list(self.windows.values()):
             win.close()
+        # A Window still alive after pygame.quit() destroys its stale SDL
+        # pointer when it is collected, which can be the next App's window.
+        self.window.destroy()
         pygame.quit()
 
 

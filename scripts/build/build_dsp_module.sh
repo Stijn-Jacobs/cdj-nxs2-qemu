@@ -156,13 +156,32 @@ run make -C "$C6X" -j"$JOBS" "O=$LIBDIR" "$LIBDIR/libc66x.so" ||
 # interpreter -- it replays EXACT and runs no faster than no module.
 played() {  # <warm_jit exit code> <tag>
     if [ "$OLDER" = 1 ]; then
-        [ "$1" = 0 ] || die "the deck never played the track (see /tmp/bridge-main-${2}1.log); run it again"
+        [ "$1" = 0 ]
     else
         pcm="$(grep -a 'nonzero PCM words' "/tmp/bridge-main-${2}1.log" 2>/dev/null | tail -1 |
                sed -n 's/.*nonzero PCM words \([0-9]*\).*/\1/p')"
-        [ "${pcm:-0}" -gt 0 ] ||
-            die "the deck never played the track (no PCM in /tmp/bridge-main-${2}1.log; see /tmp/run-${2}1.txt); run it again"
+        [ "${pcm:-0}" -gt 0 ]
     fi
+}
+# The miss is occasional and the next play usually loads, so a missed play is
+# run once more, from empty output dirs, before giving up.
+play() {  # <tag> <output dirs...> -- <env assignments...>
+    local tag="$1" dirs=() try rc d
+    shift
+    while [ "$1" != -- ]; do dirs+=("$1"); shift; done
+    shift
+    for try in 1 2; do
+        run env "$@" bash "$E/scripts/run/warm_jit.sh" "$tag"
+        rc=$?
+        { [ "$DRY" = 1 ] || played "$rc" "$tag"; } && return 0
+        [ "$try" = 2 ] && break
+        echo "the deck did not play the track; trying once more"
+        for d in "${dirs[@]}"; do rm -rf "$d" && mkdir -p "$d"; done
+    done
+    if [ "$OLDER" = 1 ]; then
+        die "the deck never played the track (see /tmp/bridge-main-${tag}1.log); run it again"
+    fi
+    die "the deck never played the track (no PCM in /tmp/bridge-main-${tag}1.log; see /tmp/run-${tag}1.txt); run it again"
 }
 
 if [ "$REUSE" = 1 ] && [ -s "$PROF/profile.txt" ]; then
@@ -171,10 +190,7 @@ if [ "$REUSE" = 1 ] && [ -s "$PROF/profile.txt" ]; then
 else
     stage "2/4 profiling one deck with no module ($PLAY_S s of play; slower than real time)"
     [ "$DRY" = 1 ] || { rm -rf "$PROF" && mkdir -p "$PROF"; }
-    run env MODULE=none AUTOJIT=0 PLAY_S="$PLAY_S" C66X_JIT_PROFILE="$(native "$PROF")" \
-        bash "$E/scripts/run/warm_jit.sh" prof
-    prof_rc=$?
-    [ "$DRY" = 1 ] || played "$prof_rc" prof
+    play prof "$PROF" -- MODULE=none AUTOJIT=0 PLAY_S="$PLAY_S" C66X_JIT_PROFILE="$(native "$PROF")"
 fi
 if [ "$DRY" = 0 ]; then
     [ -s "$PROF/profile.txt" ] || die "no profile in $PROF: the deck did not shut down cleanly"
@@ -233,14 +249,14 @@ fi
 # instrumented build has the same regions as the profiled one.
 LEFT="$WORK/leftover"
 LEFT_KNOB=()
+TRAIN_DIRS=("$PGO_DIR")
 if [ -n "${MODEL_DSP_LEFTOVER_ARGS:-}" ]; then
     [ "$DRY" = 1 ] || { rm -rf "$LEFT" && mkdir -p "$LEFT"; }
     LEFT_KNOB=(C66X_JIT_PROFILE="$(native "$LEFT")")
+    TRAIN_DIRS+=("$LEFT")
 fi
-run env MODULE=none AUTOJIT=0 PLAY_S="$PLAY_S" DSP_TRAIN_MODULE="$(native "$OBJ/m.so")" \
-    "${LEFT_KNOB[@]}" bash "$E/scripts/run/warm_jit.sh" train
-train_rc=$?
-[ "$DRY" = 1 ] || played "$train_rc" train
+play train "${TRAIN_DIRS[@]}" -- MODULE=none AUTOJIT=0 PLAY_S="$PLAY_S" DSP_TRAIN_MODULE="$(native "$OBJ/m.so")" \
+    "${LEFT_KNOB[@]}"
 if [ "$DRY" = 0 ]; then
     n="$(find "$PGO_DIR" -name "$([ "$CLANG" = 1 ] && echo '*.profraw' || echo '*.gcda')" | wc -l)"
     [ "$n" -gt 0 ] || die "the training run wrote no profile (see /tmp/bridge-main-train1.log)"

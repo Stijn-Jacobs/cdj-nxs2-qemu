@@ -789,12 +789,18 @@ compile jobs (less on an idle machine). With the module, playback holds real
 time from the first seconds after a load.
 
 The module is installed with a stamp naming what it was built from: the
-generator version, the DSP core's interface, the firmware and the player.
+generator version and revision, the DSP core's interface, the firmware and the player.
 `./start.sh` compares the stamp with the current code. After a `git pull` that
 changed the generator or the core's interface it does not load the module and
 shows a banner that it needs building again (`./setup.sh` rebuilds it); the
 deck runs far below real time until then. If you skipped step 5, the banner
 says how to build the module.
+
+A generator change that only makes the module faster bumps a separate revision
+in the stamp instead. The older module still loads, and at a terminal
+`./start.sh` offers once per revision to build the faster one (about 30
+minutes); answering no is remembered beside the stamp. Starts without a
+terminal never ask.
 
 Mods do not affect it: they patch the MAIN and display firmware, never the DSP
 program the module is built from, so turning a mod on or off later needs no
