@@ -8,7 +8,7 @@
   "touch": {"size": [800, 480], "via": "panel"},
   "usb_label": {"text": "5V = 1A", "y": 42.5},
   "name": [217.6, 95.6, 24.0],
-  "rotary": {"center": [216.4, 64.5], "radius": 14.5},
+  "rotary": {"center": [216.4, 64.5], "radius": 14.5, "turn_off": "0x0E"},
   "jog": {"center": [119.1, 213.2], "radius": 74.1, "platter": 30.0, "counter": {"pulses_per_tick": 72, "nominal_tps": 25}},
   "slider": {"x": 217.5, "top": 184.4, "bottom": 276.4, "cap": [18.0, 20.0], "zero_mark": false, "report": "0x04"},
   "print": [
@@ -52,17 +52,17 @@
     {"name": "BACK", "label": "", "circle": [207.4, 36.0, 5.0], "off": "0x14", "mask": 16, "kind": "ring", "font": 9},
     {"name": "TAG TRACK", "label": "", "circle": [225.3, 36.0, 3.9], "off": "0x14", "mask": 32, "kind": "dome", "font": 9},
     {"name": "ROTARY PUSH", "label": "", "circle": [216.4, 64.5, 9.0], "off": "0x11", "mask": 1, "keycap": "Enter", "kind": "dome", "font": 9},
-    {"name": "LOOP IN", "label": "", "circle": [15.9, 132.8, 8.8], "off": "0x10", "mask": 16, "kind": "loop", "font": 9, "color": "orange"},
-    {"name": "LOOP OUT", "label": "", "circle": [41.3, 132.8, 8.8], "off": "0x10", "mask": 8, "kind": "loop", "font": 9, "color": "orange"},
-    {"name": "RELOOP/EXIT", "label": "", "circle": [71.9, 132.8, 7.75], "off": "0x10", "mask": 4, "kind": "ring", "font": 9, "color": "orange"},
+    {"name": "LOOP IN", "label": "", "circle": [15.9, 132.8, 8.8], "off": "0x10", "mask": 16, "kind": "loop", "font": 9, "color": "orange", "lamp": ["0x01", 2]},
+    {"name": "LOOP OUT", "label": "", "circle": [41.3, 132.8, 8.8], "off": "0x10", "mask": 8, "kind": "loop", "font": 9, "color": "orange", "lamp": ["0x01", 4]},
+    {"name": "RELOOP/EXIT", "label": "", "circle": [71.9, 132.8, 7.75], "off": "0x10", "mask": 4, "kind": "ring", "font": 9, "color": "orange", "lamp": ["0x02", 128]},
     {"name": "VINYL MODE", "label": "", "circle": [191.5, 132.8, 7.75], "off": "0x15", "mask": 1, "kind": "ring", "font": 9, "color": "blue"},
     {"name": "TEMPO RANGE", "label": "", "circle": [217.5, 132.7, 4.8], "off": "0x15", "mask": 8, "kind": "dome", "font": 9},
-    {"name": "MASTER TEMPO", "label": "", "circle": [217.5, 149.7, 4.8], "off": "0x15", "mask": 16, "kind": "dome", "font": 9, "color": "red"},
+    {"name": "MASTER TEMPO", "label": "", "circle": [217.5, 149.7, 4.8], "off": "0x15", "mask": 16, "kind": "dome", "font": 9, "color": "red", "lamp": ["0x02", 8]},
     {"name": "TRACK -", "label": "", "circle": [15.5, 164.6, 5.8], "off": "0x12", "mask": 4, "kind": "chrome", "font": 9, "symbol": "track_rev"},
     {"name": "TRACK +", "label": "", "circle": [32.5, 164.6, 5.8], "off": "0x12", "mask": 8, "kind": "chrome", "font": 9, "symbol": "track_fwd"},
     {"name": "SEARCH -", "label": "", "circle": [15.5, 190.3, 5.8], "off": "0x12", "mask": 16, "kind": "chrome", "font": 9, "symbol": "scan_rev"},
     {"name": "SEARCH +", "label": "", "circle": [32.5, 190.3, 5.8], "off": "0x12", "mask": 32, "kind": "chrome", "font": 9, "symbol": "scan_fwd"},
-    {"name": "CUE", "label": "CUE", "circle": [24.1, 237.3, 15.4], "off": "0x10", "mask": 2, "kind": "big", "font": 13, "color": "orange"},
-    {"name": "PLAY/PAUSE", "label": "", "circle": [24.1, 277.3, 15.4], "off": "0x10", "mask": 1, "keycap": "Space", "kind": "big", "font": 13, "color": "green", "symbol": "play"}
+    {"name": "CUE", "label": "CUE", "circle": [24.1, 237.3, 15.4], "off": "0x10", "mask": 2, "kind": "big", "font": 13, "color": "orange", "lamp": ["0x02", 32]},
+    {"name": "PLAY/PAUSE", "label": "", "circle": [24.1, 277.3, 15.4], "off": "0x10", "mask": 1, "keycap": "Space", "kind": "big", "font": 13, "color": "green", "symbol": "play", "lamp": ["0x02", 64]}
   ]
 }

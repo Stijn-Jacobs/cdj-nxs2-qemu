@@ -27,6 +27,8 @@ from .rig import DEFAULT_GROUP, default_audiodev
 
 # The panel key socket's UDP port, which the key scripts send to.
 PANEL_KEY_PORT = 40124
+# Where an older deck sends MAIN's frame to the panel MCU, for the app's lamps.
+PANEL_STATE_PORT = 40024
 
 
 def main_qemu(lay, env):

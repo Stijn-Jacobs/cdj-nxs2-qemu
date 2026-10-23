@@ -13,6 +13,7 @@
 #include "qemu/osdep.h"
 #include "qemu/units.h"
 #include "qemu/timer.h"
+#include "qemu/thread.h"
 #include "qemu/error-report.h"
 #include "qapi/error.h"
 #include "cpu.h"
@@ -2538,6 +2539,13 @@ static void lcd_invalidate(void *opaque)
  *   end u32 started   sequence number of the frame being written
  * A frame is written as started, pixels, done. A reader that reads the file
  * front to back and finds done == started has a whole frame.
+ *
+ * The file is written by a thread of its own. A write can block for a second
+ * when the file sits on a slow disk (Windows throttles a writer whose dirty
+ * pages the disk cannot take), and on the main loop that held the BQL and
+ * stopped the display CPU with it: no CMI0 tick taken, no link transfer, the
+ * screen frozen. A frame that comes while the last is being written replaces
+ * the one waiting.
  */
 #define CDJ_FRAME_HDR 32
 
@@ -2545,8 +2553,12 @@ static struct {
     FILE *f;
     QEMUTimer *timer;
     unsigned period_ms;
-    uint8_t *cur, *prev;
-    uint32_t seq;
+    uint8_t *cur, *prev, *next, *out;
+    bool sent;
+    QemuThread thread;
+    QemuMutex lock;
+    QemuCond ready;
+    bool pending;
 } gui_frame;
 
 static void gui_frame_put32(long off, uint32_t v)
@@ -2573,18 +2585,41 @@ static void gui_frame_tick(void *opaque)
     } else {
         memcpy(gui_frame.cur, s->fb + SH7269_LCD_OFFSET, SH7269_LCD_BYTES);
     }
-    if (gui_frame.seq && !memcmp(gui_frame.cur, gui_frame.prev, SH7269_LCD_BYTES)) {
+    if (gui_frame.sent && !memcmp(gui_frame.cur, gui_frame.prev, SH7269_LCD_BYTES)) {
         return;
     }
     memcpy(gui_frame.prev, gui_frame.cur, SH7269_LCD_BYTES);
-    gui_frame.seq++;
-    gui_frame_put32(CDJ_FRAME_HDR + SH7269_LCD_BYTES, gui_frame.seq);
-    fflush(gui_frame.f);
-    fseek(gui_frame.f, CDJ_FRAME_HDR, SEEK_SET);
-    fwrite(gui_frame.cur, 1, SH7269_LCD_BYTES, gui_frame.f);
-    fflush(gui_frame.f);
-    gui_frame_put32(8, gui_frame.seq);
-    fflush(gui_frame.f);
+    gui_frame.sent = true;
+    qemu_mutex_lock(&gui_frame.lock);
+    memcpy(gui_frame.next, gui_frame.cur, SH7269_LCD_BYTES);
+    gui_frame.pending = true;
+    qemu_cond_signal(&gui_frame.ready);
+    qemu_mutex_unlock(&gui_frame.lock);
+}
+
+static void *gui_frame_writer(void *opaque)
+{
+    uint32_t seq = 0;
+
+    for (;;) {
+        qemu_mutex_lock(&gui_frame.lock);
+        while (!gui_frame.pending) {
+            qemu_cond_wait(&gui_frame.ready, &gui_frame.lock);
+        }
+        memcpy(gui_frame.out, gui_frame.next, SH7269_LCD_BYTES);
+        gui_frame.pending = false;
+        qemu_mutex_unlock(&gui_frame.lock);
+
+        seq++;
+        gui_frame_put32(CDJ_FRAME_HDR + SH7269_LCD_BYTES, seq);
+        fflush(gui_frame.f);
+        fseek(gui_frame.f, CDJ_FRAME_HDR, SEEK_SET);
+        fwrite(gui_frame.out, 1, SH7269_LCD_BYTES, gui_frame.f);
+        fflush(gui_frame.f);
+        gui_frame_put32(8, seq);
+        fflush(gui_frame.f);
+    }
+    return NULL;
 }
 
 static void gui_frame_init(Sh7269Lcd *s)
@@ -2597,7 +2632,13 @@ static void gui_frame_init(Sh7269Lcd *s)
     if (!path || !*path) {
         return;
     }
+#ifdef _WIN32
+    /* "T": a temporary file, which Windows keeps in its cache instead of
+     * writing it back, so a slow disk does not limit the frame rate. */
+    gui_frame.f = fopen(path, "w+bT");
+#else
     gui_frame.f = fopen(path, "w+b");
+#endif
     if (!gui_frame.f) {
         warn_report("CDJ_GUI_FRAME_FILE: cannot open %s: %s", path,
                     strerror(errno));
@@ -2609,9 +2650,15 @@ static void gui_frame_init(Sh7269Lcd *s)
     fwrite(hdr, 1, sizeof(hdr), gui_frame.f);
     gui_frame.cur = g_malloc0(SH7269_LCD_BYTES);
     gui_frame.prev = g_malloc0(SH7269_LCD_BYTES);
+    gui_frame.next = g_malloc0(SH7269_LCD_BYTES);
+    gui_frame.out = g_malloc0(SH7269_LCD_BYTES);
     fwrite(gui_frame.cur, 1, SH7269_LCD_BYTES, gui_frame.f);
     gui_frame_put32(CDJ_FRAME_HDR + SH7269_LCD_BYTES, 0);
     fflush(gui_frame.f);
+    qemu_mutex_init(&gui_frame.lock);
+    qemu_cond_init(&gui_frame.ready);
+    qemu_thread_create(&gui_frame.thread, "cdj-frames", gui_frame_writer, NULL,
+                       QEMU_THREAD_DETACHED);
     gui_frame.period_ms = MAX(1000 / rate, 1);
     gui_frame.timer = timer_new_ms(QEMU_CLOCK_REALTIME, gui_frame_tick, s);
     timer_mod(gui_frame.timer, qemu_clock_get_ms(QEMU_CLOCK_REALTIME));

@@ -138,7 +138,7 @@ class App:
         self.window = pygame.Window(self.face.title + " Virtual Deck" if self.face else TITLE,
                                     (640, 480), allow_high_dpi=True, resizable=True, hidden=True)
         if self.face:
-            self.relay = PanelLink(args.panel_port)
+            self.relay = PanelLink(args.panel_port, args.state_port)
         else:
             host, _, port = args.relay.partition(":")
             self.relay = RelayLink(host, int(port))
@@ -565,6 +565,9 @@ def parse_args(argv=None):
     ap.add_argument("--panel-port", type=int, default=int(os.environ.get("CDJ_PANEL_KEYSOCK", "0") or 0),
                     help="an older player's panel key port, where its keys go "
                          "(env CDJ_PANEL_KEYSOCK)")
+    ap.add_argument("--state-port", type=int, default=int(os.environ.get("CDJ_PANEL_STATESOCK", "0") or 0),
+                    help="where an older player sends its panel frame, which lights "
+                         "the face's lamps (env CDJ_PANEL_STATESOCK)")
     ap.add_argument("--prefix", default=os.environ.get("CDJ_NAME", "show"),
                     help="machine tag prefix; deck N is <prefix>N (env CDJ_NAME)")
     ap.add_argument("--relay",

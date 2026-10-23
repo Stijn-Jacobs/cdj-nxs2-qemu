@@ -4,6 +4,7 @@ table, and the window drawn off screen with the mouse driven by posted events.""
 import os
 import re
 import sys
+import time
 
 import pytest
 
@@ -343,3 +344,104 @@ def test_no_control_straddles_a_seam_between_the_panel_plates(model):
         for seam in (x0, x1):
             assert not (a < seam < c and d > y0 and b < h), (model, name, "crosses the side plate edge")
         assert not (a < x1 and c > x0 and b < y1 < d), (model, name, "crosses the panel's lower edge")
+
+
+@pytest.fixture
+def mk2_app(tmp_path, monkeypatch):
+    monkeypatch.setenv("CDJ_APP_CACHE", str(tmp_path / "art"))
+    a = make_app("xdj1000mk2")
+    yield a
+    a.close()
+
+
+def publish(deck, *bits):
+    frame = bytearray(32)
+    for off, mask in bits:
+        frame[off] |= mask
+    deck.link.frame, deck.link.seen = bytes(frame), time.monotonic()
+    deck.tick(time.monotonic())
+
+
+def test_a_key_lights_while_the_panel_frame_sets_its_lamp_bit(mk2_app):
+    deck = mk2_app.decks[0]
+    publish(deck, (0x00, 0x01))
+    assert deck.lit == {"PLAY/PAUSE"} and "PLAY/PAUSE" in deck.key_layers
+    publish(deck, (0x00, 0x02), (0x01, 0x04))
+    assert deck.lit == {"CUE", "MASTER TEMPO"} and "PLAY/PAUSE" not in deck.key_layers
+
+
+def test_the_lamps_go_dark_when_the_deck_stops_publishing(mk2_app):
+    deck = mk2_app.decks[0]
+    publish(deck, (0x00, 0x03))
+    deck.link.seen -= 10
+    deck.tick(time.monotonic())
+    assert deck.lit == set() and deck.key_layers == {}
+
+
+def test_a_lamp_lit_under_a_held_key_stays_lit_on_release(mk2_app):
+    deck = mk2_app.decks[0]
+    key = deck.face.key_named("CUE")
+    publish(deck, (0x00, 0x02))
+    deck.down((key.circle[0] * deck.scale, key.circle[1] * deck.scale))
+    deck.up((key.circle[0] * deck.scale, key.circle[1] * deck.scale))
+    assert "CUE" in deck.key_layers
+
+
+def test_the_mk2_lamps_are_the_bits_measured_on_its_panel_frame():
+    lamps = {k.name: k.lamp for k in FACE.load("xdj1000mk2").keys if k.lamp}
+    assert lamps == {"PLAY/PAUSE": (0x00, 0x01), "CUE": (0x00, 0x02), "LOOP IN": (0x00, 0x10),
+                     "LOOP OUT": (0x00, 0x20), "RELOOP/EXIT": (0x00, 0x40), "MASTER TEMPO": (0x01, 0x04),
+                     "QUANTIZE": (0x01, 0x08)}
+
+
+def test_the_panel_link_reads_the_frame_main_publishes():
+    import socket
+    import panel_link
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    link = panel_link.PanelLink(1, port)
+    link.start()
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as main:
+            deadline = time.monotonic() + 5
+            while not link.lit(0x00, 0x02) and time.monotonic() < deadline:
+                main.sendto(b"pnl 0201" + b"00" * 30, ("127.0.0.1", port))
+                time.sleep(0.05)
+        assert link.lit(0x00, 0x02) and link.lit(0x01, 0x01) and not link.lit(0x00, 0x01)
+    finally:
+        link.close()
+
+
+@pytest.mark.parametrize("model", ["xdj1000", "xdj1000mk2", "xdj700"])
+def test_the_xdj_select_knob_counts_in_the_byte_the_browse_list_follows(model):
+    assert FACE.load(model).turn_datagram(-1) == "0x0e:-1:0:rot"
+
+
+@pytest.mark.parametrize("model", ["xdj1000", "xdj700"])
+def test_the_xdj1000_and_xdj700_lamps_are_the_bits_measured_on_their_panel_frame(model):
+    lamps = {k.name: k.lamp for k in FACE.load(model).keys if k.lamp}
+    assert lamps == {"PLAY/PAUSE": (0x02, 0x40), "CUE": (0x02, 0x20), "LOOP IN": (0x01, 0x02),
+                     "LOOP OUT": (0x01, 0x04), "RELOOP/EXIT": (0x02, 0x80), "MASTER TEMPO": (0x02, 0x08)}
+
+
+def test_the_cdj900nxs_lamps_are_the_xdj_bits_and_sync():
+    lamps = {k.name: k.lamp for k in FACE.load("cdj900nxs").keys if k.lamp}
+    assert lamps == {"PLAY/PAUSE": (0x02, 0x40), "CUE": (0x02, 0x20), "LOOP IN": (0x01, 0x02),
+                     "LOOP OUT": (0x01, 0x04), "RELOOP/EXIT": (0x02, 0x80), "MASTER TEMPO": (0x02, 0x08),
+                     "SYNC": (0x0D, 0x02)}
+
+
+def test_the_cdj2000nxs_lamps_are_the_bits_measured_on_its_panel_frame():
+    lamps = {k.name: k.lamp for k in FACE.load("cdj2000nxs").keys if k.lamp}
+    assert lamps == {"PLAY/PAUSE": (0x02, 0x40), "CUE": (0x02, 0x20), "LOOP IN": (0x01, 0x02),
+                     "LOOP OUT": (0x01, 0x04), "RELOOP/EXIT": (0x02, 0x80), "MASTER TEMPO": (0x02, 0x08),
+                     "QUANTIZE": (0x01, 0x10), "SYNC": (0x0D, 0x02), "TEMPO RESET": (0x03, 0x01),
+                     "LINK": (0x04, 0x80), "SD": (0x04, 0x08), "DISC": (0x04, 0x02), "PC": (0x03, 0x80)}
+
+
+def test_the_cdj2000_lamps_are_the_bits_measured_on_its_panel_frame():
+    lamps = {k.name: k.lamp for k in FACE.load("cdj2000").keys if k.lamp}
+    assert lamps == {"PLAY/PAUSE": (0x01, 0x20), "CUE": (0x01, 0x10), "LOOP IN": (0x01, 0x02),
+                     "LOOP OUT": (0x01, 0x04), "RELOOP/EXIT": (0x01, 0x40), "MASTER TEMPO": (0x02, 0x20),
+                     "TEMPO RESET": (0x01, 0x80), "LINK": (0x03, 0x80), "SD": (0x03, 0x08), "DISC": (0x03, 0x02)}

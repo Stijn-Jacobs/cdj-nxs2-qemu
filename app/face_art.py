@@ -34,8 +34,9 @@ class FaceArt(ART.Art):
     @staticmethod
     def _layout_key(k):
         color = getattr(L, k.color.upper()) if k.color else L.LIME
+        # A dome or ring key shows its lamp as the centre LED art.py draws for a dot.
         return L.Key(k.name, k.kind, None, box=k.rect, circle=k.circle, label=k.label,
-                     color=color, symbol=k.symbol, font=k.font)
+                     color=color, symbol=k.symbol, font=k.font, dot=color if k.lamp else None)
 
     def key_sprite(self, key, lit, down, look):
         return super().key_sprite(self.keys[key.name], lit, down, look)

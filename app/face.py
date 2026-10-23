@@ -7,6 +7,8 @@ millimetres from the top left of the chassis (measured on the manual's
 top-down drawing), and its controls. A control with `off` and `mask` is a
 report bit the firmware's panel decoder turns into a key the firmware names;
 one without is drawn dark and does nothing, because no signal is known for it.
+A control with `lamp` [byte, mask] lights while MAIN's frame to the panel MCU
+sets that bit, measured on the player; one without never lights.
 A lever (`latch`) stays where it was put: a click holds its bit, the next one
 lets go.
 """
@@ -36,6 +38,7 @@ class FaceKey:
     symbol: str = ""
     font: int = 9
     latch: bool = False
+    lamp: tuple | None = None       # the panel frame's (byte, mask) that lights it
 
     @property
     def wired(self):
@@ -132,7 +135,8 @@ def load(model):
                     circle=_units(k["circle"]) if "circle" in k else None,
                     off=int(k["off"], 16) if k.get("off") else None, mask=k.get("mask"),
                     keycap=k.get("keycap", ""), kind=k.get("kind", "rect"), color=k.get("color", ""),
-                    symbol=k.get("symbol", ""), font=k.get("font", 9), latch=k.get("latch", False))
+                    symbol=k.get("symbol", ""), font=k.get("font", 9), latch=k.get("latch", False),
+                    lamp=(int(k["lamp"][0], 16), k["lamp"][1]) if "lamp" in k else None)
             for k in d["keys"]]
     r, jog, sl, touch = d["rotary"], d["jog"], d["slider"], d.get("touch")
     return Face(

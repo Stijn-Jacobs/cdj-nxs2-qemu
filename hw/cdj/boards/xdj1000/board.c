@@ -6,6 +6,7 @@
 #include "usb_r8a66597.h"
 #include "cdj_pnl_link.h"
 #include "cdj_pnl_touch.h"
+#include "cdj_pnl_stateout.h"
 #include "cdj_gui_keys.h"
 #include "hw/char/serial.h"
 /*
@@ -27,6 +28,7 @@
 #define SH7724_PNL_SYNC  0x8F
 
 typedef struct Sh7724PanelExtra {
+    unsigned frame_len;
     bool lever_fwd;
     bool tempo_centre;
     CdjPnlTouch touch;
@@ -58,6 +60,15 @@ static void sh7724_panel_defaults(CdjPnlLinkState *s, void *extra, uint8_t *rx)
         rx[4] = 0x80;
         rx[6] = 0x80;
     }
+}
+
+/* MAIN's frame carries the panel's lamps; the app lights the face from it. */
+static void sh7724_panel_on_frame(CdjPnlLinkState *s, void *extra,
+                                  const uint8_t *frame)
+{
+    Sh7724PanelExtra *e = extra;
+
+    cdj_pnl_stateout(frame, e->frame_len);
 }
 
 static void sh7724_panel_last(CdjPnlLinkState *s, void *extra, uint8_t *rx,
@@ -310,6 +321,7 @@ static void sh7724_deck_init(MachineState *machine, const Sh7724Deck *deck)
         }
     }
     static const CdjPnlLinkHooks panel_hooks = {
+        .on_frame = sh7724_panel_on_frame,
         .build_defaults = sh7724_panel_defaults,
         .build_last = sh7724_panel_last,
         .drain_extra = sh7724_panel_drain,
@@ -321,6 +333,7 @@ static void sh7724_deck_init(MachineState *machine, const Sh7724Deck *deck)
                                                 SH7724_PNL_SYNC, &panel_hooks,
                                                 sizeof(*panel));
 
+    panel->frame_len = deck->pnl_frame;
     panel->lever_fwd = deck->lever_fwd;
     panel->tempo_centre = deck->tempo_centre;
     cdj_gui_keys_init(sh7724_deck_keys, ARRAY_SIZE(sh7724_deck_keys),
