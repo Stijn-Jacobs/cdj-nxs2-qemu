@@ -28,7 +28,7 @@ import subprocess
 import sys
 import time
 
-from . import chain, conf, deck, firmware, host, model, mods, sites
+from . import chain, conf, deck, dsp_module, firmware, host, model, mods, sites
 from .chain import nonempty, say
 from .console import stdin_is_tty
 from .layout import Layout
@@ -100,6 +100,27 @@ def _offer_rebuild(lay, env, dry):
     else:
         say("starting the old build (./build.sh main display rebuilds it)")
     return True
+
+
+def _offer_faster_module(lay, player, env, dry):
+    """The installed DSP module still loads, but the generator has since got
+    faster. Asks once per revision, and only at a terminal."""
+    if (dry or lay.packaged or not player.builds_dsp_module or not stdin_is_tty()
+            or env.get("C66X_JIT") or env.get("MODULE") == "none" or not dsp_module.upgrade_due(lay, player)):
+        return
+    say("the DSP module for the %s was built by an older generator; a new one runs faster." % player.title)
+    try:
+        ans = input("build it now (about 30 minutes)? [y/N] ").strip().lower()
+    except EOFError:
+        print()
+        return
+    if ans[:1] != "y":
+        dsp_module.decline_upgrade(lay, player)
+        say("keeping the old module (%s builds the faster one)" % dsp_module.build_command(lay, player))
+        return
+    script = host.posix(os.path.join(lay.scripts, "build", "build_dsp_module.sh"))
+    if subprocess.run([host.find_bash(), script], env=dict(env, CDJ_MODEL=player.id)).returncode != 0:
+        chain.err("the DSP module build failed; starting with the old one")
 
 
 def stop(lay):
@@ -229,6 +250,7 @@ def main(argv):
 
     if not _offer_rebuild(lay, env, dry):
         return 1
+    _offer_faster_module(lay, player, env, dry)
     missing = [f for f in ("main_unpacked.bin", "gui_unpacked.bin", "flash.bin")
                if not os.path.isfile(os.path.join(model.extract_dir(lay, player), f))]
     if missing:
@@ -317,6 +339,7 @@ def _start_deck(lay, player, c, dry, app=False):
         env["NOSOUND"] = "1"
     if not _offer_rebuild(lay, env, dry):
         return 1
+    _offer_faster_module(lay, player, env, dry)
     decks = 2 if c["CDJ_DECKS"] == "2" else 1
     if app and decks > 1:
         # The app sends every key to the one panel port it is given.

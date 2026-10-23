@@ -43,6 +43,10 @@ import sys
 # module, and start-up refuses a module built by another version.
 GENERATOR_VERSION = 1
 
+# Bumped whenever the generated C only gets faster or smaller; start-up still
+# loads an older module and offers to build the faster one.
+GENERATOR_REVISION = 1
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 CORE_DIR = os.path.dirname(HERE)
 
