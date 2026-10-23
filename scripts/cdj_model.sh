@@ -28,7 +28,7 @@ cdj_model_load() {
           MODEL_FW_VERSION MODEL_UPD MODEL_UPD_SHA256 MODEL_MAIN_SECTION \
           MODEL_GUI_SECTION MODEL_MAIN_LZSS MODEL_FW_STEPS MODEL_EXPECTED \
           MODEL_LAUNCH MODEL_DISPLAY_UPD MODEL_DSP_IDLE MODEL_DSP_IDLE_KNOB MODEL_DSP_ISR_FAST \
-          MODEL_DSP_RETURN_AT MODEL_DSP_GEN_ARGS MODEL_DSP_SUPPLEMENT_ARGS
+          MODEL_DSP_RETURN_AT MODEL_DSP_GEN_ARGS MODEL_DSP_SUPPLEMENT_ARGS MODEL_DSP_LEFTOVER_ARGS
     # A checkout with core.autocrlf can give the profile CRLF endings; a
     # value ending in a carriage return would name no machine.
     # shellcheck source=/dev/null

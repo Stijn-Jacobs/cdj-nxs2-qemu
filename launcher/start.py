@@ -334,10 +334,12 @@ def _start_deck(lay, player, c, dry, app=False):
                 vnc_want, vnc_base))
         env["GUI_DISPLAY"] = "vnc=127.0.0.1:%d" % (vnc_base + 1 - 5900)
         env["CDJ_PANEL_KEYSOCK"] = nonempty(env, "CDJ_PANEL_KEYSOCK", str(host.pick_udp_port(deck.PANEL_KEY_PORT)))
+        env["CDJ_PANEL_STATESOCK"] = nonempty(env, "CDJ_PANEL_STATESOCK",
+                                              str(host.pick_udp_port(deck.PANEL_STATE_PORT)))
         env["CDJ_APP_LOG"] = env.get("CDJ_APP_LOG") or os.path.join(lay.logs, "app.log")
         app_cmd = app_py + [os.path.join(lay.emu, "app", "virtual_deck.py"), "--model", player.app_face,
                             "--decks", "1", "--prefix", c["CDJ_NAME"], "--vnc-base", str(vnc_base),
-                            "--panel-port", env["CDJ_PANEL_KEYSOCK"]]
+                            "--panel-port", env["CDJ_PANEL_KEYSOCK"], "--state-port", env["CDJ_PANEL_STATESOCK"]]
     return deck.start(player, env, dry, app_cmd, decks)
 
 

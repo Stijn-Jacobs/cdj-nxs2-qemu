@@ -382,6 +382,7 @@ def test_start_app_builds_the_older_decks_app_command(tmp_path, monkeypatch):
     assert app_cmd[app_cmd.index("--model") + 1] == "cdj2000nxs"
     assert app_cmd[app_cmd.index("--vnc-base") + 1] == "5920"
     assert app_cmd[app_cmd.index("--panel-port") + 1] == env["CDJ_PANEL_KEYSOCK"] == "40124"
+    assert app_cmd[app_cmd.index("--state-port") + 1] == env["CDJ_PANEL_STATESOCK"] == "40024"
 
 
 @pytest.mark.parametrize("mid,face", [("cdj2000nxs2", None)])

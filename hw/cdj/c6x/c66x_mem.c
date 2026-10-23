@@ -13,14 +13,16 @@
 
 void invalidate_code(c66x_core *c, uint32_t a, uint32_t n)
 {
-    /* Every mapping of the same host bytes: L2 is mapped at two addresses. */
-    for (unsigned i = 0; i < c->nram; i++) {
-        ramreg *r = &c->ram[i];
-        if (!r->fpp)
+    /* Every mapping of the same host bytes: L2 is mapped at two addresses.
+     * The mapping holding a comes first, so the common store pays one pass
+     * over the table rather than one per mapping. */
+    for (unsigned j = 0; j < c->nram; j++) {
+        ramreg *w = &c->ram[j];
+        if (a - w->base >= w->size)
             continue;
-        for (unsigned j = 0; j < c->nram; j++) {
-            ramreg *w = &c->ram[j];
-            if (a - w->base >= w->size || w->host != r->host || w->size != r->size)
+        for (unsigned i = 0; i < c->nram; i++) {
+            ramreg *r = &c->ram[i];
+            if (!r->fpp || w->host != r->host || w->size != r->size)
                 continue;
             uint32_t lo = (a - w->base) >> 5;
             uint32_t hi = (uint32_t)(((uint64_t)(a - w->base) + n - 1) >> 5);

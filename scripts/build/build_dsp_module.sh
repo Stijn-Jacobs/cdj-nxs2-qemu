@@ -42,6 +42,9 @@
 # not on this short-play one. DSP_SUPPLEMENT_JOBS defaults to 6; both modules
 # share the installed m.stamp. DSP_SUPPLEMENT_PROFILE can name a private
 # profile of a broader workload.
+# A model with MODEL_DSP_LEFTOVER_ARGS instead always gets an m.extra.so built
+# with those options from what the training play still interpreted with the
+# module loaded, unless DSP_SUPPLEMENT=1 asks for the private pass.
 set -uo pipefail
 E="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 . "$E/scripts/cdj_paths.sh"
@@ -226,8 +229,16 @@ else
         "-fprofile-dir=$(native "$PGO_DIR")" || die "the instrumented build failed"
 fi
 # The counts are written when the deck quits and the module is unloaded.
+# A leftover supplement is generated from what this play still interprets: the
+# instrumented build has the same regions as the profiled one.
+LEFT="$WORK/leftover"
+LEFT_KNOB=()
+if [ -n "${MODEL_DSP_LEFTOVER_ARGS:-}" ]; then
+    [ "$DRY" = 1 ] || { rm -rf "$LEFT" && mkdir -p "$LEFT"; }
+    LEFT_KNOB=(C66X_JIT_PROFILE="$(native "$LEFT")")
+fi
 run env MODULE=none AUTOJIT=0 PLAY_S="$PLAY_S" DSP_TRAIN_MODULE="$(native "$OBJ/m.so")" \
-    bash "$E/scripts/run/warm_jit.sh" train
+    "${LEFT_KNOB[@]}" bash "$E/scripts/run/warm_jit.sh" train
 train_rc=$?
 [ "$DRY" = 1 ] || played "$train_rc" train
 if [ "$DRY" = 0 ]; then
@@ -247,11 +258,21 @@ fi
 # branches. The core loads it second so its regions override overlapping roots.
 EXTRA="$WORK/supplement"
 SUPPLEMENT=0
-[ "${DSP_SUPPLEMENT:-0}" != 1 ] || [ -z "${MODEL_DSP_SUPPLEMENT_ARGS:-}" ] || SUPPLEMENT=1
+SUPP_PROF="${DSP_SUPPLEMENT_PROFILE:-$PROF}"
+SUPP_ARGS="${MODEL_DSP_SUPPLEMENT_ARGS:-}"
+if [ "${DSP_SUPPLEMENT:-0}" = 1 ] && [ -n "$SUPP_ARGS" ]; then
+    SUPPLEMENT=1
+elif [ -n "${MODEL_DSP_LEFTOVER_ARGS:-}" ]; then
+    SUPPLEMENT=1
+    SUPP_PROF="$LEFT"
+    SUPP_ARGS="$MODEL_DSP_LEFTOVER_ARGS"
+    [ "$DRY" = 1 ] || [ -s "$LEFT/profile.txt" ] ||
+        die "the training run wrote no leftover profile (see /tmp/bridge-main-train1.log)"
+fi
 if [ "$SUPPLEMENT" = 1 ]; then
     [ "$DRY" = 1 ] || rm -rf "$EXTRA"
-    run env C66X_JIT_LIBDIR="$LIBDIR" JOBS="${DSP_SUPPLEMENT_JOBS:-6}" \
-        bash "$E/scripts/build/build_dsp_supplement.sh" "${DSP_SUPPLEMENT_PROFILE:-$PROF}" "$EXTRA" ||
+    run env C66X_JIT_LIBDIR="$LIBDIR" JOBS="${DSP_SUPPLEMENT_JOBS:-6}" DSP_SUPPLEMENT_ARGS="$SUPP_ARGS" \
+        bash "$E/scripts/build/build_dsp_supplement.sh" "$SUPP_PROF" "$EXTRA" ||
         die "the supplemental generator/build failed"
 fi
 run mkdir -p "$DEST"

@@ -4,8 +4,9 @@
 The same job as deck_view.py, with the same interface to the window, for a
 player whose face is data. The LCD arrives over VNC; the keyboard goes to the
 display board over VNC as well, and the drawn keys send panel datagrams to the
-MAIN emulator (panel_link.py). Nothing is lit: no lamp signal comes back, and
-a control with no known report bit is drawn dark and ignored. A player with a
+MAIN emulator (panel_link.py). A key lights while MAIN's frame to the panel
+MCU sets the lamp bit measured for it; a control with no known report bit is
+drawn dark and ignored. A player with a
 touch screen gets the finger on its LCD: as panel datagrams where the panel
 MCU digitises it (report bytes 0x16-0x19), or over VNC where the display
 board takes a pointer. The jog turns under the mouse like the NXS2's and, on
@@ -63,7 +64,8 @@ class FaceDeckView:
         self.surf = None
         self.lcd_size = None
         self.lcd = None
-        self.pressed = {}               # key name -> (sprite, position)
+        self.key_layers = {}            # key name -> (sprite, position), for keys down or lit
+        self.lit = set()                # names of the keys whose lamp is on
         self.select_layer = None
         self.detents = 0
         self.warm = []
@@ -94,7 +96,7 @@ class FaceDeckView:
         self.lcd_size = (x1 - x0, y1 - y0)
         self.lcd_pos = (x0, y0)
         self.lcd = None
-        self.pressed = {}
+        self.key_layers = {}
         self.screen.set_views({"face": self.lcd_size})
         self._draw_jog()
         self._draw_cap()
@@ -102,8 +104,8 @@ class FaceDeckView:
         self.centre = (gfx.surface(img), pos)
         self.warm = list(range(1, ART.Art.JOG_PHASES))
         self._draw_select(False)
-        for name in self.latched:
-            self._draw_key(self.face.key_named(name), True)
+        for name in self.latched | self.lit:
+            self._draw_key(self.face.key_named(name), name in self.latched)
         self.dirty = [self.surf.get_rect()]
 
     def _draw_jog(self):
@@ -142,12 +144,13 @@ class FaceDeckView:
         if key.name == "ROTARY PUSH":
             self._draw_select(down)
             return
-        img, pos = self.art.key_sprite(key, False, down, "live")
+        lit = key.name in self.lit
+        img, pos = self.art.key_sprite(key, lit, down, "live")
         sprite = gfx.surface(img)
-        if down:
-            self.pressed[key.name] = (sprite, pos)
+        if down or lit:
+            self.key_layers[key.name] = (sprite, pos)
         else:
-            self.pressed.pop(key.name, None)
+            self.key_layers.pop(key.name, None)
         self.dirty.append(pygame.Rect(pos, sprite.get_size()))
 
     def _redraw(self, rect):
@@ -158,7 +161,7 @@ class FaceDeckView:
             s.blit(sprite, pos)
         if self.lcd:
             s.blit(self.lcd, self.lcd_pos)
-        for sprite, pos in (*self.pressed.values(), self.select_layer):
+        for sprite, pos in (*self.key_layers.values(), self.select_layer):
             s.blit(sprite, pos)
         s.set_clip(None)
 
@@ -171,7 +174,15 @@ class FaceDeckView:
             self._redraw(r)
         return rects
 
+    def _light(self):
+        lit = {k.name for k in self.face.keys if k.lamp and self.link.lit(*k.lamp)}
+        changed, self.lit = lit ^ self.lit, lit
+        held = self.down_key.name if self.down_key else None
+        for name in changed:
+            self._draw_key(self.face.key_named(name), name in self.latched or name == held)
+
     def tick(self, now):
+        self._light()
         frame = self.screen.take_frame()
         if frame is None:
             if self.warm:

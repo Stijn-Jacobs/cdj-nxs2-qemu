@@ -232,6 +232,19 @@ def handler_number(name):
     return names.index(name)
 
 
+def stores_last(items):
+    """A cycle's (instruction, packet) pairs in the order its code runs them, and
+    the first store. The interpreter holds a cycle's stores to its end only so
+    that its loads read the old values; running every other instruction first
+    and then the stores, each group in its own order, lands the same bytes in
+    the same order while each store lands as it runs (store_now) instead of
+    queueing through the core."""
+    h_store = handler_number("H_STORE")
+    is_store = [ins.fop == "store" or ins.handler == h_store for ins, _ in items]
+    stores = [it for it, st in zip(items, is_store) if st]
+    return [it for it, st in zip(items, is_store) if not st] + stores, (stores[0][0] if stores else None)
+
+
 def native(ins):
     f = ins.fop
     if f == "nop" or f in INT_OPS or f in FLOAT_OPS:
@@ -579,20 +592,17 @@ class RegionGen:
         if st.mcnop > 0:
             mcnop, next_pc = st.mcnop - 1, st.pc
         else:
-            h_store = handler_number("H_STORE")
-            stores = any(ins.fop == "store" or ins.handler == h_store for ins in pk.insns)
             e("    c->exec_pc = %s;" % u32(pk.pc))
-            if stores and not pk.load:
-                e("    c->store_now = 1;")
+            order, first_store = stores_last([(ins, pk) for ins in pk.insns])
             self.cur_ret = ret
-            for ins in pk.insns:
+            for ins, _ in order:
+                if ins is first_store:
+                    e("    c->store_now = 1;")
                 self.deps.add(ins.addr & ~31)
                 self.insn(ins, pk, new_ring, new_imm, queue, known)
             ret = self.cur_ret
-            if stores and not pk.load:
+            if first_store is not None:
                 e("    c->store_now = 0;")
-            elif stores:
-                e("    if (c->npst) JIT_API(c)->flush_stores(c);")
             e("    c->branch_block = %s;" % ("5" if pk.branched else "c->branch_block ? c->branch_block - 1 : 0"))
             mcnop, next_pc = pk.xnops, pk.next
         e("    c->cycle++;")
@@ -1621,18 +1631,13 @@ class KernelGen(RegionGen):
             e("    c->st.insns += %d;" % nnat)
         dummy = Rec()
         dummy.next = 0
-        # The interpreter holds a kernel cycle's stores to its end only so that a
-        # load in the same cycle reads the old value (fast_cycles' store_now rule):
-        # with no load among the instructions they can land at once.
-        h_load, h_store = handler_number("H_LOAD"), handler_number("H_STORE")
-        immediate = (all(ins.handler != h_load for ins in lst)
-                     and any(ins.handler == h_store for ins in lst))
-        if immediate:
-            e("    c->store_now = 1;")
-        for ins in lst:
+        order, first_store = stores_last([(ins, dummy) for ins in lst])
+        for ins, _ in order:
+            if ins is first_store:
+                e("    c->store_now = 1;")
             self.deps.add(ins.addr & ~31)
             self.insn(ins, dummy, new_ring, new_imm, [], known)
-        if immediate:
+        if first_store is not None:
             e("    c->store_now = 0;")
         e("    if (c->npst) JIT_API(c)->flush_stores(c);")
         for w in ring:
@@ -1960,26 +1965,21 @@ class LoopGen(KernelGen):
         new_ring, new_imm = [], []
         dummy = Rec()
         dummy.next = 0
-        h_load, h_store = handler_number("H_LOAD"), handler_number("H_STORE")
         pm_ins = [ins for ins in (pm.insns if pm else []) if ins.name not in LOOP_SKIP]
-        allins = list(buf) + pm_ins
-        immediate = (all(ins.handler != h_load for ins in allins) and any(ins.handler == h_store for ins in allins))
+        order, first_store = stores_last([(ins, dummy) for ins in buf] + [(ins, pm) for ins in pm_ins])
         if st.mcnop:
             e("    c->mcnop = %d;" % (st.mcnop - 1))
         if pm is not None:
             e("    c->exec_pc = %s; c->pc = %s;" % (u32(pm.pc), u32(pm.next)))
-        if immediate:
-            e("    c->store_now = 1;")
-        for ins in buf:
+        for ins, owner in order:
+            if ins is first_store:
+                e("    c->store_now = 1;")
             self.deps.add(ins.addr & ~31)
-            self.insn(ins, dummy, new_ring, new_imm, [], known)
-        for ins in pm_ins:
-            self.deps.add(ins.addr & ~31)
-            self.insn(ins, pm, new_ring, new_imm, [], known)
+            self.insn(ins, owner, new_ring, new_imm, [], known)
         if pm is not None:
             for ins in pm.insns:
                 self.deps.add(ins.addr & ~31)
-        if immediate:
+        if first_store is not None:
             e("    c->store_now = 0;")
         e("    if (c->npst) JIT_API(c)->flush_stores(c);")
         if pm is not None:
@@ -2070,15 +2070,14 @@ class LoopGen(KernelGen):
         new_ring, new_imm = [], []
         known = {}
         pm_ins = [ins for ins in pk0.insns if ins.name not in LOOP_SKIP]
-        h_load, h_store = handler_number("H_LOAD"), handler_number("H_STORE")
-        immediate = (all(ins.handler != h_load for ins in pm_ins) and any(ins.handler == h_store for ins in pm_ins))
-        if immediate:
-            e("    c->store_now = 1;")
-        for ins in pm_ins:
+        order, first_store = stores_last([(ins, pk0) for ins in pm_ins])
+        for ins, _ in order:
+            if ins is first_store:
+                e("    c->store_now = 1;")
             self.insn(ins, pk0, new_ring, new_imm, [], known)
         for ins in pk0.insns:
             self.deps.add(ins.addr & ~31)
-        if immediate:
+        if first_store is not None:
             e("    c->store_now = 0;")
         e("    if (c->npst) JIT_API(c)->flush_stores(c);")
         e("    c->branch_block = %s;" % ("5" if pk0.branched else "c->branch_block ? c->branch_block - 1 : 0"))
@@ -2470,8 +2469,10 @@ static inline void jit_store(c66x_core *c, uint32_t ea, uint32_t v, unsigned n)
         m[0] = v;
         if (n > 1) m[1] = v >> 8;
         if (n > 2) { m[2] = v >> 16; m[3] = v >> 24; }
+        /* integer bookkeeping only, so it keeps the op's rounding mode: a
+         * filter storing beside its own code would otherwise switch per store */
         if (rr->codepage[(ea - rr->base) >> FP_PAGE_SHIFT])
-            JIT_API(c)->invalidate_code(c, ea, n);
+            c->api->invalidate_code(c, ea, n);
         return;
     }
     JIT_API(c)->store_defer(c, ea, v, n);
