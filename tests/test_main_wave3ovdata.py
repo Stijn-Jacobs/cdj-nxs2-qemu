@@ -19,17 +19,17 @@ from helpers import mod_row, stock_mods
 SIG_AT = 0x200                  # where the real signature starts (4-aligned)
 SPAN = SIG_AT + 6               # the hooked span, 2 mod 4 like the firmware's
 RESUME = SPAN + 10
-CAVE = (0x400, 0x3E00)
+CAVE = (0x400, 0x7E00)
 FRAME = 0xF000
 MEMCPY = 0x085336DC
-SLOT, STOCK, PACKED, SHARED_LOW, HEADER = 0x4000, 0x6000, 0x8000, 0x3F00, 0x3F10
+SLOT, STOCK, PACKED, SHARED_LOW, HEADER = 0x8000, 0xA000, 0xC000, 0x7F00, 0x7F10
 SLOT_FIXED, SHARED = 0x0B569528, 0x081FFFFC
 RECORDS = 600
 NEVER_WRITTEN = 0xFFFFFFFF
 
 
 def build_image():
-    d = bytearray(0x4000)
+    d = bytearray(0x8000)
     for k, op in enumerate(nxs2.OVERVIEW_PUBLISH['sig']):
         struct.pack_into('<H', d, SIG_AT + 2 * k, op)
     struct.pack_into('<I', d, (SPAN & ~3) + 4 + 0x4E * 4, MEMCPY)

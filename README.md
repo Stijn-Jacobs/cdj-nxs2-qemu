@@ -114,7 +114,7 @@ show the firmware interface, not a claim of feature parity.
 | USB | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Playback** | | | | | | | | |
 | Sound | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
-| Real time with the setup DSP module | ✅ | ⚠️<sup>1</sup> | ⚠️<sup>1</sup> | ✅ | ⚠️<sup>2</sup> | ✅ | · | ✅ |
+| Real time with the setup DSP module | ✅ | ✅ | ⚠️<sup>1</sup> | ✅ | ⚠️<sup>2</sup> | ✅ | · | ✅ |
 | **Display** | | | | | | | | |
 | Waveform / overview | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Tempo and BPM readout | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -605,6 +605,11 @@ only the mods made for it.
 | [`tcnet`](mods/tcnet/README.md) | A TCNet Master node, so ShowKontrol, Resolume and other TCNet receivers follow the deck. |
 | [`gate_cue`](mods/gate_cue/README.md) | Gate Cue, CDJ-3000 style: from pause, a hot cue pad plays only while held and letting go returns to the cue. |
 | [`beat_jump_long`](mods/beat_jump_long/README.md) | Long beat jumps, CDJ-3000 style: the 2 and 4 beat jump keys jump 32 and 64 beats. |
+| [`cdj3000x`](mods/cdj3000x/README.md) | Experimental. Presents the deck to Serato DJ Pro as a CDJ-3000X, so Serato shows its browse list and detail waveform on the deck. |
+| [`cdj3000x_wave`](mods/cdj3000x_wave/README.md) | Experimental, needs the CDJ-3000X identity. Keeps the centre waveform on screen, and optionally moving, while Serato sends more of it. |
+| [`cdj3000x_browse`](mods/cdj3000x_browse/README.md) | Experimental, needs the CDJ-3000X identity. Moves the Serato browse list as soon as the encoder turns. |
+| [`cdj3000x_beat`](mods/cdj3000x_beat/README.md) | Experimental, needs the CDJ-3000X identity. Fills the beat boxes from the beat grid Serato sends. |
+| [`cdj3000x_key`](mods/cdj3000x_key/README.md) | Experimental, needs the CDJ-3000X identity. Shows the key of the loaded track from Serato. |
 
 **XDJ-700**
 
@@ -616,6 +621,23 @@ Each mod has a page of its own: its knobs, what it patches, and what has and has
 not been verified. `osc` needs a relay on the emulator
 (`python3 scripts/net/osc_relay.py`, see its page); `ableton_link` is reached
 through [a TAP adapter](#rekordbox-ableton).
+
+<a id="usb-midi-host"></a>
+
+**Testing `usb_midi` against the host.** The rear USB-B port is relayed by the
+machine's built-in host: start the deck with `CDJ_USBF_HOST=27020` (deck 1;
+deck 2 uses 27021) together with `CDJ_MAIN_USBMIDI=1`, for example
+`CDJ_USBF_HOST=27020 CDJ_MAIN_USBMIDI=1 bash scripts/run/rig.sh show`.
+`python3 scripts/net/usb_midi_port.py --count` then prints the messages per
+second by status byte, and `--monitor` one line per message. To have Windows'
+own MIDI stack read the clock instead, put
+`python3 scripts/net/usbip_server.py` in front of the same port and run
+`usbip.exe attach -r 127.0.0.1 -b 1-1` ([usbip-win2](https://github.com/vadimgrn/usbip-win2));
+the deck shows up as a "CDJ-2000NXS2" device with a MIDI port that any MIDI
+monitor can open. Attach after the deck has booted, and check `usbip port`
+first so the deck is not attached twice. The bridge keeps at most 256 unread
+packets per endpoint, so a monitor that reads slower than the clock loses
+messages. The relay is covered in [`docs/hid-mode.md`](docs/hid-mode.md).
 
 `./setup.sh` shows the defaults (step 7) and either takes them or asks about
 each one, and saves your answers to `cdj.conf`; `./setup.sh --reconfigure`

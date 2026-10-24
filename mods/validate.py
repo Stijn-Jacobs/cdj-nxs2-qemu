@@ -68,11 +68,11 @@ import sigpatch
 LABEL_SIZE = 32
 EMERGENCY_OFF = 0x10000
 MAX_SITE_BYTES = 32
-KNOWN_GUI_SITES = ('wave3', 'wave3ov', 'phrase')
+KNOWN_GUI_SITES = ('wave3', 'wave3ov', 'phrase', 'x3000trainpos')
 # Byte rewrites of display code that is equally off the boot path: the detail
 # waveform message (0x37) handler runs only when MAIN sends a loaded track's
 # waveform.
-KNOWN_GUI_TABLES = ()
+KNOWN_GUI_TABLES = ('x3000keepwave',)
 VECTOR_COPY_DEST = 0xFFF84000
 RECORD_BYTES = 12
 SHOWN = 8
@@ -606,14 +606,14 @@ def load_records(img, profile):
 
 
 def known_gui_sites(stock_img, profile):
-    """Byte ranges of the display image where a mod may rewrite code: the three
+    """Byte ranges of the display image where a mod may rewrite code: the
     routine sites patch_gui.py ships, found in the stock image by their
     instructions, and the bytes of the known rewrites.
-    All three are inside pixel renderers (the centre waveform's RGB branch and
-    the overview strip's column decode and column loop), which the display
-    task runs only when it draws a waveform, long after the load table, the
-    vector copy and the update screen are up. The image has no call graph, so
-    any other site cannot be shown to stay off the boot path."""
+    All are inside pixel renderers (the centre waveform's and the overview
+    strip's), which the display task runs only when it draws a waveform, long
+    after the load table, the vector copy and the update screen are up. The
+    image has no call graph, so any other site cannot be shown to stay off the
+    boot path."""
     image = sigpatch.Image(profile, stock_img)
     ranges = []
     for name in KNOWN_GUI_SITES:
