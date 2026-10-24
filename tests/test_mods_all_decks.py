@@ -183,20 +183,21 @@ MAIN_ALL = ["wave3data", "wave3detail", "wave3ovdata", "wave3ovfetch", "phrasefe
 # SHA-256 of what patch_main.py / patch_gui.py write for these selections. The
 # routines are laid out for the whole registry, so a new NXS2 MAIN routine
 # moves the ones sorted after it and every trampoline: the MAIN pins change
-# with it and the display ones do not.
+# with it; a new display routine makes the display's reserved block, and so
+# its image, bigger.
 PINNED = [
     ("main_unpacked.bin", patch_main, MAIN_ALL,
-     "b5bf4b8df8339cc7286979b1aac7bf6d76c259ecc6f2e07c647914dd6c7c2b6b"),
+     "a30de5cf07fa4b7ceb1af019e124ff4ce4e0b8f4d4f28480fa553cf1c5cd0365"),
     ("main_unpacked.bin", patch_main, ["osc", "oscbeat"],
-     "73c54406c384bc042657ccc26565c53648b87d07e4beebf3fc110d228c454e8c"),
+     "32194636cfba2c73dd48722d2dc0cd0254f66d35accedeef4157c180761749fa"),
     ("main_unpacked.bin", patch_main, ["gatecue", "gatecuepress"],
-     "62868dda790a74a8ea08d72f56eda4e891d64923eff9e0d1d79140aebd8beb10"),
+     "d37a938d3791f5c6158b3b7814ade1ddf3a4ba0586cabc89354dcf8c0fd42c37"),
     ("main_unpacked.bin", patch_main, ["beatjumplong"],
      "c44fe3b05df50cdbacbaebc7778adbe624609e0d29cfbddd1fc2ee12359fed63"),
     ("gui_unpacked.bin", patch_gui, ["wave3", "wave3ov", "phrase"],
-     "82e9d514b2cff6ed608a851b0d3afd7574c9649b95db17992e651b9d525dafb4"),
+     "777d3290ecca3a616cf9b470ec0d0ac724c62bce3e16bc9201339b1e9d056e5e"),
     ("gui_unpacked.bin", patch_gui, ["wave3"],
-     "67518f884d2d3ace561804a9e83e3f769ee23113de855647962a17bc16b0c678"),
+     "07f62cdfa4e6c3064ccc5dbe0aec4ccafc326ec2e8af47b8cecfb2f9c00a4112"),
 ]
 
 

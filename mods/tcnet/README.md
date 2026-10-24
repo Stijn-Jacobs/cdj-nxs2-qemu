@@ -37,8 +37,8 @@ Master and a timestamp in microseconds into the current second of the deck's
 
 **Listening.** The deck opens the listener port it advertises, UDP 65023, and
 reads it. A node that sends the deck its Opt-IN joins the deck's node list at
-the listener port it names; a node that sends a Request joins at the address
-and port it sent from, and is answered there. The list holds four nodes, a new
+the listener port it names, and is answered there; a node that sends a Request
+without one joins at the address and port it sent from. The list holds four nodes, a new
 one replacing the oldest. Requests are answered for the deck's own layer only,
 for Metrics (data type 2) and MetaData (4).
 
@@ -69,9 +69,14 @@ like the other [mods](../../README.md#mods).
 **What is verified.** The patch sites are found by signature in firmware 1.87,
 and the routines are run in an SH-4 interpreter against packets decoded from
 the specification's offsets (`tests/test_main_tcnet.py`). On the emulated
-deck, Resolume Arena lists it as a Pioneer player and follows its time. The
-listener answers Metrics and MetaData, but to the port a request came from
-rather than the listener port Arena names in it, so Arena does not show the
-BPM or the title yet. None of it has been tried on a real deck.
+deck, Resolume Arena lists it as a Pioneer player and follows its time; the
+Opt-IN and Status packets leave about 0.9 times a second and Time about 47
+times a second, also while the deck is paused. A request that names a listener
+port in its Opt-IN is answered there: with two captured packets (source ports
+52955 and 53605, listener ports 65371 and 65149), every Metrics, MetaData and
+Opt-IN reply went to the listener port and none to the source port. When Arena
+last ran against the deck it showed no BPM or title, and that was before the
+deck answered the listener port; Arena has not been run again since, so what
+it shows now is not known. None of it has been tried on a real deck.
 
 Back to the [mods](../../README.md#mods).

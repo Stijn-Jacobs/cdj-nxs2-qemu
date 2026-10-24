@@ -1,0 +1,19 @@
+# Host reports Serato DJ Pro sent a deck with the CDJ-3000X identity in two sessions
+# (loading tracks): the key text (0x27) and the track length (0x30),
+# each distinct report once, in the order they arrived. One report per line, 1024 bytes with the
+# trailing zeros left out. The key is UTF-16LE from byte 6, the length [min][sec][ms u16] from byte 6.
+# first session
+0027010001000020
+0030010001
+0027010001003100310041
+003001000100031ffc
+002701000100310041
+00300100010002399202
+# second session
+0027010001000020
+0030010001
+0027010001
+002701000100360041
+00300100010002310c
+002701000100310041
+00300100010002272601

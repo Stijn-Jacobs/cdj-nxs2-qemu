@@ -49,7 +49,10 @@ the other [mods](../../README.md#mods).
 **What is verified.** On the emulated deck, live: one announcement per beat at
 the deck's tempo, every ping answered, the deck's beat timing unchanged, Live 12
 showing `1 Link` with its tempo following the deck's, and rekordbox in
-Performance mode showing the deck as a Link peer and syncing. Not tried on a
-real deck.
+Performance mode showing the deck as a Link peer and syncing (one run each).
+The announcements came 499 for 499 beats, all 755 pings were answered, the
+slowest within 2.8 ms, against the 50 ms an app allows. How closely the apps'
+tempo tracks the deck's has not been measured, only seen. Not tried on a real
+deck.
 
 Back to the [mods](../../README.md#mods).
