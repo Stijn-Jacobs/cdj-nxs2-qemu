@@ -42,8 +42,9 @@ Pro over USB/IP on the emulator, not on a real deck.
 | Serato authentication | done. Serato authenticates the 3000X over the same HID handshake the NXS2 already runs, not a separate MIDI channel: it answers the deck's hello with a host-identity message (stage 0x30) and the deck replies with its own identity (stage 0x31). `x3000hs` sends that reply and marks the deck authenticated. No key is involved in this exchange. (A MIDI SysEx certificate path also exists in the 3000X firmware, but Serato does not use it for this.) |
 | 1024-byte HID Output report | done, live with Serato. Serato sends the detail waveform only to a deck whose report descriptor declares a 1024-byte Output report. `x3000out` declares it (the descriptor keeps its length); the endpoint stays at 64 bytes, so each report arrives as 16 packets of one transfer. `x3000rxbuf` has the HID OUT task read the whole transfer into a 1024-byte buffer of its own, and `x3000rxview` gives the stock handlers the first 64 bytes of each report in their own buffer, so they see what a 64-byte read gave them |
 | Report translation: the 3000X's larger reports into the NXS2's handlers | done for the library list, the control report, the overview, the beat grid and the detail waveform, live with Serato. The 3-band waveforms are not handled: the 3000X takes them only from rekordbox's HID mode, and Serato DJ Pro 4.0.9 has no message that carries them |
+| Hot cues, memory cues and loops | checked on the interpreter, with the firmware's own handlers run on the result; not yet tried live. The hot cues pass to the NXS2 as they come; the memory cue and loop list is rewritten |
 | Beat boxes (`x3000segments`) | fill live on the emulator with Serato (the picture above); checked on the interpreter |
-| Key (`x3000key`) | shown live on the emulator with Serato (the picture above); checked on the interpreter |
+| Key (`x3000key`) | shown live on the emulator with Serato (the picture above); checked on the interpreter. Following Serato's key shift: checked on the interpreter, not yet live |
 | Centre waveform kept on screen and moving (`x3000keepwave`, `x3000trainpos`) | the strip stays drawn through an update on the emulator with Serato; the moving position measured on a replay |
 | Browse list ahead of Serato (`x3000browse`) | checked on the interpreter and a replay; tried live on the emulator, unmeasured |
 
@@ -112,9 +113,18 @@ checked against what the 1.87 firmware holds before anything is written:
   stays at least 57 s ahead of the playhead. Each train holds the playhead on
   the display for 101 to 123 ms (measured on a replay of a captured session
   with the deck playing and a host load of 42 to 96 percent), against 165 to
-  522 ms for sending the whole buffer every 4,500 points. The track length
-  (type 0x30), which the firmware would read as the deck's 8 hot cue slots, is
-  dropped: the control report already carries the length.
+  522 ms for sending the whole buffer every 4,500 points. The hot cues
+  (type 0x30: the track length and eight slots of kind, colour, minutes,
+  seconds and ms) are already in the layout the NXS2 reads, colours on the same
+  wheel of 64, and go to it as they come. The memory cues and loops (type
+  0x2d) are the same length, a count and up to ten records, each one byte
+  longer on the 3000X: a kind (1 a memory cue, 2 and 3 the others) in front of
+  the colour and the time. They are rewritten in the NXS2's form, the colour
+  with bit 7 set for anything but a memory cue, as the NXS2 reads it. Records
+  of another kind are left out, a colour outside 1 to 8 becomes red as on the
+  3000X, and a count of 0 or above ten is an empty list. A loop arrives as one
+  position, so it shows as a marker at its start: the NXS2's list can hold a
+  loop's end, but nothing in Serato's message gives it.
 
 The rest are hooks that do what a 3000X does on its own, or that smooth over
 the way Serato streams:
@@ -137,6 +147,14 @@ the way Serato streams:
   Camelot wheel (10A Bm, 10B D, 11A F#m, 11B A, 12A C#m, 12B E). Text that is
   not ASCII leaves the key empty. The colour index of the message is left 0;
   Serato sends none.
+  The key readout follows Serato's key shift. Serato sends the key text once
+  per load, but the control report it sends 64 times a second carries the key
+  (as an index into the 3000X's own key table) and the shift in semitones, and
+  the 3000X shows the key moved by the shift. The hook does the same: whenever
+  key or shift change it sends the shifted key as its Camelot code, a semitone
+  being 7 steps round the wheel (9A shifted +2 is 11A, shown as F#m). The
+  message has no room for the offset, so the deck shows the shifted key, not
+  "+2".
 - `x3000keepwave` (display firmware 1.81) stops the centre waveform going black
   every time Serato sends more of it. The display hides the strip from the first
   chunk of a detail update until the beat grid that follows it is in; the patch
@@ -181,7 +199,10 @@ deck.
 - Key: the routine runs on the interpreter against the keys in two recorded
   Serato sessions, and the firmware's own report framework and parser run on its
   output: every key Serato sent gives the key number of that Camelot code.
-  The key shows in the title bar on the emulator with Serato.
+  The key shows in the title bar on the emulator with Serato. The key shift
+  runs on the interpreter for every key and every shift from -12 to +12, and
+  the firmware's parser gives the shifted key's number; it has not yet been
+  seen on the emulator with a shift made in Serato.
 - Centre waveform: the two stores and what they do were read from the display
   firmware 1.81, and the strip stays drawn through an update on the emulator
   with Serato; whether loading a second track clears the first one's waveform
@@ -193,6 +214,14 @@ deck.
   to 7 counts off on a quiet host, and the catch-up jumps are 14 to 29 counts on
   a loaded one. The time readout and the minimap still hold for the length of an
   update.
+- Cues: the hot cue list of a recorded Serato load passes through unchanged,
+  and the firmware's own handler and converter, run on it, put its one hot
+  cue in slot B at 0:19.248 in orange. Memory cue and loop lists built by hand
+  (empty, memory cues, loops, ten records, more than ten, other kinds and
+  colours) come out in the NXS2 form, and the firmware's own handler and
+  converter make plain markers of the memory cues and flagged ones of the
+  rest. No recorded session had a memory cue or a loop, so which of kinds 2
+  and 3 is a loop, and how the flagged markers draw, is not yet seen.
 - Browse list: the routines run on the interpreter against a recorded Serato
   session scrolling a crate up to its top: every list shown ahead of Serato's
   answer is the page a model of Serato's paging predicts, and the HID OUT task

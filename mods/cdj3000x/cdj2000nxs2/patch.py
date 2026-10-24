@@ -193,6 +193,8 @@ SAVED_LENGTH = (0x081FDF98, FreeEnd(-0x2068))
 # fragment it expects next (0 once a list is complete).
 LIST_STAGE = (0x081FDFA0, FreeEnd(-0x2060))
 NEXT_FRAGMENT = (0x081FDF9C, FreeEnd(-0x2064))
+# The key and shift x3000key last sent from the control report (-1 after a 0x27).
+KEY_SHOWN = (0x081FEFDC, FreeEnd(-0x1024))
 # The local cursor (x3000browse with x3000rxview). x3000browse sets the first
 # word to 1 once it runs; until then x3000rxview takes lists as before. The
 # guard byte; the steps answered (written by x3000rxview) and counted
@@ -398,8 +400,8 @@ MODS = {
         after=('x3000rxview',),
         **HIDO_READ_DONE,
     ),
-    # Hands Serato's key of the loaded track to the report framework as the
-    # musical key message the deck already takes. Runs after x3000hs, which
+    # Hands Serato's key of the loaded track, with its key shift, to the report
+    # framework as the musical key message the deck already takes. Runs after x3000hs, which
     # hooks the same entry and answers the handshake first.
     'x3000key': Mod(
         what='track key from Serato as the musical key report',
@@ -407,7 +409,7 @@ MODS = {
         fw_versions=('1.87',),
         args=[],
         literal=False,
-        imports=(HS_AUTH, REPORT_FRAMEWORK),
+        imports=(HS_AUTH, REPORT_FRAMEWORK, RX_BUFFER, KEY_SHOWN),
         hook=True,
         after=('x3000hs',),
         **REPORT_ROUTER_ENTRY,
