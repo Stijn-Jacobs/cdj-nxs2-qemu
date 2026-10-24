@@ -605,6 +605,7 @@ only the mods made for it.
 | [`tcnet`](mods/tcnet/README.md) | A TCNet Master node, so ShowKontrol, Resolume and other TCNet receivers follow the deck. |
 | [`gate_cue`](mods/gate_cue/README.md) | Gate Cue, CDJ-3000 style: from pause, a hot cue pad plays only while held and letting go returns to the cue. |
 | [`beat_jump_long`](mods/beat_jump_long/README.md) | Long beat jumps, CDJ-3000 style: the 2 and 4 beat jump keys jump 32 and 64 beats. |
+| [`key_shift`](mods/key_shift/README.md) | Key shift, CDJ-3000 style: hold MASTER TEMPO and press pad A or B to move the key a semitone down or up, pad C to reset, while the tempo stays put. |
 | [`cdj3000x`](mods/cdj3000x/README.md) | Experimental. Serato DJ Pro sees the deck as a CDJ-3000X and shows its browse list, detail waveform, beat boxes and key on it. |
 
 **XDJ-700**

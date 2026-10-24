@@ -29,6 +29,9 @@ and reported while the others are applied; the section lengths and checksums
 are rewritten for what is written, and a checksum that did not match on the
 way in is no reason to refuse it.
 
+A player whose MAIN carries a DSP program as data can have mods that patch it
+(dsppatch.py); they are named like the others and ride in the MAIN section.
+
 Every mod here also has a --list entry in patch_gui.py or patch_main.py,
 since that is the tool that actually knows how to splice it into its image;
 this is the container-level wrapper around them. Only mods that patch real

@@ -14,7 +14,9 @@ Each track is rendered with ffmpeg's aevalsrc, to the sample:
   a 55 Hz kick on every beat,
   a 1.5 kHz click on every downbeat (beat 1 of a 4/4 bar),
   an 880 Hz tone on the first beat of every 8-bar phrase,
-  silence before the first downbeat.
+  silence before the first downbeat,
+  and, with "tone": Hz in the spec, a steady sine under all of it from the
+  first downbeat on, for measuring pitch.
 
 From there it is the same path ./setup.sh --tracks takes: collection_xml.py
 writes the collection.xml -- here with the exact <TEMPO>, Tonality and
@@ -30,15 +32,18 @@ Nothing in it is tied to one player.
 Without --spec it builds three tracks (100, 128 and 174 BPM, keys C, Am and
 Fm, memory and hot cues; --print-spec shows them). A spec is JSON:
 
-  {"device_name": "TESTSTICK", "playlist": "Test stick",
+  {"device_name": "TESTSTICK", "playlist": "Test stick", "bitrate": 320,
    "tracks": [{"title": "Grid 128 Am", "bpm": 128.0, "first_downbeat": 0.5,
                "bars": 96, "key": "Am",
-               "memory_cues": [[5, 2.5], 17], "hot_cues": [9, 49]}]}
+               "memory_cues": [[5, 2.5], 17], "hot_cues": [9, 49], "tone": 440}]}
 
 A cue is a bar (on its first beat) or [bar, beat] with a beat from 1 to
 less than 5, fractional allowed; bars and beats count from 1. Hot cues are
 A, B, ... in list order (at most 8). key is rekordbox's Tonality ("Am",
-"F#m", "Db", ...), shown by the player as it is.
+"F#m", "Db", ...), shown by the player as it is. bitrate is the MP3's
+constant rate in kbit/s (default 320; one of LAME's: 32, 40, 48, 56, 64, 80,
+96, 112, 128, 160, 192, 224, 256 or 320), and --bitrate overrides it. A
+lower rate makes a smaller stick: 128 takes 40% of the space of 320.
 
 Result: <out>/audio/ (the tracks), <out>/collection.xml, <out>/device/ (the
 export), <out>/summary.txt (every bar and cue position in seconds) and the
@@ -81,6 +86,7 @@ RATE = 44100
 BEATS_PER_BAR = 4
 PHRASE_BARS = 8
 HOT_CUES = "ABCDEFGH"
+MP3_BITRATES = (32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320)
 ARTIST = "make_test_stick"
 ALBUM = "Test stick"
 
@@ -136,17 +142,24 @@ def check_spec(spec):
         raise SpecError("a spec is an object with a non-empty list of tracks")
     out = {"device_name": str(spec.get("device_name", DEFAULT_SPEC["device_name"])),
            "playlist": str(spec.get("playlist", DEFAULT_SPEC["playlist"])), "tracks": []}
+    bitrate = spec.get("bitrate", MP3_BITRATES[-1])
+    if isinstance(bitrate, bool) or bitrate not in MP3_BITRATES:
+        raise SpecError("bitrate must be one of %s kbit/s, not %r" % (", ".join(map(str, MP3_BITRATES)), bitrate))
+    out["bitrate"] = bitrate
     for i, track in enumerate(spec["tracks"], start=1):
         if not isinstance(track, dict) or not isinstance(track.get("title"), str) or not track["title"].strip():
             raise SpecError("track %d has no title" % i)
         t = {"title": track["title"],
              "bpm": _number(track, "bpm", 40, 300),
              "first_downbeat": _number(track, "first_downbeat", 0),
-             "key": str(track.get("key", ""))}
+             "key": str(track.get("key", "")),
+             "bitrate": bitrate}
         bars = track.get("bars")
         if isinstance(bars, bool) or not isinstance(bars, int) or bars < 1:
             raise SpecError("%s: bars must be a whole number from 1 up, not %r" % (t["title"], bars))
         t["bars"] = bars
+        if "tone" in track:
+            t["tone"] = _number(track, "tone", 20, RATE / 2)
         for kind in ("memory_cues", "hot_cues"):
             entries = track.get(kind, [])
             if not isinstance(entries, list):
@@ -187,17 +200,20 @@ def audio_expr(track):
     click = "0.35*eq(mod(%s,%d),0)*sin(2*PI*1500*%s)*exp(-60*%s)" % (n, BEATS_PER_BAR, tau, tau)
     phrase = "0.3*eq(mod(%s,%d),0)*sin(2*PI*880*%s)*exp(-6*%s)" % (
         n, BEATS_PER_BAR * PHRASE_BARS, tau, tau)
-    return "gte(%s,0)*(%s+%s+%s)" % (t, kick, click, phrase)
+    parts = [kick, click, phrase]
+    if "tone" in track:
+        parts.append("0.2*sin(2*PI*%.6f*%s)" % (track["tone"], t))
+    return "gte(%s,0)*(%s)" % (t, "+".join(parts))
 
 
 def ffmpeg_argv(track, path, length=None):
-    """ffmpeg's command that renders a track: MP3 at 320 kbit/s, or 16-bit
+    """ffmpeg's command that renders a track: MP3 at the track's bitrate, or 16-bit
     WAV for a .wav path. The tags make it a sensible track for ./setup.sh
     --tracks too (title, and the BPM tag collection_xml.py reads)."""
     expr = audio_expr(track)
     length = track_length(track) if length is None else length
     codec = (["-c:a", "pcm_s16le"] if path.lower().endswith(".wav")
-             else ["-c:a", "libmp3lame", "-b:a", "320k"])
+             else ["-c:a", "libmp3lame", "-b:a", "%dk" % track.get("bitrate", MP3_BITRATES[-1])])
     meta = {"title": track["title"], "artist": ARTIST, "album": ALBUM, "TBPM": "%g" % track["bpm"]}
     if track.get("key"):
         meta["TKEY"] = track["key"]
@@ -241,7 +257,7 @@ def collection(spec, paths):
     for i, (track, path) in enumerate(zip(spec["tracks"], paths), start=1):
         tags = {"title": track["title"], "artist": ARTIST, "album": ALBUM, "genre": "Test",
                 "bpm": track["bpm"], "duration": int(track_length(track)),
-                "bitrate": 320 if path.lower().endswith(".mp3") else 1411, "sample_rate": RATE}
+                "bitrate": track["bitrate"] if path.lower().endswith(".mp3") else 1411, "sample_rate": RATE}
         entries.append(collection_xml.track_xml(
             i, path, tags, None, [], tempo=(track["bpm"], track["first_downbeat"]),
             key=track["key"], marks=marks(track)))
@@ -290,6 +306,7 @@ def main(argv=None):
     ap.add_argument("--spec", help="the tracks as JSON (default: the built-in three)")
     ap.add_argument("--out", help="working folder (default extract/teststick)")
     ap.add_argument("--image", help="the stick image to write (default extract/teststick.img)")
+    ap.add_argument("--bitrate", type=int, help="MP3 rate in kbit/s (default: the spec's, else 320)")
     ap.add_argument("--size-mb", type=int, help="image size (default: as ./setup.sh sizes a stick)")
     ap.add_argument("--baken", help="the baken binary (default: as ./setup.sh finds it)")
     ap.add_argument("--print-spec", action="store_true", help="print the built-in spec and stop")
@@ -306,6 +323,8 @@ def main(argv=None):
                 raw = json.load(f)
         else:
             raw = copy.deepcopy(DEFAULT_SPEC)
+        if args.bitrate is not None and isinstance(raw, dict):
+            raw["bitrate"] = args.bitrate
         spec = check_spec(raw)
     except (OSError, ValueError) as e:
         sys.stderr.write("spec: %s\n" % e)

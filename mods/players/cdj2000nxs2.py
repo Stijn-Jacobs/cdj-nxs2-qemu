@@ -21,6 +21,7 @@ own; no two mods may take the same bytes.
 SoC registers (0xFFD90018 TCNT4, 0xA4D90040 USB1 INTSTS0, 0xFFE7FFFF fpscr
 mask) are the chip's, not the firmware's, and stay in the routines.
 """
+from dsppatch import DspTable
 from sigpatch import Anchor, ImageProfile
 
 # MAIN runs in place from 0x08000000. The routines go into the largest run of
@@ -30,6 +31,17 @@ from sigpatch import Anchor, ImageProfile
 MAIN_PROFILE = ImageProfile(
     flash_base=0x08000000, loadtab_off=0, loadtab_n=0,
     ram_base=None, ram_end=None, byteorder='<')
+
+# The C6655's program, the boot table MAIN streams to the DSP's first stage at
+# boot (0x8DD54 bytes at 0x080034E0 on v1.87, entry 0x00800200 and the first
+# section's header). MAIN sends it as 35 windows of 16 KB and a last one of
+# 0x1D54 bytes, counts its own code holds as immediates, so the table cannot
+# grow. The cave is six PCM converters, 0x80065320-0x80065854, that no branch,
+# call, constant pair or data word anywhere in the program reaches.
+DSP_PROFILE = DspTable(
+    head=(0x00800200, 0x0000BFC0, 0x00802000, 0x07BE09C2, 0x0201416E, 0x04001E2A, 0x04105FEA, 0x04A0805A),
+    length=0x8DD54,
+    cave=(0x80065320, 0x80065854, '44fcd723a4018ecf920f45e2b17ba6e454f961da952e93b3880d2501729fc869'))
 
 GUI_PROFILE = ImageProfile(
     flash_base=0x30000, loadtab_off=0x10, loadtab_n=20,
@@ -85,6 +97,19 @@ PREVIEW_READ = dict(
     end=13,
 )
 
+# The pad pass's mode switch 0x08442D96, at its entry: the pushes of r8-r14
+# and pr. The pad pass 0x08443050 calls it on every Player pass, after the
+# queue of pad edges is built. The span has to take the pr push with it: the
+# trampoline returns through pr, so a push left after the span saves the
+# trampoline's way back instead of the caller's, and the switch's rts then
+# loops on itself.
+PAD_MODES = dict(
+    sig=[0x2F86, 0x2F96, 0x2FA6, 0x2FB6, 0x2FC6, 0x2FD6, 0x2FE6, 0x4F22, 0x4F12, 0xD60C,
+         0x6062, 0x8802, 0x892B, 0x8801, 0x895E],
+    start=0,
+    end=8,
+)
+
 # -- MAIN addresses imported by more than one mod -----------------------------
 
 # code
@@ -100,6 +125,12 @@ TAG_FETCH = (0x082545F8, Anchor(sig=[0x372C, 0x2F76, 0x7004, 0xD145, 0xD746, 0x6
 DEVICE = (0x0AB84CFA, Anchor(sig=[0x4D0B, 0x446A, 0x056A, 0xD453, 0x25B9, 0x456A], index=3, literal=True))       # the device record
 TICK = (0x0B0C5258, Anchor(sig=[0x2FD6, 0x4F22, 0x7FFC, 0xD18A, 0xEDCE, 0x4D18], index=3, literal=True))         # 1 ms tick word
 PLAYER_RECORDS = (0x0A371D3C, Anchor(sig=[0xE749, 0x016A, 0x4708, 0xD977, 0x07E7, 0x041A], index=3, literal=True))
+
+# The pad words of the deck's own panel in the Player key bank, one per slot
+# from slot 0 (source 0 of 0x0B056C90, at +0x24C), as the pad test 0x08442CDA
+# loads them.
+PADS = (0x0B056EDC, Anchor(sig=[0xD644, 0xE504, 0x7604, 0x6262, 0x2228, 0x8B07, 0x5261], index=0,
+                           literal=True))
 
 # data the firmware reaches only through a base a little before it
 OVERVIEW_SLOT = (0x0B569528, Anchor(sig=[0x056A, 0x61E2, 0x52E1, 0xE60E, 0xDE54, 0x4618], index=4, literal=True, delta=0x8))
