@@ -21,7 +21,7 @@ from helpers import stock_mods
 SIG_AT = 0x200
 SPAN = SIG_AT + 8               # 4-aligned, like the firmware's
 RESUME = SPAN + 18
-CAVE = (0x440, 0x4400)
+CAVE = (0x440, 0x5100)
 FRAME, HANDLE, HASH = 0xF000, 0x5150, 0x7A7A
 FETCH, MALLOC, FREE = 0x082545F8, 0x08344A9C, 0x08344B42
 SHARED, SHARED_LOW = 0x081FFFFC, 0xE000
