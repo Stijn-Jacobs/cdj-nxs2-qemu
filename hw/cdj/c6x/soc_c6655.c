@@ -496,6 +496,11 @@ uint64_t c6655_soc_next_irq_ns(const c6655_soc *s)
     return c6655_soc_next_event_ns(s);
 }
 
+uint64_t c6655_soc_edma_overruns(const c6655_soc *s)
+{
+    return s->edma.overruns;
+}
+
 void c6655_soc_advance(c6655_soc *s, uint64_t ns)
 {
     uint64_t target = s->now_ns + ns;

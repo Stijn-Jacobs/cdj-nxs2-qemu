@@ -639,6 +639,7 @@ static void cdj_c6x_start(uint32_t entry)
     c->windows_seen = 0;
     c->cycles = 0;
     c->cyc_rem = 0;
+    c->mhz_need = 0;
     c->halted = false;
     c->start_virt_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
     c->epoch_ns = c->start_virt_ns;
@@ -1345,7 +1346,8 @@ static void cdj_c6x_report(const char *why)
                 "%.1f M/host s), pc 0x%08x, stop %d, irqs %" PRIu64
                 " [INT4 %u INT5 %u INT6 %u INT7 %u INT8 %u INT9 %u], "
                 "slipped %.3f s, idle skips %" PRIu64 ", windows %u, "
-                "uPP queued %zu, INTC EVTFLAG stores %" PRIu64 ", booted %s",
+                "uPP queued %zu, INTC EVTFLAG stores %" PRIu64 ", booted %s, "
+                "EDMA3 dropped %" PRIu64,
                 why, run_s, c->cycles,
                 run_s > 0 ? c->cycles / run_s / 1e6 : 0,
                 c->host_ns ? c->cycles / (c->host_ns / 1e9) / 1e6 : 0,
@@ -1354,7 +1356,8 @@ static void cdj_c6x_report(const char *why)
                 st.irq_edges[7], st.irq_edges[8], st.irq_edges[9],
                 c->slipped_ns / 1e9, c->idle_skips, c->windows_seen,
                 c->soc ? c6655_soc_upp_queued(c->soc) : 0,
-                c->intc_flag_writes, c->booted_latch ? "yes" : "no");
+                c->intc_flag_writes, c->booted_latch ? "yes" : "no",
+                c->soc ? c6655_soc_edma_overruns(c->soc) : 0);
     if (c->prof) {
         static int64_t wall0, virt0;
         int64_t wall = get_clock_realtime();
@@ -1788,12 +1791,22 @@ static void cdj_c6x_tick(void *opaque)
  * for nearly a whole window and still falls behind, the clock drops to what the
  * host delivered; it climbs back a few percent per window once the thread has
  * slack. Only the clock changes: what the DSP computes does not.
+ *
+ * Below the cycles its interrupt work needs, the DSP does not run late, it
+ * drops work: the McBSP and its EDMA3 transfers keep real time, a completion
+ * that lands before the ISR has taken the previous one raises no interrupt,
+ * and that 16-sample audio block is never rendered. MASTER TEMPO at a 100 MHz
+ * clock took INT6 2200 times per virtual second instead of 44100 / 16 = 2756
+ * and played 0.8x. So a dropped completion raises the clock at once and the
+ * governor never goes below that clock again; a host too slow for it then
+ * shows as lateness, not as wrong pitch.
  */
 static void cdj_c6x_govern(CdjC6x *c)
 {
     const int64_t window_ns = 200 * SCALE_MS;
     int64_t wall = get_clock();
     uint64_t dsp_ns = c6655_soc_now_ns(c->soc);
+    uint64_t overruns = c6655_soc_edma_overruns(c->soc);
     int64_t dw = wall - c->gov.wall;
     uint64_t dv, busy, dc;
 
@@ -1802,6 +1815,7 @@ static void cdj_c6x_govern(CdjC6x *c)
         c->gov.dsp_ns = dsp_ns;
         c->gov.host_ns = c->host_ns;
         c->gov.cycles = c->cycles;
+        c->gov.overruns = overruns;
         return;
     }
     if (dw < window_ns) {
@@ -1810,9 +1824,16 @@ static void cdj_c6x_govern(CdjC6x *c)
     dv = dsp_ns - c->gov.dsp_ns;
     busy = c->host_ns - c->gov.host_ns;
     dc = c->cycles - c->gov.cycles;
-    if (busy * 10 >= dw * 9 && dv * 100 < dw * 97) {
+    if (overruns != c->gov.overruns && c->mhz < c->mhz_run) {
+        c->mhz_need = MIN(c->mhz + c->mhz / 8 + 1, c->mhz_run);
+        info_report("c6x: %" PRIu64 " EDMA3 completions dropped at %" PRIu64
+                    " MHz, clock now at least %" PRIu64 " MHz",
+                    overruns - c->gov.overruns, c->mhz, c->mhz_need);
+        c->mhz = c->mhz_need;
+        c->cyc_rem = 0;
+    } else if (busy * 10 >= dw * 9 && dv * 100 < dw * 97) {
         uint64_t host_mhz = dc * 1000 / busy;
-        uint64_t mhz = MAX(host_mhz * 97 / 100, c->mhz_floor);
+        uint64_t mhz = MAX(MAX(host_mhz * 97 / 100, c->mhz_floor), c->mhz_need);
 
         if (mhz < c->mhz) {
             c->mhz = mhz;
@@ -1826,6 +1847,7 @@ static void cdj_c6x_govern(CdjC6x *c)
     c->gov.dsp_ns = dsp_ns;
     c->gov.host_ns = c->host_ns;
     c->gov.cycles = c->cycles;
+    c->gov.overruns = overruns;
 }
 
 /*
@@ -2099,8 +2121,8 @@ static int cdj_c6x_post_load(void *opaque, int version_id)
 
 static const VMStateDescription vmstate_cdj_c6x = {
     .name = "cdj-c6x",
-    .version_id = 1,
-    .minimum_version_id = 1,
+    .version_id = 2,
+    .minimum_version_id = 2,
     .pre_save = cdj_c6x_pre_save,
     .post_save = cdj_c6x_post_save,
     .post_load = cdj_c6x_post_load,
@@ -2118,6 +2140,7 @@ static const VMStateDescription vmstate_cdj_c6x = {
         VMSTATE_INT32(booted_level, CdjC6x),
         VMSTATE_INT64(epoch_ns, CdjC6x),
         VMSTATE_UINT64(cyc_rem, CdjC6x),
+        VMSTATE_UINT64(mhz_need, CdjC6x),
         VMSTATE_INT64(start_virt_ns, CdjC6x),
         VMSTATE_INT32(pth0, CdjC6x),
         VMSTATE_BOOL(loaded, CdjC6x),

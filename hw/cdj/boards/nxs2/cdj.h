@@ -223,9 +223,10 @@ typedef struct CdjC6x {
     uint64_t mhz;
     uint64_t mhz_run;               /* CDJ_C6X_MHZ, taken up once stage 1 boots */
     uint64_t mhz_floor;             /* CDJ_C6X_GOVERN: lowest clock the governor picks, 0 = off */
+    uint64_t mhz_need;              /* lowest clock that has not dropped an EDMA3 completion */
     struct {
         int64_t wall;
-        uint64_t dsp_ns, host_ns, cycles;
+        uint64_t dsp_ns, host_ns, cycles, overruns;
     } gov;
     uint64_t max_catchup_ns;
     bool running;

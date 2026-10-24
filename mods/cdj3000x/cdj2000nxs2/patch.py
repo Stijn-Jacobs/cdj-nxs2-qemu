@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""cdj3000x on the CDJ-2000NXS2's MAIN 1.87: the USB identity of a CDJ-3000X.
+"""cdj3000x on the CDJ-2000NXS2's MAIN 1.87 and display 1.81: the USB identity
+of a CDJ-3000X, Serato's 3000X reports in the NXS2's form, and the display
+patches that keep Serato's detail waveform on screen.
 
 The device descriptor, its string descriptors and the function that stamps the
 firmware version into bcdDevice are data and code the USB function driver reads
@@ -259,6 +261,32 @@ GRID_ARMER = (0x08391F2E, Anchor(sig=[0xD4A5, 0xD5A6, 0x6040, 0x8802, 0x8B57, 0x
 REQUEST_FLAG = (0x0A35F404, Anchor(sig=[0x8801, 0x0229, 0xD663, 0xE015, 0x4018, 0x70D4, 0x000B, 0x0626],
                                    index=2, literal=True, delta=0x14D4))
 
+# The display's 0x37 (detail waveform) handler 0x0E502056, from its entry to
+# just before the chunk-1 count store. The renderer draws as many points as the
+# count at 0x0E5BC26C holds; this handler sets it to 0 on its first chunk and
+# again on its last, and only the beat grid's handler (type 0x2B) sets it again
+# once its last chunk is in. The points the renderer draws from are not written
+# by 0x37, so the old picture stays valid and only the count hides it, for the
+# whole of the publish. With Serato a publish comes every 4,500 points and on a
+# seek, so the strip goes black each time. Leaving the two stores out keeps the
+# old count until the beat grid brings the new one.
+#
+# The publish then stops the playhead instead: its link frames all carry the
+# position from before it went out, and the display drains them for 100 to
+# 120 ms. x3000trainpos moves the position on at the deck's own speed from the
+# display's clock for as long as the publish is on the link.
+DETAIL_HANDLER_ENTRY = bytes.fromhex('2fb62fc62fd62fe64f22dc6f32c19003602388018b0cd16d'
+                                     '6012d56d4008005e88018b01d66c2602e600')
+
+# The system time call the display's UI task makes to time each frame: it
+# fills a short and a u32 of milliseconds at +4 (called with r4 = the buffer).
+SYSTEM_TIME = (0x0E52E9FC, Anchor(sig=[0xDD26, 0xDC27, 0x4610, 0x2252, 0x1251, 0x8FFB, 0x7208, 0xE82B],
+                                  index=1, literal=True))
+# The beat tick handler (0x38) setting the tick enable to 1 and the tick count
+# next to it.
+TICK_ENABLE = (0x0E5BC274, Anchor(sig=[0x6C73, 0x7CFF, 0xE601, 0x37C6, 0xDD40, 0x2D62, 0xE100, 0x1D71],
+                                  index=4, literal=True))
+
 MODS = {
     'x3000ident': DataPatch(
         what='USB identity of a CDJ-3000X',
@@ -343,9 +371,8 @@ MODS = {
         hook=True,
         **HIDO_READ_DONE,
     ),
-    # Switched by its own row, cdj3000x_browse; it shares x3000rxview's words,
-    # so it is declared here. Runs after x3000in, which moves the encoder to
-    # where it reads it.
+    # Shares x3000rxview's words. Runs after x3000in, which moves the encoder
+    # to where it reads it.
     'x3000browse': Mod(
         what='browse list moved on the deck ahead of Serato\'s answer',
         target='main',
@@ -357,5 +384,59 @@ MODS = {
         hook=True,
         after=('x3000in',),
         **HID_IN_SEND,
+    ),
+    # Reads the control report once x3000rxview has put it in the NXS2 layout,
+    # and fills the beat segment fields a 3000X does not get.
+    'x3000segments': Mod(
+        what='beat segment fields of the control report from the beat grid',
+        target='main',
+        fw_versions=('1.87',),
+        args=[],
+        literal=False,
+        imports=(HIDO_BUFFER, HIDO_STATE, HS_AUTH, BEAT_GRID),
+        hook=True,
+        after=('x3000rxview',),
+        **HIDO_READ_DONE,
+    ),
+    # Hands Serato's key of the loaded track to the report framework as the
+    # musical key message the deck already takes. Runs after x3000hs, which
+    # hooks the same entry and answers the handshake first.
+    'x3000key': Mod(
+        what='track key from Serato as the musical key report',
+        target='main',
+        fw_versions=('1.87',),
+        args=[],
+        literal=False,
+        imports=(HS_AUTH, REPORT_FRAMEWORK),
+        hook=True,
+        after=('x3000hs',),
+        **REPORT_ROUTER_ENTRY,
+    ),
+    'x3000keepwave': DataPatch(
+        what='centre waveform kept on screen during a detail waveform publish',
+        target='gui',
+        fw_versions=('1.81',),
+        table=DETAIL_HANDLER_ENTRY,
+        before=0,
+        reach=0xA0,
+        edits=(Edit(bytes.fromhex('d16b21621162'), bytes.fromhex('d16b00091162')),    # mov.l r6,@r1, chunk 1
+               Edit(bytes.fromhex('d75327026503'), bytes.fromhex('d75300096503'))),   # mov.l r0,@r7, last chunk
+    ),
+    # The renderer's start: the position word 0xFFF88070 (1/150 s) is loaded
+    # into r4 with the zoom, and the address of the end clamp follows; the
+    # hook runs after those loads and may change r4 in the saved block. The
+    # name sorts after the other display routines, whose placement it would
+    # otherwise move (the registry is laid out in alphabetical order).
+    'x3000trainpos': Mod(
+        what='centre waveform kept moving while a detail waveform update is on the link',
+        target='gui',
+        fw_versions=('1.81',),
+        sig=[0x8B01, 0xA405, 0x0009, 0xD560, 0x3B51, 0x601C, 0xE205, 0x6452, 0xDE5F, 0x32B8, 0x66E2, 0x72FF, 0xEC01],
+        start=3,            # `mov.l @(96,pc),r5`, the first of the six replaced
+        end=9,              # up to `sub r11,r2`
+        args=[],
+        literal=False,
+        imports=(SYSTEM_TIME, TICK_ENABLE),
+        hook=True,
     ),
 }

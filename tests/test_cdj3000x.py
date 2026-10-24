@@ -302,10 +302,14 @@ def test_registered_for_main_as_two_table_patches_on_1_87():
 def test_the_mod_row_is_off_by_default_and_says_it_is_experimental():
     row = mod_row('cdj3000x')
     assert (row.env, row.on, row.off, row.default) == ('CDJ_MAIN_X3000IDENT+CDJ_MAIN_X3000BCD+CDJ_MAIN_X3000HS+CDJ_MAIN_X3000IN+CDJ_MAIN_X3000OUT'
-                                                         '+CDJ_MAIN_X3000RXBUF+CDJ_MAIN_X3000RXVIEW', '1', '0', 'off')
+                                                         '+CDJ_MAIN_X3000RXBUF+CDJ_MAIN_X3000RXVIEW+CDJ_MAIN_X3000SEGMENTS'
+                                                         '+CDJ_MAIN_X3000KEY+CDJ_MAIN_X3000BROWSE'
+                                                         '+CDJ_GUI_X3000KEEPWAVE+CDJ_GUI_X3000TRAINPOS', '1', '0', 'off')
     assert row.models == 'cdj2000nxs2'
     assert row.description.startswith('Experimental') and 'CDJ-3000X' in row.description
-    assert patch_update.conf_rows()['cdj3000x'] == BOTH + ['x3000hs', 'x3000in', 'x3000out', 'x3000rxbuf', 'x3000rxview']
+    assert patch_update.conf_rows()['cdj3000x'] == BOTH + ['x3000hs', 'x3000in', 'x3000out', 'x3000rxbuf', 'x3000rxview',
+                                                           'x3000segments', 'x3000key', 'x3000browse',
+                                                           'x3000keepwave', 'x3000trainpos']
 
 
 # -- the key comes from the person's own firmware -------------------------------------
