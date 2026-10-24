@@ -193,7 +193,8 @@ def rig_env(env, tag, ndecks, frames):
     export_default(env, "CDJ_C6X_QUANTUM_US", "4000" if str(ndecks) == "1" else "16000")
     # The start-up burst needs more DSP cycles per second than a slow host has, which
     # stalls the machine's clock and starves the audio sink. The DSP clock may fall to
-    # what the host delivers, down to this many MHz.
+    # what the host delivers, down to this many MHz, but never below a clock at which
+    # the DSP has dropped an audio interrupt.
     export_default(env, "CDJ_C6X_GOVERN", "100")
     # A new heartbeat supersedes the queued ones on the GUI side, so keys reach
     # the screen quickly. 16, not 2: a queue of 2 starves the GUI link.

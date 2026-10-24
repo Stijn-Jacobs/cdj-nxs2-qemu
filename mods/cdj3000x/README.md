@@ -2,33 +2,50 @@
 
 **Experimental.** Makes a
 CDJ-2000NXS2 present itself to Serato DJ Pro as a CDJ-3000X, so that Serato
-sends the richer data a 3000X gets: the windowed detail waveform, the 3-band
-waveforms and the 1200-column overview. It needs no CDJ-3000X firmware file:
-a stock 3000X v1.40 answers Serato's authentication under an all-zero key, and
-so does this mod (see the key, below).
+sends the richer data a 3000X gets: the browse list, the windowed detail
+waveform and the 1200-column overview. On top of that the deck works out what a
+3000X works out for itself, the beat boxes and the key, keeps Serato's detail
+waveform on screen and moving while more of it arrives, and moves the browse
+list ahead of Serato's answer. It needs no CDJ-3000X firmware file: a stock
+3000X v1.40 answers Serato's authentication under an all-zero key, and so does
+this mod (see the key, below).
+
+<img src="../../docs/img/mods/cdj3000x.png" alt="The deck in Serato DJ Pro as a CDJ-3000X, playing: the track title and key 4A, the beat boxes, Serato's detail waveform with beat grid ticks, the overview and 200.0 BPM" width="640">
+
+*Serato DJ Pro playing a track on the deck: title and key at the top, the beat
+boxes under them, Serato's detail waveform with the grid ticks in the centre,
+the overview and the BPM below.*
 
 | | |
 |---|---|
-| knobs | `CDJ_MAIN_X3000IDENT`, `CDJ_MAIN_X3000BCD`, `CDJ_MAIN_X3000HS`, `CDJ_MAIN_X3000IN`, `CDJ_MAIN_X3000OUT`, `CDJ_MAIN_X3000RXBUF`, `CDJ_MAIN_X3000RXVIEW` |
+| knobs | `CDJ_MAIN_X3000IDENT`, `CDJ_MAIN_X3000BCD`, `CDJ_MAIN_X3000HS`, `CDJ_MAIN_X3000IN`, `CDJ_MAIN_X3000OUT`, `CDJ_MAIN_X3000RXBUF`, `CDJ_MAIN_X3000RXVIEW`, `CDJ_MAIN_X3000SEGMENTS`, `CDJ_MAIN_X3000KEY`, `CDJ_MAIN_X3000BROWSE`, `CDJ_GUI_X3000KEEPWAVE`, `CDJ_GUI_X3000TRAINPOS` |
 | on / off | `1` / `0` |
 | default | off |
 | apply-time inputs | `CDJ_3000X_PID` (hex, default `004e`) |
+
+The one switch turns every knob on. Each knob can still be set on its own, for
+example `CDJ_GUI_X3000TRAINPOS=0` to leave out the moving waveform; the parts
+past the first seven need those seven on.
 
 **Status.** With the identity and the handshake on, Serato DJ Pro recognises
 the deck as a CDJ-3000X and connects to it: it no longer asks which deck to
 assign, and it streams the control, overview, beat grid, detail waveform, album
 art and library list reports. The deck shows the track's BPM and tempo, the
 overview, the beat grid, the detail waveform and the browse list; BACK and push
-to load work live. The three-band waveforms are not handled: Serato has not sent
-them so far. Tried live with Serato DJ Pro over USB/IP on the emulator, not on a
-real deck.
+to load work live. There are no three-band waveforms: Serato has no message that
+carries them, a 3000X takes them only from rekordbox. Tried live with Serato DJ
+Pro over USB/IP on the emulator, not on a real deck.
 
 | part | state |
 |---|---|
 | USB identity: product id, strings, bcdDevice | done, applied to the update and checked by the update validator |
 | Serato authentication | done. Serato authenticates the 3000X over the same HID handshake the NXS2 already runs, not a separate MIDI channel: it answers the deck's hello with a host-identity message (stage 0x30) and the deck replies with its own identity (stage 0x31). `x3000hs` sends that reply and marks the deck authenticated. No key is involved in this exchange. (A MIDI SysEx certificate path also exists in the 3000X firmware, but Serato does not use it for this.) |
 | 1024-byte HID Output report | done, live with Serato. Serato sends the detail waveform only to a deck whose report descriptor declares a 1024-byte Output report. `x3000out` declares it (the descriptor keeps its length); the endpoint stays at 64 bytes, so each report arrives as 16 packets of one transfer. `x3000rxbuf` has the HID OUT task read the whole transfer into a 1024-byte buffer of its own, and `x3000rxview` gives the stock handlers the first 64 bytes of each report in their own buffer, so they see what a 64-byte read gave them |
-| Report translation: the 3000X's larger reports into the NXS2's handlers | done for the library list, the control report, the overview, the beat grid and the detail waveform, live with Serato. The 3-band waveforms are not handled (Serato has not sent them so far) |
+| Report translation: the 3000X's larger reports into the NXS2's handlers | done for the library list, the control report, the overview, the beat grid and the detail waveform, live with Serato. The 3-band waveforms are not handled: the 3000X takes them only from rekordbox's HID mode, and Serato DJ Pro 4.0.9 has no message that carries them |
+| Beat boxes (`x3000segments`) | fill live on the emulator with Serato (the picture above); checked on the interpreter |
+| Key (`x3000key`) | shown live on the emulator with Serato (the picture above); checked on the interpreter |
+| Centre waveform kept on screen and moving (`x3000keepwave`, `x3000trainpos`) | the strip stays drawn through an update on the emulator with Serato; the moving position measured on a replay |
+| Browse list ahead of Serato (`x3000browse`) | checked on the interpreter and a replay; tried live on the emulator, unmeasured |
 
 **The key.** The authentication key is 128 bits and the same in every unit of a
 model, but the CDJ-3000X v1.40 package does not contain it: the file its loader
@@ -99,6 +116,47 @@ checked against what the 1.87 firmware holds before anything is written:
   (type 0x30), which the firmware would read as the deck's 8 hot cue slots, is
   dropped: the control report already carries the length.
 
+The rest are hooks that do what a 3000X does on its own, or that smooth over
+the way Serato streams:
+
+- `x3000segments` fills the beat boxes at the top of the screen. The NXS2 draws
+  them from four fields of the control report that a CDJ-3000X does not get,
+  because a 3000X works the beat out itself from the beat grid and the playing
+  position. The hook does the same: after `x3000rxview` has put the control
+  report in the NXS2 layout, it finds the beat the position is in with the grid
+  Serato sends and writes the length of the bar and the position in it into the
+  report before the firmware reads it. The second row of boxes and the phase
+  meter stay empty.
+- `x3000key` shows the key of the loaded track. Serato sends a 3000X the key as
+  its own message type, which the NXS2 ignores; the deck does take a key as the
+  musical key message of its report framework, so a hook on the entry of the
+  report router, after the handshake's, rewrites Serato's message into that one.
+  Serato writes the key as Camelot text ("1A", "11A") or an empty string. The
+  firmware's parser takes the Camelot numbers 1 to 9 and the note names, but not
+  10 to 12, so those six become the note names the same keys have on the
+  Camelot wheel (10A Bm, 10B D, 11A F#m, 11B A, 12A C#m, 12B E). Text that is
+  not ASCII leaves the key empty. The colour index of the message is left 0;
+  Serato sends none.
+- `x3000keepwave` (display firmware 1.81) stops the centre waveform going black
+  every time Serato sends more of it. The display hides the strip from the first
+  chunk of a detail update until the beat grid that follows it is in; the patch
+  leaves out the two stores that hide it, so the old picture stays until the new
+  one is complete.
+- `x3000trainpos` (display) keeps the centre waveform moving through an update.
+  While an update is on the link the display holds the waveform's position for
+  about 78 ms (around 4 renders); the hook moves the position on from the
+  display's own clock for as long as the update is on the link.
+- `x3000browse` moves the browse list as soon as the encoder turns. Serato
+  answers each step with a new page 38 to 64 ms later (median 51), so on its own
+  the list follows the encoder that much late. Serato sends 11 rows and the deck
+  shows eight, so the rows a step brings on screen are mostly rows the deck
+  already has: the hook, in the HID IN task after `x3000in`, predicts Serato's
+  next page from the last one and the step, shows it at once, and lets Serato's
+  answer correct it. A new top row on an upward step stays blank until the
+  answer fills it in. It shows at most one list every 30 ms and drops a step
+  Serato has not answered after 150 ms (at the top or the bottom of a crate
+  Serato sends nothing).
+
 The real 3000X's product id is one of `0x004E` to `0x0051` and is not in any
 firmware file; if you have read it off a deck, set `CDJ_3000X_PID`.
 
@@ -114,10 +172,38 @@ recognises the change as this patcher's. It runs on the emulator with Serato
 DJ Pro, which the owner has tried live. It has not been flashed to a real
 deck.
 
-Related mods, each off by default and for this identity only:
-[`cdj3000x_wave`](../cdj3000x_wave/README.md) keeps the centre waveform on
-screen, [`cdj3000x_browse`](../cdj3000x_browse/README.md) moves the browse list
-ahead of Serato, [`cdj3000x_beat`](../cdj3000x_beat/README.md) fills the beat
-boxes and [`cdj3000x_key`](../cdj3000x_key/README.md) shows the key.
+- Beat boxes: the routine runs on the interpreter against grids built by hand
+  and against the grids and positions of two recorded Serato sessions; the
+  segment it writes matches a model of the grid on every position tried and
+  cycles 1 to 4 with the beats. The boxes fill on the emulator with Serato;
+  whether they always fill the way the stock firmware's own segment code says
+  they should is not measured.
+- Key: the routine runs on the interpreter against the keys in two recorded
+  Serato sessions, and the firmware's own report framework and parser run on its
+  output: every key Serato sent gives the key number of that Camelot code.
+  The key shows in the title bar on the emulator with Serato.
+- Centre waveform: the two stores and what they do were read from the display
+  firmware 1.81, and the strip stays drawn through an update on the emulator
+  with Serato; whether loading a second track clears the first one's waveform
+  is not yet measured. The moving position was measured on a replay of a
+  captured Serato session, 3 runs per arm, host load 36 to 75 percent: around
+  the updates the longest run of renders without a position step is 1 to 2, the
+  same as in steady play (1 to 3), against about 4 renders per update without
+  the hook. The position never steps backwards. At the end of an update it is 3
+  to 7 counts off on a quiet host, and the catch-up jumps are 14 to 29 counts on
+  a loaded one. The time readout and the minimap still hold for the length of an
+  update.
+- Browse list: the routines run on the interpreter against a recorded Serato
+  session scrolling a crate up to its top: every list shown ahead of Serato's
+  answer is the page a model of Serato's paging predicts, and the HID OUT task
+  never waits on the HID IN task. Of the pages Serato sent in recorded sessions,
+  the prediction matched 39 of 50 exactly and 10 more but for the blank new top
+  row. In a replay of a captured session (1.8 s of scrolling) every list shown
+  matched the prediction; the only corrections were where Serato moved two rows
+  in one step and at the top of the crate. The owner has tried it live on the
+  emulator; no measurement of the live run is recorded.
+
+Each of them passes the update validator with it applied, and none has been
+tried on a real deck.
 
 Back to the [mods](../../README.md#mods).

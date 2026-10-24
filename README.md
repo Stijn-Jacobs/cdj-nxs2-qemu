@@ -605,11 +605,7 @@ only the mods made for it.
 | [`tcnet`](mods/tcnet/README.md) | A TCNet Master node, so ShowKontrol, Resolume and other TCNet receivers follow the deck. |
 | [`gate_cue`](mods/gate_cue/README.md) | Gate Cue, CDJ-3000 style: from pause, a hot cue pad plays only while held and letting go returns to the cue. |
 | [`beat_jump_long`](mods/beat_jump_long/README.md) | Long beat jumps, CDJ-3000 style: the 2 and 4 beat jump keys jump 32 and 64 beats. |
-| [`cdj3000x`](mods/cdj3000x/README.md) | Experimental. Presents the deck to Serato DJ Pro as a CDJ-3000X, so Serato shows its browse list and detail waveform on the deck. |
-| [`cdj3000x_wave`](mods/cdj3000x_wave/README.md) | Experimental, needs the CDJ-3000X identity. Keeps the centre waveform on screen, and optionally moving, while Serato sends more of it. |
-| [`cdj3000x_browse`](mods/cdj3000x_browse/README.md) | Experimental, needs the CDJ-3000X identity. Moves the Serato browse list as soon as the encoder turns. |
-| [`cdj3000x_beat`](mods/cdj3000x_beat/README.md) | Experimental, needs the CDJ-3000X identity. Fills the beat boxes from the beat grid Serato sends. |
-| [`cdj3000x_key`](mods/cdj3000x_key/README.md) | Experimental, needs the CDJ-3000X identity. Shows the key of the loaded track from Serato. |
+| [`cdj3000x`](mods/cdj3000x/README.md) | Experimental. Serato DJ Pro sees the deck as a CDJ-3000X and shows its browse list, detail waveform, beat boxes and key on it. |
 
 **XDJ-700**
 
