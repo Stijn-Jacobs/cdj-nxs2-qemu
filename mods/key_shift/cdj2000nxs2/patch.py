@@ -2,9 +2,9 @@
 """key_shift on the CDJ-2000NXS2's MAIN 1.87: a semitone shift of the deck's
 pitch that leaves its tempo alone, stepped with the pads while MASTER TEMPO
 is held, sent to the DSP in a field of the id-block that the stock program
-never reads, and cleared on every track load; and on the DSP program MAIN
-carries, the resampler in front of the MASTER TEMPO vocoder that turns it into
-a pitch shift (dsp_keyshiftdsp.s)."""
+never reads, cleared on every track load and shown in the title bar's key;
+and on the DSP program MAIN carries, the resampler in front of the MASTER
+TEMPO vocoder that turns it into a pitch shift (dsp_keyshiftdsp.s)."""
 from dsppatch import DspMod
 from players.cdj2000nxs2 import DSP_PROFILE, PAD_MODES, PADS
 from sigpatch import Anchor, FreeEnd, Mod
@@ -56,10 +56,26 @@ PAD_QUEUE = (0x0B056BB4, Anchor(sig=[0xD40C, 0x016A, 0x21E9, 0x6242, 0x2228, 0x8
 PAD_LAST = (0x10DE00F8, Anchor(sig=[0xD144, 0x6212, 0x2228, 0x8B03, 0xD54F, 0xD44E, 0xBEFB, 0x0009],
                                index=4, literal=True))
 
+# The display task's dispatch lock around its copy of the display model into
+# the screen message: 0x08404A38 disables dispatching and returns 1 when it
+# already was, 0x08404A5E(that) enables it again; as the task loads them.
+MODEL_LOCK = (0x08404A38, Anchor(sig=[0x8804, 0x8903, 0x8801, 0x8901, 0xA0B7, 0x0009, 0xD17A, 0xEC76],
+                                 index=6, literal=True))
+MODEL_UNLOCK = (0x08404A5E, Anchor(sig=[0x21C2, 0x6150, 0x056A, 0xDC6F, 0x611C, 0x361C, 0x25E9, 0x456A],
+                                   index=3, literal=True))
+
+# The key's text field in the display model: 0x132C past the title's, which
+# the task's flag clearing 0x0838F336 loads.
+KEY_FIELD = (0x0B540ED0, Anchor(sig=[0x604C, 0x8801, 0x8B54, 0xDB38, 0xEE02, 0xE704, 0xE113, 0x4E18],
+                                index=3, literal=True, delta=0x132C))
+
 # The shift, 0x100 | (n & 0xFF) for n semitones; and the pads A..C that were
 # down on the pass before, in bits 0-2.
 SHIFT = (0x081FFFEC, FreeEnd(-20))
 PADS_DOWN = (0x081FFFE8, FreeEnd(-24))
+# The track's own key and the text the readout last wrote, each a length and
+# its UTF-16 units; below cdj3000x's words, which reach down to -0x4AE0.
+KEY_TEXT = (0x081FB500, FreeEnd(-0x4B00))
 
 # The DSP code goes at the start of the program's cave; its first six
 # branches are the entries of ks_mt, ks_hop_a, ks_hop_b, ks_pull, ks_append
@@ -131,6 +147,17 @@ MODS = {
         imports=(SHIFT,),
         hook=True,
         **AUDIO_REQUEST,
+    ),
+    'keyshiftkey': Mod(
+        what='key shift: the title bar shows the shifted key',
+        target='main',
+        fw_versions=('1.87',),
+        args=[],
+        literal=False,
+        imports=(KEY_FIELD, KEY_TEXT, SHIFT, MODEL_LOCK, MODEL_UNLOCK),
+        hook=True,
+        after=('keyshiftpad',),
+        **PAD_MODES,
     ),
     'keyshiftdsp': DspMod(
         what='key shift: the DSP program resamples into MASTER TEMPO',

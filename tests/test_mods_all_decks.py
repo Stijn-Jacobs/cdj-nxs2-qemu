@@ -187,11 +187,11 @@ MAIN_ALL = ["wave3data", "wave3detail", "wave3ovdata", "wave3ovfetch", "phrasefe
 # its image, bigger.
 PINNED = [
     ("main_unpacked.bin", patch_main, MAIN_ALL,
-     "504c55a5b9992fc1037c279face297c07b769a57a2477146422d228650b31131"),
+     "45bf5309a7da90f43a61c291beadd5c40311c669bfd5c2a6cbfeff31614a8e2c"),
     ("main_unpacked.bin", patch_main, ["osc", "oscbeat"],
-     "f3e7fdf4fcba027eb0b7ef2afb171593219ea52bbe3e8f004cf7e6f22d0834d6"),
+     "71078bb5b79e2c18735bc919584fa97c9c32aece2f48fa39b15fa97b1736972e"),
     ("main_unpacked.bin", patch_main, ["gatecue", "gatecuepress"],
-     "19b20c79e4dbd27cf6f2c4ccb37c87c98a25e95241828c12f4d57bd10bef939d"),
+     "2a81b3f55e19b0778fe869a3353cff113e17a612b9be62da0f3de7f18630dbba"),
     ("main_unpacked.bin", patch_main, ["beatjumplong"],
      "c44fe3b05df50cdbacbaebc7778adbe624609e0d29cfbddd1fc2ee12359fed63"),
     ("gui_unpacked.bin", patch_gui, ["wave3", "wave3ov", "phrase"],
