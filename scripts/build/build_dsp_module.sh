@@ -189,6 +189,10 @@ if [ "$REUSE" = 1 ] && [ -s "$PROF/profile.txt" ]; then
     echo "using the profile already in $WORK"
 else
     stage "2/4 profiling one deck with no module ($PLAY_S s of play; slower than real time)"
+    # Decks left running starve the profiled one until it misses its load.
+    stale="$(pgrep qemu-system 2>/dev/null | wc -l | tr -d ' ')"
+    [ "$DRY" = 1 ] || [ "${stale:-0}" = 0 ] ||
+        die "$stale QEMU process(es) still running: ./start.sh stop, or pkill -9 -f qemu-system, then run this again"
     [ "$DRY" = 1 ] || { rm -rf "$PROF" && mkdir -p "$PROF"; }
     play prof "$PROF" -- MODULE=none AUTOJIT=0 PLAY_S="$PLAY_S" C66X_JIT_PROFILE="$(native "$PROF")"
 fi
