@@ -1,8 +1,8 @@
-diff --git a/include/sysemu/cpu-timers.h b/include/sysemu/cpu-timers.h
-index 7bfa960..f6423f8 100644
---- a/include/sysemu/cpu-timers.h
-+++ b/include/sysemu/cpu-timers.h
-@@ -98,6 +98,10 @@ void qemu_timer_notify_cb(void *opaque, QEMUClockType type);
+diff --git a/include/system/cpu-timers.h b/include/system/cpu-timers.h
+index a1abed0..be96bcb 100644
+--- a/include/system/cpu-timers.h
++++ b/include/system/cpu-timers.h
+@@ -40,6 +40,10 @@ void qemu_timer_notify_cb(void *opaque, QEMUClockType type);
  
  /* get/set VIRTUAL clock and VM elapsed ticks via the cpus accel interface */
  int64_t cpus_get_virtual_clock(void);

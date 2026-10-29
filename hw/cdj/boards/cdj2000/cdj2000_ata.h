@@ -37,8 +37,8 @@
 #ifndef CDJ2000_ATA_H
 #define CDJ2000_ATA_H
 
-#include "exec/memory.h"
-#include "hw/irq.h"
+#include "system/memory.h"
+#include "hw/core/irq.h"
 
 #define CDJ_ATA_BASE        0xfff00000
 #define CDJ_ATA_SIZE        0x40

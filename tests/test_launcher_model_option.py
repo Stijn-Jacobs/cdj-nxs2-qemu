@@ -385,8 +385,8 @@ def test_start_app_builds_the_older_decks_app_command(tmp_path, monkeypatch):
     assert app_cmd[app_cmd.index("--state-port") + 1] == env["CDJ_PANEL_STATESOCK"] == "40024"
 
 
-@pytest.mark.parametrize("mid,face", [("cdj2000nxs2", None)])
-def test_the_rig_app_draws_the_players_own_face_when_it_has_one(tmp_path, monkeypatch, mid, face):
+def _rig_tree(tmp_path, monkeypatch, mid):
+    """A configured rig with its firmware and stick, for start.main to start."""
     (tmp_path / "extract").mkdir()
     images = tmp_path / model.load(mid).extract
     images.mkdir(parents=True, exist_ok=True)
@@ -401,8 +401,50 @@ def test_the_rig_app_draws_the_players_own_face_when_it_has_one(tmp_path, monkey
     monkeypatch.setattr(start, "_offer_rebuild", lambda *a: True)
     monkeypatch.setattr(start, "_app_python", lambda lay, c: ["py"])
     monkeypatch.setattr(start.host, "pick_port_block", lambda want, n: want)
+
+
+@pytest.mark.parametrize("mid,face", [("cdj2000nxs2", None)])
+def test_the_rig_app_draws_the_players_own_face_when_it_has_one(tmp_path, monkeypatch, mid, face):
+    _rig_tree(tmp_path, monkeypatch, mid)
     got = []
-    monkeypatch.setattr(start, "run", lambda lay, env, launch, bridge, app_cmd: got.append(app_cmd) or 0)
+    monkeypatch.setattr(start, "run", lambda lay, env, launch, bridge, app_cmd, *web: got.append(app_cmd) or 0)
     assert start.main(["--model", mid, "--app"]) == 0
     app_cmd = got[0]
     assert (app_cmd[app_cmd.index("--model") + 1] if "--model" in app_cmd else None) == face
+
+
+def _start_web(tmp_path, monkeypatch, argv):
+    _rig_tree(tmp_path, monkeypatch, "cdj2000nxs2")
+    monkeypatch.setattr(start, "_app_python", lambda lay, c, web=False: ["py"])
+    monkeypatch.setattr(start.host, "pick_tcp_port", lambda want: want)
+    got = []
+    monkeypatch.setattr(start, "run", lambda lay, env, launch, bridge, app_cmd, web_cmd=():
+                        got.append((env, app_cmd, web_cmd)) or 0)
+    code = start.main(argv)
+    return code, got[0] if got else None
+
+
+def test_web_serves_the_deck_on_loopback_from_the_app_s_screens(tmp_path, monkeypatch, capsys):
+    code, (env, app_cmd, web_cmd) = _start_web(tmp_path, monkeypatch, ["--web"])
+    assert code == 0 and app_cmd == []
+    assert env["GUI_DISPLAY"] == "vnc" and "CDJ_WEB_TOKEN" not in env
+    assert web_cmd[web_cmd.index("--bind") + 1] == "127.0.0.1"
+    assert web_cmd[web_cmd.index("--port") + 1] == str(start.WEB_PORT)
+    assert web_cmd[web_cmd.index("--frame-dir") + 1] == env["CDJ_APP_FRAME_DIR"]
+    assert web_cmd[web_cmd.index("--vnc-base") + 1] == env["CDJ_APP_VNC_BASE"]
+    assert "deck in the browser: http://127.0.0.1:%d/\n" % start.WEB_PORT in capsys.readouterr().out
+
+
+def test_web_lan_binds_the_lan_address_with_a_key_in_the_url(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(start.host, "lan_address", lambda: "192.168.1.20")
+    code, (env, app_cmd, web_cmd) = _start_web(tmp_path, monkeypatch, ["--app", "--web", "lan"])
+    assert code == 0 and app_cmd
+    assert web_cmd[web_cmd.index("--bind") + 1] == "192.168.1.20"
+    token = env["CDJ_WEB_TOKEN"]
+    assert len(token) >= 16 and token not in " ".join(web_cmd)
+    assert "http://192.168.1.20:%d/?k=%s" % (start.WEB_PORT, token) in capsys.readouterr().out
+
+
+def test_web_lan_refuses_an_address_that_is_not_private(tmp_path, monkeypatch):
+    monkeypatch.setattr(start.host, "lan_address", lambda: "8.8.8.8")
+    assert _start_web(tmp_path, monkeypatch, ["--web", "lan"]) == (1, None)

@@ -124,6 +124,17 @@ in a connected MIDI port's name, and falls back to the DJ-202.
 
 ## Running it
 
+Plug the controller in before `./setup.sh`. Setup recognises a controller it
+has a profile for (or offers to learn a new one) and saves your choice, and from
+then on `./start.sh` starts the bridge together with the decks. With two decks
+the controller's left side plays deck 1 and its right side deck 2. The bridge's
+own output is in `logs/bridge.log`. On Windows it runs on a normal Windows
+Python (python.org or the Microsoft Store) with `mido` and `python-rtmidi`
+installed, because MSYS2's Python cannot open MIDI devices; setup finds it and
+prints the one `pip` command it needs if the packages are missing. On macOS the
+packages go into the checkout's `.venv/` (setup prints that command too), and the
+bridge reaches the controller through Core MIDI.
+
 ```
 ./start.sh                                        # decks + relay (+ the bridge, if configured)
 
@@ -285,7 +296,7 @@ recorded state log through the LED rules offline.
 
 Everything above drives the deck from a controller. The deck also has a USB-B
 port on its back, and the emulated one enumerates as a USB-MIDI device: the
-`usbmidi` mod sends Start / Stop / Continue and Timing Clocks out of it, and
+`usb_midi` mod sends Start / Stop / Continue and Timing Clocks out of it, and
 software can send MIDI in. `scripts/net/usb_midi_port.py` is the computer on
 the other end of that cable. It receives the port's traffic over UDP on
 localhost (27020 for deck 1, 27021 for deck 2) and shows it as a MIDI port:

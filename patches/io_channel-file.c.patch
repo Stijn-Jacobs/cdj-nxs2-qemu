@@ -1,0 +1,19 @@
+diff --git a/io/channel-file.c b/io/channel-file.c
+index 5cef75a6..c7ee2f84 100644
+--- a/io/channel-file.c
++++ b/io/channel-file.c
+@@ -217,7 +217,13 @@ static int qio_channel_file_set_blocking(QIOChannel *ioc,
+                                          Error **errp)
+ {
+ #ifdef WIN32
+-    /* not implemented */
++    /*
++     * A Windows file handle always blocks, so asking for that succeeds;
++     * migration to a file fails outright when it does not.
++     */
++    if (enabled) {
++        return 0;
++    }
+     error_setg_errno(errp, errno, "Failed to set FD nonblocking");
+     return -1;
+ #else

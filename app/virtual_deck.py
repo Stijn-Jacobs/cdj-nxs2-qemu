@@ -11,7 +11,7 @@ up yet: the window shows them as they arrive.
 
 Keys typed into the window go to the deck under the mouse (the last one it
 was over), through the same key map as the QEMU window: Space play/pause,
-arrows browse, Enter load, - = nudge ... (emulator/README.md, "Keyboard").
+arrows browse, Enter load, - = nudge ... (docs/using-the-deck.md, "Keyboard").
 
 The window is pygame's (SDL's). It is laid out in points, as the desktop
 measures windows, and drawn in the display's own pixels -- two a point on a

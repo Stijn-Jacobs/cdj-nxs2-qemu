@@ -1,5 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "cdj_pnl_link.h"
+#ifdef __EMSCRIPTEN__
+#include "cdj_web.h"
+#endif
 #include "cdj_getenv.h"
 #include "cdj_panelkeys.h"
 #include "qemu/timer.h"
@@ -136,8 +139,90 @@ static void cdj_pnl_link_parse_presses(CdjPnlLinkState *s)
     }
 }
 
-/* Live presses from the key socket (cdj_panelkeys.h), drained once per
- * frame. */
+/* One live key line: "off:val:dur:op", or a board's own message. */
+static void cdj_pnl_link_key(CdjPnlLinkState *s, const char *msg, int64_t now)
+{
+    char op[16] = "or";
+    unsigned off, dur;
+    int val;
+
+    if (s->hooks && s->hooks->drain_extra
+        && s->hooks->drain_extra(s, s->extra, msg, now)) {
+        return;
+    }
+    if (sscanf(msg, "%i:%i:%u:%15s", &off, &val, &dur, op) < 3) {
+        warn_report("panel: bad live key '%s'", msg);
+        return;
+    }
+    if (off >= s->payload_len) {
+        warn_report("panel: live key offset 0x%x is outside the report", off);
+        return;
+    }
+    info_report("panel: live key '%s' at %" PRId64 " ms", msg, now);
+    if (!strcmp(op, "rot")) {
+        /* The select knob is a counter the firmware diffs between
+         * frames, so it persists. Moving it to a new offset restarts it. */
+        if (s->rot_off != off) {
+            s->rot_off = off;
+            s->rot_val = 0;
+            s->rot_live = true;
+            info_report("panel: rotary now on report[0x%02x]", off);
+        }
+        s->rot_val = (uint8_t)(s->rot_val + val);
+        info_report("panel: rotary %+d -> report[0x%02x] = 0x%02x",
+                    val, off, s->rot_val);
+        return;
+    }
+    if (!strcmp(op, "lvl")) {
+        /* Analogue field: an absolute byte value held until changed. */
+        s->lvl_val[off] = (uint8_t)val;
+        if (!s->lvl_live[off]) {
+            s->lvl_live[off] = true;
+            info_report("panel: report[0x%02x] is now an analogue field",
+                        off);
+        }
+        return;
+    }
+    /*
+     * Held keys (CUE held, search scrub):
+     *   op "hold"  press and keep it down (dur_ms ignored)
+     *   op "rel"   release it
+     */
+    if (!strcmp(op, "rel")) {
+        unsigned j;
+
+        for (j = 0; j < s->npress; j++) {
+            CdjPnlLinkPress *p = &s->press[j];
+
+            if (p->held && p->off == off && p->mask == (uint8_t)val) {
+                p->held = false;
+                /* At least 25 ms, so a tap shorter than a panel frame
+                 * is still seen. */
+                p->dur_ms = MAX(now - p->at_ms, 25);
+                info_report("panel: report[0x%02x] &= ~0x%02x at %" PRId64
+                            " ms (held %" PRId64 " ms)",
+                            p->off, p->mask, now, p->dur_ms);
+            }
+        }
+        if (s->hooks && s->hooks->key_up) {
+            s->hooks->key_up(s, s->extra, off, (unsigned)val, now);
+        }
+        return;
+    }
+    if (s->hooks && s->hooks->key_down) {
+        s->hooks->key_down(s, s->extra, off, (unsigned)val, dur,
+                           !strcmp(op, "hold"), now);
+    }
+    s->press = g_renew(CdjPnlLinkPress, s->press, s->npress + 1);
+    s->press[s->npress++] = (CdjPnlLinkPress) {
+        .off = off, .mask = (uint8_t)val, .at_ms = now,
+        .dur_ms = dur ? dur : 120,
+        .held = !strcmp(op, "hold"),
+    };
+}
+
+/* Live presses from the key socket (cdj_panelkeys.h), or in a browser from the
+ * page's key ring, drained once per frame. */
 static void cdj_pnl_link_drain_keys(CdjPnlLinkState *s, int64_t now)
 {
     char msg[64];
@@ -158,88 +243,17 @@ static void cdj_pnl_link_drain_keys(CdjPnlLinkState *s, int64_t now)
                         cdj_panelsock_port(getenv(CDJ_PANELKEY_ENV)));
         }
     }
+#ifdef __EMSCRIPTEN__
+    while (cdj_web_panel_line(msg, sizeof(msg))) {
+        cdj_pnl_link_key(s, msg, now);
+    }
+#endif
     if (s->keyfd < 0) {
         return;
     }
     while ((n = recv(s->keyfd, msg, sizeof(msg) - 1, 0)) > 0) {
-        char op[16] = "or";
-        unsigned off, dur;
-        int val;
-
         msg[n] = '\0';
-        if (s->hooks && s->hooks->drain_extra
-            && s->hooks->drain_extra(s, s->extra, msg, now)) {
-            continue;
-        }
-        if (sscanf(msg, "%i:%i:%u:%15s", &off, &val, &dur, op) < 3) {
-            warn_report("panel: bad live key '%s'", msg);
-            continue;
-        }
-        if (off >= s->payload_len) {
-            warn_report("panel: live key offset 0x%x is outside the report", off);
-            continue;
-        }
-        info_report("panel: live key '%s' at %" PRId64 " ms", msg, now);
-        if (!strcmp(op, "rot")) {
-            /* The select knob is a counter the firmware diffs between
-             * frames, so it persists. Moving it to a new offset restarts it. */
-            if (s->rot_off != off) {
-                s->rot_off = off;
-                s->rot_val = 0;
-                s->rot_live = true;
-                info_report("panel: rotary now on report[0x%02x]", off);
-            }
-            s->rot_val = (uint8_t)(s->rot_val + val);
-            info_report("panel: rotary %+d -> report[0x%02x] = 0x%02x",
-                        val, off, s->rot_val);
-            continue;
-        }
-        if (!strcmp(op, "lvl")) {
-            /* Analogue field: an absolute byte value held until changed. */
-            s->lvl_val[off] = (uint8_t)val;
-            if (!s->lvl_live[off]) {
-                s->lvl_live[off] = true;
-                info_report("panel: report[0x%02x] is now an analogue field",
-                            off);
-            }
-            continue;
-        }
-        /*
-         * Held keys (CUE held, search scrub):
-         *   op "hold"  press and keep it down (dur_ms ignored)
-         *   op "rel"   release it
-         */
-        if (!strcmp(op, "rel")) {
-            unsigned j;
-
-            for (j = 0; j < s->npress; j++) {
-                CdjPnlLinkPress *p = &s->press[j];
-
-                if (p->held && p->off == off && p->mask == (uint8_t)val) {
-                    p->held = false;
-                    /* At least 25 ms, so a tap shorter than a panel frame
-                     * is still seen. */
-                    p->dur_ms = MAX(now - p->at_ms, 25);
-                    info_report("panel: report[0x%02x] &= ~0x%02x at %" PRId64
-                                " ms (held %" PRId64 " ms)",
-                                p->off, p->mask, now, p->dur_ms);
-                }
-            }
-            if (s->hooks && s->hooks->key_up) {
-                s->hooks->key_up(s, s->extra, off, (unsigned)val, now);
-            }
-            continue;
-        }
-        if (s->hooks && s->hooks->key_down) {
-            s->hooks->key_down(s, s->extra, off, (unsigned)val, dur,
-                               !strcmp(op, "hold"), now);
-        }
-        s->press = g_renew(CdjPnlLinkPress, s->press, s->npress + 1);
-        s->press[s->npress++] = (CdjPnlLinkPress) {
-            .off = off, .mask = (uint8_t)val, .at_ms = now,
-            .dur_ms = dur ? dur : 120,
-            .held = !strcmp(op, "hold"),
-        };
+        cdj_pnl_link_key(s, msg, now);
     }
 }
 

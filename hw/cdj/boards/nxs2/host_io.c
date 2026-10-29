@@ -1,6 +1,9 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "cdj.h"
 #include "cdj_getenv.h"
+#ifdef __EMSCRIPTEN__
+#include "cdj_web.h"
+#endif
 /*
  * Deck state out, so a DJ controller can light its LEDs from the deck.
  * Datagrams go to the socket the MIDI relay binds; with no relay the sends
@@ -75,7 +78,7 @@ static uint32_t cdj_stateout_le(uint32_t addr)
 {
     uint32_t v = 0;
 
-    cpu_physical_memory_read(A7ADDR(addr), &v, 4);
+    physical_memory_read(A7ADDR(addr), &v, 4);
     return le32_to_cpu(v);
 }
 
@@ -102,6 +105,9 @@ void cdj_stateout_panel(const uint8_t *frame)
     char msg[4 + 2 * CDJ_STATEOUT_PNL_FRAME + 1] = "pnl ";
     unsigned k;
 
+#ifdef __EMSCRIPTEN__
+    cdj_web_state_frame(frame, CDJ_STATEOUT_PNL_FRAME);
+#endif
     for (k = 0; k < CDJ_STATEOUT_PNL_FRAME; k++) {
         snprintf(msg + 4 + 2 * k, 3, "%02x", frame[k]);
     }

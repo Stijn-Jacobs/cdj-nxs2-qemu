@@ -1,19 +1,23 @@
 diff --git a/target/sh4/translate.c b/target/sh4/translate.c
-index 53b0921..beb4787 100644
+index c15c080..104a8a8 100644
 --- a/target/sh4/translate.c
 +++ b/target/sh4/translate.c
-@@ -26,6 +26,7 @@
- #include "exec/translator.h"
+@@ -27,6 +27,11 @@
+ #include "exec/target_page.h"
  #include "exec/log.h"
  #include "qemu/qemu-print.h"
 +#include "qemu/cutils.h"
++#include "accel/tcg/cpu-mmu-index.h"
++#include "accel/tcg/probe.h"
++#include "exec/tlb-flags.h"
++#include "system/ramblock.h"
  
  #define HELPER_H "helper.h"
  #include "exec/helper-info.c.inc"
-@@ -46,6 +47,19 @@ typedef struct DisasContext {
-     uint16_t opcode;
- 
-     bool has_movcal;
+@@ -50,6 +55,19 @@ typedef struct DisasContext {
+ #ifdef CONFIG_USER_ONLY
+     bool in_gusa_exclusive;
+ #endif
 +
 +    /*
 +     * TB-exit work, see cdj_tb_knob(). cdj_jkind names the
@@ -30,7 +34,7 @@ index 53b0921..beb4787 100644
  } DisasContext;
  
  #if defined(CONFIG_USER_ONLY)
-@@ -60,6 +74,8 @@ typedef struct DisasContext {
+@@ -64,6 +82,8 @@ typedef struct DisasContext {
  /* We want to exit back to the cpu loop for some reason.
     Usually this is to recognize interrupts immediately.  */
  #define DISAS_STOP    DISAS_TARGET_0
@@ -39,7 +43,7 @@ index 53b0921..beb4787 100644
  
  /* global register indexes */
  static TCGv cpu_gregs[32];
-@@ -195,10 +211,21 @@ static void gen_read_sr(TCGv dst)
+@@ -199,10 +219,21 @@ static void gen_read_sr(TCGv dst)
      tcg_gen_or_i32(dst, cpu_sr, t0);
  }
  
@@ -62,7 +66,7 @@ index 53b0921..beb4787 100644
      tcg_gen_extract_i32(cpu_sr_q, src, SR_Q, 1);
      tcg_gen_extract_i32(cpu_sr_m, src, SR_M, 1);
      tcg_gen_extract_i32(cpu_sr_t, src, SR_T, 1);
-@@ -217,16 +244,232 @@ static inline void gen_save_cpu_state(DisasContext *ctx, bool save_pc)
+@@ -221,6 +252,211 @@ static inline void gen_save_cpu_state(DisasContext *ctx, bool save_pc)
      }
  }
  
@@ -133,7 +137,9 @@ index 53b0921..beb4787 100644
 + *                  instruction alone, the rest), so the guest meets the same
 + *                  interrupt check points and the same icount charge, and the
 + *                  I/O instruction runs with can_do_io set; only the rewind
-+ *                  is gone. SH-4 only; never splits a branch from its slot.
++ *                  is gone. Never splits a branch from its slot. SH-2A's
++ *                  32-bit instructions are split too: the display sets DMAC
++ *                  CHCR.DE with bset.b @(disp12,Rn).
 + *
 + * Called once per cpu_io_recompile() from the io_recompile_replay_branch hook
 + * (cpu.c), after that hook has moved env->pc back to a delay slot's branch.
@@ -203,8 +209,7 @@ index 53b0921..beb4787 100644
 +void cdj_io_recompiled(CPUSH4State *env)
 +{
 +    bool prof = cdj_tb_knob("CDJ_IOPROF", &cdj_knob_ioprof);
-+    bool split = cdj_tb_knob("CDJ_IOSPLIT", &cdj_knob_iosplit)
-+                 && !(env->features & SH_FEATURE_SH2A);
++    bool split = cdj_tb_knob("CDJ_IOSPLIT", &cdj_knob_iosplit);
 +    CdjIoSite *s;
 +
 +    if (likely(!prof && !split)) {
@@ -219,14 +224,19 @@ index 53b0921..beb4787 100644
 +        cdj_io_print();
 +    }
 +    if (split && s && !s->split) {
-+        tb_page_addr_t phys = get_page_addr_code(env, env->pc);
++        CPUState *cs = env_cpu(env);
++        void *host;
++        int flags = probe_access_flags(env, env->pc, 2, MMU_INST_FETCH,
++                                       cpu_mmu_index(cs, true), true, &host, 0);
 +
 +        s->split = true;
 +        cdj_io_nsplit++;
-+        if (phys != -1) {
++        if (!(flags & TLB_INVALID_MASK) && host) {
++            ram_addr_t phys = qemu_ram_addr_from_host(host);
++
 +            /* Includes the TB being rewound; cpu_io_recompile() never returns
 +             * into it, so that is safe. */
-+            tb_invalidate_phys_range(phys, phys + 1);
++            tb_invalidate_phys_range(cs, phys, phys + 1);
 +        }
 +    }
 +}
@@ -267,7 +277,9 @@ index 53b0921..beb4787 100644
 +
  static inline bool use_exit_tb(DisasContext *ctx)
  {
-     return (ctx->tbflags & TB_FLAG_GUSA_EXCLUSIVE) != 0;
+ #ifdef CONFIG_USER_ONLY
+@@ -230,11 +466,28 @@ static inline bool use_exit_tb(DisasContext *ctx)
+ #endif
  }
  
 +/*
@@ -284,7 +296,7 @@ index 53b0921..beb4787 100644
 +    return DISAS_STOP;
 +}
 +
- static bool use_goto_tb(DisasContext *ctx, target_ulong dest)
+ static bool use_goto_tb(DisasContext *ctx, vaddr dest)
  {
      if (use_exit_tb(ctx)) {
          return false;
@@ -295,7 +307,7 @@ index 53b0921..beb4787 100644
      return translator_use_goto_tb(&ctx->base, dest);
  }
  
-@@ -241,6 +484,7 @@ static void gen_goto_tb(DisasContext *ctx, int n, target_ulong dest)
+@@ -249,6 +502,7 @@ static void gen_goto_tb(DisasContext *ctx, unsigned tb_slot_idx, vaddr dest)
          if (use_exit_tb(ctx)) {
              tcg_gen_exit_tb(NULL, 0);
          } else {
@@ -303,7 +315,7 @@ index 53b0921..beb4787 100644
              tcg_gen_lookup_and_goto_ptr();
          }
      }
-@@ -250,6 +494,22 @@ static void gen_goto_tb(DisasContext *ctx, int n, target_ulong dest)
+@@ -258,6 +512,22 @@ static void gen_goto_tb(DisasContext *ctx, unsigned tb_slot_idx, vaddr dest)
  static void gen_jump(DisasContext * ctx)
  {
      if (ctx->delayed_pc == -1) {
@@ -326,7 +338,7 @@ index 53b0921..beb4787 100644
          /* Target is not statically known, it comes necessarily from a
             delayed jump as immediate jump are conditinal jumps */
          tcg_gen_mov_i32(cpu_pc, cpu_delayed_pc);
-@@ -257,6 +517,7 @@ static void gen_jump(DisasContext * ctx)
+@@ -265,6 +535,7 @@ static void gen_jump(DisasContext * ctx)
          if (use_exit_tb(ctx)) {
              tcg_gen_exit_tb(NULL, 0);
          } else {
@@ -334,7 +346,7 @@ index 53b0921..beb4787 100644
              tcg_gen_lookup_and_goto_ptr();
          }
          ctx->base.is_jmp = DISAS_NORETURN;
-@@ -265,6 +526,27 @@ static void gen_jump(DisasContext * ctx)
+@@ -273,6 +544,27 @@ static void gen_jump(DisasContext * ctx)
      }
  }
  
@@ -360,9 +372,9 @@ index 53b0921..beb4787 100644
 +}
 +
  /* Immediate conditional jump (bt or bf) */
- static void gen_conditional_jump(DisasContext *ctx, target_ulong dest,
+ static void gen_conditional_jump(DisasContext *ctx, vaddr dest,
                                   bool jump_if_true)
-@@ -388,6 +670,15 @@ static inline void gen_store_fpr64(DisasContext *ctx, TCGv_i64 t, int reg)
+@@ -395,6 +687,15 @@ static inline void gen_store_fpr64(DisasContext *ctx, TCGv_i64 t, int reg)
  
  static void _decode_opc(DisasContext * ctx)
  {
@@ -378,7 +390,7 @@ index 53b0921..beb4787 100644
      /* This code tries to make movcal emulation sufficiently
         accurate for Linux purposes.  This instruction writes
         memory, and prior to that, always allocates a cache line.
-@@ -434,6 +725,24 @@ static void _decode_opc(DisasContext * ctx)
+@@ -441,6 +742,24 @@ static void _decode_opc(DisasContext * ctx)
          tcg_gen_mov_i32(cpu_delayed_pc, cpu_pr);
          ctx->envflags |= TB_FLAG_DELAY_SLOT;
          ctx->delayed_pc = (uint32_t) - 1;
@@ -403,7 +415,7 @@ index 53b0921..beb4787 100644
          return;
      case 0x0028: /* clrmac */
          tcg_gen_movi_i32(cpu_mach, 0);
-@@ -452,7 +761,37 @@ static void _decode_opc(DisasContext * ctx)
+@@ -459,7 +778,37 @@ static void _decode_opc(DisasContext * ctx)
      case 0x002b: /* rte */
          CHECK_PRIVILEGED
          CHECK_NOT_DELAY_SLOT
@@ -442,7 +454,7 @@ index 53b0921..beb4787 100644
          tcg_gen_mov_i32(cpu_delayed_pc, cpu_spc);
          ctx->envflags |= TB_FLAG_DELAY_SLOT_RTE;
          ctx->delayed_pc = (uint32_t) - 1;
-@@ -532,9 +871,23 @@ static void _decode_opc(DisasContext * ctx)
+@@ -539,9 +888,23 @@ static void _decode_opc(DisasContext * ctx)
      case 0xd000: /* mov.l @(disp,PC),Rn */
          CHECK_NOT_DELAY_SLOT
          {
@@ -467,7 +479,7 @@ index 53b0921..beb4787 100644
          }
          return;
      case 0x7000: /* add #imm,Rn */
-@@ -553,6 +906,248 @@ static void _decode_opc(DisasContext * ctx)
+@@ -560,6 +923,248 @@ static void _decode_opc(DisasContext * ctx)
          return;
      }
  
@@ -716,7 +728,7 @@ index 53b0921..beb4787 100644
      switch (ctx->opcode & 0xf00f) {
      case 0x6003: /* mov Rm,Rn */
          tcg_gen_mov_i32(REG(B11_8), REG(B7_4));
-@@ -1338,6 +1933,7 @@ static void _decode_opc(DisasContext * ctx)
+@@ -1339,6 +1944,7 @@ static void _decode_opc(DisasContext * ctx)
          tcg_gen_addi_i32(cpu_delayed_pc, REG(B11_8), ctx->base.pc_next + 4);
          ctx->envflags |= TB_FLAG_DELAY_SLOT;
          ctx->delayed_pc = (uint32_t) - 1;
@@ -724,7 +736,7 @@ index 53b0921..beb4787 100644
          return;
      case 0x0003: /* bsrf Rn */
          CHECK_NOT_DELAY_SLOT
-@@ -1345,6 +1941,7 @@ static void _decode_opc(DisasContext * ctx)
+@@ -1346,6 +1952,7 @@ static void _decode_opc(DisasContext * ctx)
          tcg_gen_add_i32(cpu_delayed_pc, REG(B11_8), cpu_pr);
          ctx->envflags |= TB_FLAG_DELAY_SLOT;
          ctx->delayed_pc = (uint32_t) - 1;
@@ -732,7 +744,7 @@ index 53b0921..beb4787 100644
          return;
      case 0x4015: /* cmp/pl Rn */
          tcg_gen_setcondi_i32(TCG_COND_GT, cpu_sr_t, REG(B11_8), 0);
-@@ -1361,6 +1958,9 @@ static void _decode_opc(DisasContext * ctx)
+@@ -1362,6 +1969,9 @@ static void _decode_opc(DisasContext * ctx)
          tcg_gen_mov_i32(cpu_delayed_pc, REG(B11_8));
          ctx->envflags |= TB_FLAG_DELAY_SLOT;
          ctx->delayed_pc = (uint32_t) - 1;
@@ -742,7 +754,7 @@ index 53b0921..beb4787 100644
          return;
      case 0x400b: /* jsr @Rn */
          CHECK_NOT_DELAY_SLOT
-@@ -1368,13 +1968,16 @@ static void _decode_opc(DisasContext * ctx)
+@@ -1369,13 +1979,16 @@ static void _decode_opc(DisasContext * ctx)
          tcg_gen_mov_i32(cpu_delayed_pc, REG(B11_8));
          ctx->envflags |= TB_FLAG_DELAY_SLOT;
          ctx->delayed_pc = (uint32_t) - 1;
@@ -760,7 +772,7 @@ index 53b0921..beb4787 100644
              ctx->base.is_jmp = DISAS_STOP;
          }
          return;
-@@ -1385,7 +1988,7 @@ static void _decode_opc(DisasContext * ctx)
+@@ -1386,7 +1999,7 @@ static void _decode_opc(DisasContext * ctx)
              tcg_gen_qemu_ld_i32(val, REG(B11_8), ctx->memidx,
                                  MO_TESL | MO_ALIGN);
              tcg_gen_andi_i32(val, val, 0x700083f3);
@@ -769,7 +781,7 @@ index 53b0921..beb4787 100644
              tcg_gen_addi_i32(REG(B11_8), REG(B11_8), 4);
              ctx->base.is_jmp = DISAS_STOP;
          }
-@@ -1448,7 +2051,7 @@ static void _decode_opc(DisasContext * ctx)
+@@ -1449,7 +2062,7 @@ static void _decode_opc(DisasContext * ctx)
      case 0x406a: /* lds Rm,FPSCR */
          CHECK_FPU_ENABLED
          gen_helper_ld_fpscr(tcg_env, REG(B11_8));
@@ -778,7 +790,7 @@ index 53b0921..beb4787 100644
          return;
      case 0x4066: /* lds.l @Rm+,FPSCR */
          CHECK_FPU_ENABLED
-@@ -1458,7 +2061,7 @@ static void _decode_opc(DisasContext * ctx)
+@@ -1459,7 +2072,7 @@ static void _decode_opc(DisasContext * ctx)
                                  MO_TESL | MO_ALIGN);
              tcg_gen_addi_i32(REG(B11_8), REG(B11_8), 4);
              gen_helper_ld_fpscr(tcg_env, addr);
@@ -787,7 +799,7 @@ index 53b0921..beb4787 100644
          }
          return;
      case 0x006a: /* sts FPSCR,Rn */
-@@ -1504,6 +2107,12 @@ static void _decode_opc(DisasContext * ctx)
+@@ -1505,6 +2118,12 @@ static void _decode_opc(DisasContext * ctx)
      case 0x0029: /* movt Rn */
          tcg_gen_mov_i32(REG(B11_8), cpu_sr_t);
          return;
@@ -800,8 +812,8 @@ index 53b0921..beb4787 100644
      case 0x0073:
          /* MOVCO.L
           *     LDST -> T
-@@ -1794,12 +2403,91 @@ static void _decode_opc(DisasContext * ctx)
-     return;
+@@ -1794,12 +2413,90 @@ static void _decode_opc(DisasContext * ctx)
+     ctx->base.is_jmp = DISAS_NORETURN;
  }
  
 +/* Defined below with the rest of the CDJ instrumentation. */
@@ -809,7 +821,6 @@ index 53b0921..beb4787 100644
 +static bool cdj_is_store(uint16_t op);
 +static bool cdj_rwatch_armed(void);
 +static bool cdj_is_load(uint16_t op);
-+static bool cdj_rwatch_armed(void);
 +
 +/*
 + * Arm the read watch on an SH-2A 32-bit load.
@@ -892,8 +903,8 @@ index 53b0921..beb4787 100644
      if (old_flags & TB_FLAG_DELAY_SLOT_MASK) {
          /* go out of the delay slot */
          ctx->envflags &= ~TB_FLAG_DELAY_SLOT_MASK;
-@@ -1816,6 +2504,10 @@ static void decode_opc(DisasContext * ctx)
-         ctx->envflags &= ~TB_FLAG_GUSA_MASK;
+@@ -1818,6 +2515,10 @@ static void decode_opc(DisasContext * ctx)
+ #endif
  
          tcg_gen_movi_i32(cpu_flags, ctx->envflags);
 +        if ((old_flags & TB_FLAG_DELAY_SLOT_RTE) ||
@@ -903,7 +914,7 @@ index 53b0921..beb4787 100644
          if (old_flags & TB_FLAG_DELAY_SLOT_COND) {
              gen_delayed_conditional_jump(ctx);
          } else {
-@@ -2210,6 +2902,13 @@ static void sh4_tr_init_disas_context(DisasContextBase *dcbase, CPUState *cs)
+@@ -2211,6 +2912,13 @@ static void sh4_tr_init_disas_context(DisasContextBase *dcbase, CPUState *cs)
      ctx->gbank = ((tbflags & (1 << SR_MD)) &&
                    (tbflags & (1 << SR_RB))) * 0x10;
      ctx->fbank = tbflags & FPSCR_FR ? 0x10 : 0;
@@ -917,8 +928,8 @@ index 53b0921..beb4787 100644
  
  #ifdef CONFIG_USER_ONLY
      if (tbflags & TB_FLAG_GUSA_MASK) {
-@@ -2250,37 +2949,1039 @@ static void sh4_tr_insn_start(DisasContextBase *dcbase, CPUState *cs)
-     tcg_gen_insn_start(ctx->base.pc_next, ctx->envflags);
+@@ -2253,37 +2961,1057 @@ static void sh4_tr_insn_start(DisasContextBase *dcbase, CPUState *cs)
+     tcg_gen_insn_start(ctx->base.pc_next, ctx->envflags, 0);
  }
  
 -static void sh4_tr_translate_insn(DisasContextBase *dcbase, CPUState *cs)
@@ -976,7 +987,7 @@ index 53b0921..beb4787 100644
  
 -#ifdef CONFIG_USER_ONLY
 -    if (unlikely(ctx->envflags & TB_FLAG_GUSA_MASK)
--        && !(ctx->envflags & TB_FLAG_GUSA_EXCLUSIVE)) {
+-        && !ctx->in_gusa_exclusive) {
          /*
 -         * We're in an gUSA region, and we have not already fallen
 -         * back on using an exclusive region.  Attempt to parse the
@@ -1029,7 +1040,6 @@ index 53b0921..beb4787 100644
  
 -    ctx->opcode = translator_lduw(env, &ctx->base, ctx->base.pc_next);
 -    decode_opc(ctx);
--    ctx->base.pc_next += 2;
 +            tcg_gen_extract_i32(b, v, bit, 1);
 +            if (op2 == 0xc) {
 +                tcg_gen_xori_i32(b, b, 1);
@@ -1775,29 +1785,46 @@ index 53b0921..beb4787 100644
 + * expected `mov.l @r1,r2` (0x6212), as with the native-libc hook above, so a
 + * stale address from another image is never hooked by accident. Unset by
 + * default: this changes when the guest's CPU runs.
++ *
++ * CDJ_MAIN_IDLE_PC=<hex>: the same for the MAIN firmware's idle task (created
++ * at priority 31, the lowest), hooked at its loop head `jsr @r10` (0x4a0b,
++ * 0x083B6AEA in the NXS2 image). A pass of that loop only runs diagnostics: a
++ * self-check list, a scan of every registered task stack for its
++ * "StackCheckArea" canary (strlen and memcmp per task, the hottest guest code
++ * in a profile of MAIN), a toggle of PWDR bit 5 and a pass counter. None of it
++ * readies a task unless a canary is already broken, so the loop's only real
++ * exit is an interrupt here too.
 + */
-+static uint32_t cdj_gui_idle_pc(void)
++static uint32_t cdj_idle_pc(const char *knob, const char *what, uint32_t *pc)
 +{
-+    static uint32_t pc = 1;             /* 1 = not looked up yet (never a PC) */
++    if (unlikely(*pc == 1)) {           /* 1 = not looked up yet (never a PC) */
++        const char *e = getenv(knob);
 +
-+    if (unlikely(pc == 1)) {
-+        const char *e = getenv("CDJ_GUI_IDLE_PC");
-+
-+        pc = (e && *e) ? (uint32_t)strtoul(e, NULL, 0) : 0;
-+        if (pc) {
-+            info_report("gui idle: 0x%08x executed as a halt", pc);
++        *pc = (e && *e) ? (uint32_t)strtoul(e, NULL, 0) : 0;
++        if (*pc) {
++            info_report("%s: 0x%08x executed as a halt", what, *pc);
 +        }
 +    }
-+    return pc;
++    return *pc;
 +}
 +
 +static bool cdj_gui_idle(DisasContext *ctx, CPUSH4State *env)
 +{
++    static uint32_t gui_pc = 1, main_pc = 1;
 +    uint32_t pc = ctx->base.pc_next;
++    uint16_t head;
 +
-+    if (likely(pc != cdj_gui_idle_pc())
-+        || (ctx->envflags & TB_FLAG_DELAY_SLOT_MASK)
-+        || translator_lduw(env, &ctx->base, pc) != 0x6212) {
++    if (likely(pc != cdj_idle_pc("CDJ_GUI_IDLE_PC", "gui idle", &gui_pc))) {
++        if (likely(pc != cdj_idle_pc("CDJ_MAIN_IDLE_PC", "main idle",
++                                     &main_pc))) {
++            return false;
++        }
++        head = 0x4a0b;
++    } else {
++        head = 0x6212;
++    }
++    if ((ctx->envflags & TB_FLAG_DELAY_SLOT_MASK)
++        || translator_lduw(env, &ctx->base, pc) != head) {
 +        return false;
 +    }
 +    /*
@@ -1858,7 +1885,7 @@ index 53b0921..beb4787 100644
 +                             REG((op >> 8) & 0xf),
 +                             tcg_constant_i32((int8_t)op),
 +                             tcg_constant_i32(cdj_timed_add_ms));
-+    ctx->base.pc_next += 2;
+     ctx->base.pc_next += 2;
 +    return true;
 +}
 +
@@ -1869,7 +1896,7 @@ index 53b0921..beb4787 100644
 +
 +#ifdef CONFIG_USER_ONLY
 +    if (unlikely(ctx->envflags & TB_FLAG_GUSA_MASK)
-+        && !(ctx->envflags & TB_FLAG_GUSA_EXCLUSIVE)) {
++        && !ctx->in_gusa_exclusive) {
 +        /*
 +         * We're in an gUSA region, and we have not already fallen
 +         * back on using an exclusive region.  Attempt to parse the
@@ -1973,6 +2000,7 @@ index 53b0921..beb4787 100644
 +    ctx->opcode = translator_lduw(env, &ctx->base, ctx->base.pc_next);
 +    if ((ctx->features & SH_FEATURE_SH2A) && decode_sh2a_32(ctx, env)) {
 +        ctx->base.pc_next += 4;
++        cdj_io_split_check(ctx, ctx->base.pc_next - 4);
 +        return;
 +    }
 +
@@ -1982,7 +2010,7 @@ index 53b0921..beb4787 100644
  }
  
  static void sh4_tr_tb_stop(DisasContextBase *dcbase, CPUState *cs)
-@@ -2295,8 +3996,32 @@ static void sh4_tr_tb_stop(DisasContextBase *dcbase, CPUState *cs)
+@@ -2300,8 +4028,32 @@ static void sh4_tr_tb_stop(DisasContextBase *dcbase, CPUState *cs)
      switch (ctx->base.is_jmp) {
      case DISAS_STOP:
          gen_save_cpu_state(ctx, true);

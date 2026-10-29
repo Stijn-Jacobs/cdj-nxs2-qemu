@@ -19,7 +19,7 @@
 #
 # DJLINK=tap:CDJ-Link needs a one-time setup on Windows: run scripts/net/tap_setup.ps1 from an
 # elevated PowerShell (it creates the adapter, its address, the MTU cap, the ARP entry and the
-# firewall rule; the README section "Connecting rekordbox and Ableton Live on this PC" has the rest).
+# firewall rule; docs/pro-dj-link.md has the rest).
 # Starting a deck needs no admin. With the ableton_link mod on (mods/ableton_link; CDJ_MAIN_ABLETONLINK and
 # CDJ_MAIN_ABLETONLINKPONG):
 #   DJLINK=tap:CDJ-Link CDJ_MAIN_ABLETONLINK=1 CDJ_MAIN_ABLETONLINKPONG=1 bash scripts/run/rig.sh show

@@ -230,10 +230,10 @@ static void cdj_mpoke_apply(void)
         /* The guest is little-endian, so a plain host store matches its view. */
         uint32_t v = cdj_mpoke[i].val;
 
-        cpu_physical_memory_write(cdj_mpoke[i].addr, &v, cdj_mpoke[i].size);
+        physical_memory_write(cdj_mpoke[i].addr, &v, cdj_mpoke[i].size);
     }
     for (i = 0; i < cdj_loadbin_n; i++) {
-        cpu_physical_memory_write(cdj_loadbin[i].addr, cdj_loadbin[i].buf,
+        physical_memory_write(cdj_loadbin[i].addr, cdj_loadbin[i].buf,
                                   cdj_loadbin[i].len);
     }
     for (i = 0; i < cdj_mfill_n; i++) {
@@ -241,7 +241,7 @@ static void cdj_mpoke_apply(void)
         unsigned off;
 
         for (off = 0; off < cdj_mfill[i].len; off += 4) {
-            cpu_physical_memory_write(cdj_mfill[i].addr + off, &v, 4);
+            physical_memory_write(cdj_mfill[i].addr + off, &v, 4);
         }
     }
     for (i = 0; i < cdj_mcopy_n; i++) {
@@ -250,7 +250,7 @@ static void cdj_mpoke_apply(void)
         if (cdj_mcopy[i].indirect) {
             uint32_t p = 0;
 
-            cpu_physical_memory_read(src, &p, 4);
+            physical_memory_read(src, &p, 4);
             /* Below the NXS2's RAM: the firmware has not produced the buffer
              * yet. */
             if (p < 0x08000000) {
@@ -258,8 +258,8 @@ static void cdj_mpoke_apply(void)
             }
             src = p;
         }
-        cpu_physical_memory_read(src, cdj_mcopy_buf, cdj_mcopy[i].len);
-        cpu_physical_memory_write(cdj_mcopy[i].dst, cdj_mcopy_buf,
+        physical_memory_read(src, cdj_mcopy_buf, cdj_mcopy[i].len);
+        physical_memory_write(cdj_mcopy[i].dst, cdj_mcopy_buf,
                                   cdj_mcopy[i].len);
     }
 }

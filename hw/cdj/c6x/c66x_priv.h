@@ -193,6 +193,19 @@ static inline void host_round(unsigned rm)
 
     _mm_setcsr((_mm_getcsr() & ~(3u << 13)) | rc[rm]);
 }
+#elif defined(__wasm__)
+/* WebAssembly floats only round to nearest and fesetround cannot change that,
+ * so a directed mode would give silently wrong results. The NXS2 firmware
+ * never sets one (a full replay of normal and MASTER TEMPO play wrote no
+ * rounding bits to FADCR/FMCR); stop loudly if a firmware ever does. */
+static inline void host_round(unsigned rm)
+{
+    if (rm) {
+        fprintf(stderr, "c66x: directed rounding mode %u requested; "
+                "a wasm host has round-to-nearest only\n", rm);
+        abort();
+    }
+}
 #else
 static const int fe_mode[4] = { FE_TONEAREST, FE_TOWARDZERO, FE_UPWARD, FE_DOWNWARD };
 
@@ -425,6 +438,7 @@ struct c66x_jit {
     struct { uint32_t pc; const c66x_jit_loop *l; uint64_t gen; } loops[JIT_LOOPS];
     unsigned nloops;
     uint64_t lentries, lcycles, ldeclined;
+    uint8_t  nearest;               /* a module's float ops assume round-to-nearest (c66x_jit_nearest) */
     /* C66X_JIT_PROFILE: kernels as the core loaded them, with their cycles */
     struct { uint32_t addr; uint16_t kind; uint8_t ii, dynlen; int8_t creg; uint8_t cz;
              uint8_t n[48]; uint32_t a[48][8]; uint64_t cycles; uint8_t tried; } *kprof;
@@ -452,5 +466,12 @@ struct c66x_jit {
 };
 
 static inline unsigned jit_slot(uint32_t pc) { return (pc * 2654435761u) >> 18; }
+
+/* Compiled code may run now: a module built for round-to-nearest leaves the
+ * DSP to the interpreter while any rounding field of FADCR or FMCR is set. */
+static inline int jit_mode_ok(const c66x_core *c)
+{
+    return !c->jit->nearest || !((c->cr[CR_FADCR] | c->cr[CR_FMCR]) & (3u << 9 | 3u << 25));
+}
 
 #endif

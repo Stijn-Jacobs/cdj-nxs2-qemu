@@ -1,0 +1,84 @@
+diff --git a/util/qemu-timer.c b/util/qemu-timer.c
+index d93a0200..361942bd 100644
+--- a/util/qemu-timer.c
++++ b/util/qemu-timer.c
+@@ -31,6 +31,11 @@
+ #include "system/replay.h"
+ #include "system/cpus.h"
+ #include "hw/core/cpu.h"
++#ifdef EMSCRIPTEN
++#include "qemu/event_notifier.h"
++#include <emscripten/threading.h>
++#include <math.h>
++#endif
+ 
+ #ifdef CONFIG_POSIX
+ #include <pthread.h>
+@@ -324,6 +329,59 @@ int qemu_timeout_ns_to_ms(int64_t ns)
+ /* qemu implementation of g_poll which uses a nanosecond timeout but is
+  * otherwise identical to g_poll
+  */
++#ifdef EMSCRIPTEN
++/*
++ * Emscripten's poll() runs on the browser's main thread and ignores its
++ * timeout, so the main loop spun through round trips to that thread. Event
++ * notifiers are answered from their flags and the wait is a futex sleep on
++ * event_notifier_seq. Any other fd (glib's own wakeup pipe) is polled at most
++ * every POLL_OTHERS_MS, which also bounds the sleep while there are some.
++ */
++#define POLL_OTHERS_MS 10
++
++int qemu_poll_ns(GPollFD *fds, guint nfds, int64_t timeout)
++{
++    static __thread int64_t others_polled;
++    int64_t deadline = timeout < 0 ? INT64_MAX : get_clock() + timeout;
++
++    for (;;) {
++        uint32_t seq = qatomic_read(&event_notifier_seq);
++        int64_t now = get_clock();
++        int ready = 0, others = 0;
++        double wait_ms;
++        guint i;
++
++        smp_mb();
++        for (i = 0; i < nfds; i++) {
++            int pending = event_notifier_fd_pending(fds[i].fd);
++
++            fds[i].revents = 0;
++            if (pending < 0) {
++                others++;
++            } else if (pending && (fds[i].events & G_IO_IN)) {
++                fds[i].revents = G_IO_IN;
++                ready++;
++            }
++        }
++        if (others && (ready || now - others_polled >= POLL_OTHERS_MS * SCALE_MS)) {
++            others_polled = now;
++            for (i = 0; i < nfds; i++) {
++                if (event_notifier_fd_pending(fds[i].fd) < 0 && g_poll(&fds[i], 1, 0) > 0) {
++                    ready++;
++                }
++            }
++        }
++        if (ready || now >= deadline) {
++            return ready;
++        }
++        wait_ms = deadline == INT64_MAX ? INFINITY : (deadline - now) / (double)SCALE_MS;
++        if (others && wait_ms > POLL_OTHERS_MS) {
++            wait_ms = POLL_OTHERS_MS;
++        }
++        emscripten_futex_wait(&event_notifier_seq, seq, wait_ms);
++    }
++}
++#else
+ int qemu_poll_ns(GPollFD *fds, guint nfds, int64_t timeout)
+ {
+ #ifdef CONFIG_PPOLL
+@@ -346,6 +404,7 @@ int qemu_poll_ns(GPollFD *fds, guint nfds, int64_t timeout)
+     return g_poll(fds, nfds, qemu_timeout_ns_to_ms(timeout));
+ #endif
+ }
++#endif
+ 
+ 
+ void timer_init_full(QEMUTimer *ts,

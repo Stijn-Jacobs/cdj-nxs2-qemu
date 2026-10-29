@@ -288,6 +288,7 @@ struct c66x_core {
     uint64_t native_entries, native_cycles;
     struct native_check *native_chk;
     struct native_found *native_found;
+    uint8_t *native_bulk;           /* NATIVE_BULK_BYTES a pass stages its large spans in */
     uint64_t code_pages;            /* pages that hold decoded code */
 };
 

@@ -74,6 +74,7 @@ import configparser
 import datetime
 import json
 import os
+import re
 import shlex
 import socket
 import struct
@@ -389,10 +390,9 @@ def point_dir(d):
 
 def migrate_status(d):
     out = monitor(d.port, "info migrate").decode("utf-8", "replace")
-    for line in out.splitlines():
-        if "Migration status:" in line:
-            return line.split(":", 1)[1].strip()
-    return ""
+    # QEMU 10 shortened "Migration status:" to "Status:".
+    m = re.search(r"^(?:Migration s|S)tatus:\s*(\S+)", out, re.M)
+    return m.group(1) if m else ""
 
 
 def save_point(d):

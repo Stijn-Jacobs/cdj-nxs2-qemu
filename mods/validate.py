@@ -38,6 +38,12 @@ deck's own update mode, which is MAIN code. So the checks are:
      panel, the display link, the update task or the USB stick task can run.
      The display image has no call graph; there only the load table, the
      vector copy and bytes a mod did not declare are protected.
+  4. The DSP program MAIN carries as data (dsppatch.py): the words a mod edits
+     are declared, and the code it places is in the program's erased run, away
+     from the run's ends, or in the cave of a program carried as a boot table,
+     whose stock bytes are still there, with no word, branch or constant pair
+     in the program pointing into it. The program is not MAIN code, so the
+     boot-critical set does not apply to it.
 
 A player that ships one file per section (CDJ-2000, CDJ-900) has its GUI, DRIV
 and PANL files checked as well: each next to the patched MAIN file must be the
@@ -58,6 +64,7 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, '..', 'scripts', 'firmware'))
 
 import bootcrit
+import dsppatch
 import gui_decode
 import main_decode
 import modelfw
@@ -434,14 +441,18 @@ def overlaps(spans, ranges):
     return [(mod, kind, lo, hi, r) for mod, kind, lo, hi in spans for r in ranges if lo < r[1] and r[0] < hi]
 
 
-def flat_spans(spans, changed, stock_img, table, cave):
+def flat_spans(spans, changed, stock_img, table, cave, dsp=None):
     """[(mod, kind, lo, hi)] from what the patch engine says it wrote, or
     from the changed ranges alone when it did not say. A range inside the
-    profile's cave is free space although the stock bytes there are code."""
+    profile's cave is free space although the stock bytes there are code.
+    A range inside the DSP program `dsp` (file offsets lo, hi) is an edit of
+    it, or code placed in its erased space."""
     if spans is None:
         def kind(lo, hi):
             if table and table[0] <= lo and hi <= table[1]:
                 return 'record'
+            if dsp and dsp[0] <= lo and hi <= dsp[1]:
+                return 'dspfree' if set(stock_img[lo:hi]) == {0xFF} else 'dsp'
             if cave and cave[0] <= lo and hi <= cave[1]:
                 return 'free'
             return 'free' if set(stock_img[lo:hi]) == {0xFF} else 'site'
@@ -449,7 +460,7 @@ def flat_spans(spans, changed, stock_img, table, cave):
     return [(mod, kind, off, off + size) for mod, items in spans.items() for off, size, kind in items]
 
 
-def check_writes(target, stock_img, out_img, profile, spans, rep, table=None):
+def check_writes(target, stock_img, out_img, profile, spans, rep, table=None, dsp=None):
     """Checks that hold for every image: what changed is what was declared,
     free space was erased, a site is small. Returns the span list."""
     changed = changed_ranges(stock_img, out_img)
@@ -460,7 +471,7 @@ def check_writes(target, stock_img, out_img, profile, spans, rep, table=None):
             cave = sigpatch.find_cave(image)
         except sigpatch.NotApplied:
             pass
-    flat = flat_spans(spans, changed, stock_img, table, cave)
+    flat = flat_spans(spans, changed, stock_img, table, cave, dsp)
     if spans is not None:
         declared = bootcrit.merge([(lo, hi) for _, _, lo, hi in flat])
         stray = [r for r in changed if not any(lo <= r[0] and r[1] <= hi for lo, hi in declared)]
@@ -508,9 +519,58 @@ def check_free_unreached(stock_img, flat, base, rep, cave=None):
                % len(reach.entries))
 
 
-def check_main_image(stock_img, out_img, profile, spans, rep):
+def dsp_range(stock_img, dsp):
+    """(lo, hi) file offsets of the DSP program in the stock MAIN image, or
+    None when the player has none or this image does not carry it."""
+    if dsp is None:
+        return None
+    try:
+        start = dsppatch.find_blob(stock_img, dsp)
+    except sigpatch.NotApplied:
+        return None
+    return start, start + dsp.length
+
+
+def check_dsp_writes(stock_img, flat, dsp, start, rep):
+    """The DSP program is data to MAIN, so nothing here is boot-critical code;
+    what has to hold is that the code a mod placed in its erased run was
+    erased, is away from the run's ends and is not pointed at by the program,
+    or, in a boot table, that it is inside the cave, which still held its stock
+    code, and that the program does not point into it."""
+    placed = [(mod, lo, hi) for mod, kind, lo, hi in flat if kind in ('dspfree', 'dspcave')]
+    blob = bytes(stock_img[start:start + dsp.length])
+    table = isinstance(dsp, dsppatch.DspTable)
+    failed = False
+    for mod, lo, hi in placed:
+        a = dsppatch.program_address(dsp, blob, lo - start)
+        b = a + hi - lo
+        if table and not (dsp.cave[0] <= a and b <= dsp.cave[1]):
+            why = 'not inside the cave %#x-%#x' % dsp.cave[:2]
+        elif table and not dsppatch.cave_is_stock(dsp, blob):
+            why = 'in a cave that does not hold the code of the firmware it was found in'
+        elif not table and set(stock_img[lo:hi]) != {0xFF}:
+            why = 'not erased'
+        elif not table and not (dsp.free[0] + dsppatch.EDGE <= a and b <= dsp.free[1] - dsppatch.EDGE):
+            why = 'not inside the erased run %#x-%#x, %d bytes from its ends' % (dsp.free + (dsppatch.EDGE,))
+        else:
+            refs = dsppatch.program_references(dsp, blob, a, b)
+            why = 'the program points into it, at %#x' % refs[0] if refs else None
+        if why:
+            failed = True
+            rep.fail('dsp: %s places code at %#x-%#x, but it is %s' % (mod, a, b, why))
+    edits = sum(1 for _, kind, _, _ in flat if kind == 'dsp')
+    if (edits or placed) and not failed:
+        rep.ok('dsp: %d words of the DSP program edited, %d bytes of code placed in its %s, which '
+               'nothing in the program points into' % (edits, sum(hi - lo for _, lo, hi in placed),
+                                                       'cave' if table else 'erased run'))
+
+
+def check_main_image(stock_img, out_img, profile, spans, rep, dsp=None):
     base = profile.flash_base
-    flat = check_writes('main', stock_img, out_img, profile, spans, rep)
+    span = dsp_range(stock_img, dsp)
+    flat = check_writes('main', stock_img, out_img, profile, spans, rep, dsp=span)
+    if span:
+        check_dsp_writes(stock_img, flat, dsp, span[0], rep)
     cave = None
     if profile.cave:
         try:
@@ -589,8 +649,10 @@ def default_main_profile(model):
 
 def summarize_writes(target, flat, base, rep):
     """What a change that came with no declaration did, in firmware addresses."""
-    names = {'free': 'in erased space', 'site': 'over existing code', 'record': 'in the load table'}
-    for kind in ('site', 'free', 'record'):
+    names = {'free': 'in erased space', 'site': 'over existing code', 'record': 'in the load table',
+             'dsp': 'over words of the DSP program', 'dspfree': 'in the erased run of the DSP program',
+             'dspcave': 'in the cave of the DSP program'}
+    for kind in ('site', 'free', 'record', 'dsp', 'dspfree', 'dspcave'):
         runs = [(lo, hi) for _, k, lo, hi in flat if k == kind]
         if not runs:
             continue
@@ -731,7 +793,7 @@ def verify(stock_data, out_data, model, targets=None, spans=None, profiles=None)
             match_known_mods(target, stock_img, out_img, model, label_version(label), rep)
         if target == 'main':
             profile = profile or default_main_profile(model)
-            check_main_image(stock_img, out_img, profile, spans.get('main'), rep)
+            check_main_image(stock_img, out_img, profile, spans.get('main'), rep, modelfw.dsp_profile(model))
         elif profile is None:
             rep.unproven('gui changed, and there is no image profile of the display for %s: its load table and '
                          'known renderer sites are not known, and the image has no call graph' % model)

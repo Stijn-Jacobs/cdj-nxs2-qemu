@@ -1,8 +1,8 @@
 diff --git a/accel/tcg/cputlb.c b/accel/tcg/cputlb.c
-index 117b516..966ae38 100644
+index dc83f3b..99b2a0b 100644
 --- a/accel/tcg/cputlb.c
 +++ b/accel/tcg/cputlb.c
-@@ -162,6 +162,11 @@ static void tb_jmp_cache_clear_page(CPUState *cpu, vaddr page_addr)
+@@ -155,6 +155,11 @@ static void tb_jmp_cache_clear_page(CPUState *cpu, vaddr page_addr)
      if (unlikely(!jc)) {
          return;
      }

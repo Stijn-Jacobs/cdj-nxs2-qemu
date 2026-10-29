@@ -92,8 +92,10 @@ jobs:
           path: |
             qemu-src
             ${{ runner.temp }}/build
-          key: build-${{ matrix.name }}-${{ hashFiles('patches/**', 'hw/cdj/**', 'scripts/build/**', 'build.sh', 'packaging/package.py') }}
-          restore-keys: build-${{ matrix.name }}-
+          # The QEMU version is in the prefix, so restore-keys never hands back
+          # a tree of another version.
+          key: build-${{ matrix.name }}-qemu11.1.2-${{ hashFiles('patches/**', 'hw/cdj/**', 'scripts/build/**', 'build.sh', 'packaging/package.py') }}
+          restore-keys: build-${{ matrix.name }}-qemu11.1.2-
 
       - name: Build and package
         run: |

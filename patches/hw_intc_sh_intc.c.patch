@@ -1,5 +1,5 @@
 diff --git a/hw/intc/sh_intc.c b/hw/intc/sh_intc.c
-index c9b0b0c..2082951 100644
+index 0da82f9..822de59 100644
 --- a/hw/intc/sh_intc.c
 +++ b/hw/intc/sh_intc.c
 @@ -77,26 +77,138 @@ static void sh_intc_set_irq(void *opaque, int n, int level)

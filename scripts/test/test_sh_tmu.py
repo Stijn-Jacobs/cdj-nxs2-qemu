@@ -34,7 +34,7 @@ def main():
     start = pt.index("const VMStateDescription vmstate_ptimer")
     end = pt.index("ptimer_state *ptimer_init", start)
     pt = pt[:start] + pt[end:]
-    header = (SRC / "include/hw/ptimer.h").read_text()
+    header = (SRC / "include/hw/core/ptimer.h").read_text()
     header = header[header.index("#define PTIMER_POLICY_LEGACY"):header.index("extern const VMStateDescription")]
     # Take clock inputs from the board actually installed by the patch workflow.
     board = (ROOT / "hw/cdj/boards/cdj2000/board.c").read_text()

@@ -10,9 +10,13 @@ controller, the bridge. Ctrl-C stops everything.
          ./start.sh --app       start with the virtual deck app as the window
                                  (every player that has a face in app/faces/; a player
                                  without one keeps its plain window)
+         ./start.sh --web [lan] serve the deck as a web page as well: on this
+                                 PC only, or with "lan" on its LAN address with
+                                 a key made at each start in the printed URL
+                                 (the NXS2 so far)
          ./start.sh --service   boot into the service manual's SERVICE MODE
                                  screen instead of the player (see "Service
-                                 mode" in README.md)
+                                 mode" in docs/using-the-deck.md)
          ./start.sh stop        stop a running rig from another shell
          ./start.sh --dry-run   show what would be started
   env:   every knob of scripts/run/rig.sh still works (AUDIODEV=, NOSOUND=1,
@@ -20,7 +24,9 @@ controller, the bridge. Ctrl-C stops everything.
 """
 
 import glob
+import ipaddress
 import os
+import secrets
 import shlex
 import shutil
 import signal
@@ -45,20 +51,71 @@ def _python_cmd(value, default=()):
     return argv if argv and shutil.which(argv[0]) else []
 
 
-def _app_python(lay, c):
-    """The Python the virtual deck app runs on, or None once it has said what
-    that Python lacks. setup installs Pillow and pygame into .venv/, so the app
-    runs there when it exists; this interpreter is for setups without one."""
+def _app_python(lay, c, web=False):
+    """The Python the virtual deck app (or with `web`, the web deck, which
+    needs no pygame) runs on, or None once it has said what that Python lacks.
+    setup installs Pillow and pygame into .venv/, so the app runs there when it
+    exists; this interpreter is for setups without one."""
     venv = os.path.join(lay.emu, ".venv", "bin", "python")
     app_py = _python_cmd(c["CDJ_APP_PYTHON"],
                          [venv] if os.access(venv, os.X_OK) else host.python_argv())
-    if not lay.packaged and subprocess.run(app_py + ["-c", "import pygame, PIL"],
+    need = "PIL" if web else "pygame, PIL"
+    if not lay.packaged and subprocess.run(app_py + ["-c", "import " + need],
                                            capture_output=True).returncode:
+        if web:
+            chain.err("the web deck needs Pillow in %s:" % " ".join(app_py))
+            chain.err("  %s -m pip install Pillow" % " ".join(app_py))
+            return None
         chain.err("the virtual deck app needs pygame-ce and Pillow in %s:" % " ".join(app_py))
         chain.err("  %s -m pip install -r requirements.txt   (or: pygame-ce Pillow)" % " ".join(app_py))
         chain.err("or run without --app (the plain deck windows).")
         return None
     return app_py
+
+
+def _vnc_screens(lay, env, decks):
+    """Each deck's screen to a VNC server on loopback and a frame file, for
+    the app and the web deck to draw."""
+    env["GUI_DISPLAY"] = "vnc"
+    vnc_want = int(nonempty(env, "CDJ_APP_VNC_BASE", "5920"))
+    # A port another program (or a leftover QEMU) holds makes the display
+    # board's QEMU exit at once, and the app then waits for its screen forever.
+    vnc_base = host.pick_port_block(vnc_want, int(decks))
+    if vnc_base != vnc_want:
+        say("TCP %d+ is reserved or in use here; the deck app's VNC screens use %d+ instead" % (
+            vnc_want, vnc_base))
+    env["CDJ_APP_VNC_BASE"] = str(vnc_base)
+    # Both QEMU and a Windows Python want a native path here.
+    env["CDJ_APP_FRAME_DIR"] = env.get("CDJ_APP_FRAME_DIR") or (
+        host.native(env["TMPDIR"]) if env.get("TMPDIR") else lay.tmp)
+
+
+WEB_PORT = 7210
+
+
+def _web_command(lay, c, env, decks, web):
+    """(argv, URL) of the web deck; `web` is "1" (this PC) or "lan". None
+    once it has said why it cannot run."""
+    py = _app_python(lay, c, web=True)
+    if py is None:
+        return None
+    bind = "127.0.0.1"
+    if web == "lan":
+        bind = host.lan_address()
+        if bind is None or not ipaddress.ip_address(bind).is_private:
+            chain.err("--web lan: this PC has no private LAN address (%s); try --web alone" % bind)
+            return None
+        env["CDJ_WEB_TOKEN"] = secrets.token_urlsafe(16)
+        if host.is_windows():
+            say("Windows may ask whether Python may use the network: allow it on private networks.")
+    port = host.pick_tcp_port(WEB_PORT)
+    argv = py + [os.path.join(lay.emu, "app", "web_deck.py"), "--decks", decks, "--prefix", c["CDJ_NAME"],
+                 "--relay", "127.0.0.1:" + env["RELAY_PORT"], "--vnc-base", env["CDJ_APP_VNC_BASE"],
+                 "--frame-dir", env["CDJ_APP_FRAME_DIR"], "--bind", bind, "--port", str(port)]
+    url = "http://%s:%d/" % (bind, port)
+    if web == "lan":
+        url += "?k=" + env["CDJ_WEB_TOKEN"]
+    return argv, url
 
 
 def _stale_builds(lay, env):
@@ -144,7 +201,7 @@ def stop(lay):
 
 
 def main(argv):
-    dry, app, service, model_id = False, None, None, ""
+    dry, app, service, model_id, web = False, None, None, "", ""
     args = iter(argv)
     for a in args:
         if a == "stop":
@@ -155,6 +212,10 @@ def main(argv):
             app = True
         elif a == "--no-app":
             app = False
+        elif a == "--web":
+            web = "1"
+        elif a == "lan" and web:
+            web = "lan"
         elif a == "--service":
             service = True
         elif a == "--no-service":
@@ -192,6 +253,8 @@ def main(argv):
         if app and not player.app_face:
             say("the virtual deck app has no face for the %s yet; starting its plain window" % player.title)
         use_app = c["CDJ_APP"] == "1" if app is None else app
+        if web:
+            say("the web deck draws the NXS2 only so far; starting the %s without it" % player.title)
         return _start_deck(lay, player, c, dry, use_app and bool(player.app_face))
     if app is None:
         # The packaged program's window is the virtual deck app unless the
@@ -262,26 +325,22 @@ def main(argv):
         chain.err("no USB image yet -- run ./setup.sh --music <your rekordbox USB folder>")
         return 1
 
-    # The virtual deck app (app/virtual_deck.py) replaces the display board's
-    # QEMU window: each deck's screen goes to a VNC server on loopback and a
-    # frame file, and the app draws the player around it.
-    app_cmd = []
+    # The virtual deck app (app/virtual_deck.py) and the web deck
+    # (app/web_deck.py) replace the display board's QEMU window: each deck's
+    # screen goes to a VNC server on loopback and a frame file, and they draw
+    # the player around it.
+    app_cmd, web_cmd = [], []
+    if app or web:
+        _vnc_screens(lay, env, decks)
+    if web:
+        got = _web_command(lay, c, env, decks, web)
+        if got is None:
+            return 1
+        web_cmd, web_url = got
     if app:
         app_py = _app_python(lay, c)
         if app_py is None:
             return 1
-        env["GUI_DISPLAY"] = "vnc"
-        vnc_want = int(nonempty(env, "CDJ_APP_VNC_BASE", "5920"))
-        # A port another program (or a leftover QEMU) holds makes the display
-        # board's QEMU exit at once, and the app then waits for its screen forever.
-        vnc_base = host.pick_port_block(vnc_want, int(decks))
-        if vnc_base != vnc_want:
-            say("TCP %d+ is reserved or in use here; the deck app's VNC screens use %d+ instead" % (
-                vnc_want, vnc_base))
-        env["CDJ_APP_VNC_BASE"] = str(vnc_base)
-        # Both QEMU and a Windows Python want a native path here.
-        env["CDJ_APP_FRAME_DIR"] = env.get("CDJ_APP_FRAME_DIR") or (
-            host.native(env["TMPDIR"]) if env.get("TMPDIR") else lay.tmp)
         # Where boot_deck.py logs each display board, for the app to point at
         # when a deck's screen never comes.
         env["CDJ_APP_GUI_LOGS"] = host.posix(nonempty(env, "LOGDIR", lay.tmp))
@@ -306,7 +365,7 @@ def main(argv):
 
     say("decks: %s (%s)   Pro DJ Link: %s   sound: %s   controller: %s   window: %s%s" % (
         decks, c["CDJ_NAME"], "on " + env["GROUP"] if env["DJLINK"] == "1" else "off",
-        "on" if c["CDJ_AUDIO"] == "1" else "off", c["CDJ_CONTROLLER"], "virtual deck app" if app else "QEMU",
+        "on" if c["CDJ_AUDIO"] == "1" else "off", c["CDJ_CONTROLLER"], "virtual deck app" if app else "browser" if web else "QEMU",
         "   SERVICE MODE" if service else ""))
     if dry:
         say("would run:  RELAY_PORT=%s DJLINK=%s GROUP=%s%s%s%s %s" % (
@@ -318,8 +377,12 @@ def main(argv):
         if app_cmd:
             say("with:       GUI_DISPLAY=vnc CDJ_APP_VNC_BASE=%s, then %s"
                 % (env["CDJ_APP_VNC_BASE"], " ".join(shlex.quote(a) for a in app_cmd)))
+        if web_cmd:
+            say("web deck:   %s > logs/web.log" % " ".join(shlex.quote(a) for a in web_cmd))
         return 0
-    return run(lay, env, launch, bridge, app_cmd)
+    if web_cmd:
+        say("deck in the browser: %s" % web_url)
+    return run(lay, env, launch, bridge, app_cmd, web_cmd)
 
 
 def _start_deck(lay, player, c, dry, app=False):
@@ -372,7 +435,7 @@ def _shown(argv):
     return " ".join(argv)
 
 
-def run(lay, env, launch, bridge, app_cmd):
+def run(lay, env, launch, bridge, app_cmd, web_cmd=()):
     os.makedirs(lay.logs, exist_ok=True)
     env["LAUNCHER_STOP_FILE"] = "%s/cdj-stop-%d" % (lay.tmp, os.getpid())
     env = chain.launcher_env(env)
@@ -387,6 +450,9 @@ def run(lay, env, launch, bridge, app_cmd):
             with open(os.path.join(lay.logs, "bridge.log"), "wb") as log:
                 helpers.append(subprocess.Popen(bridge, stdout=log, stderr=subprocess.STDOUT))
             say("controller bridge running (log: logs/bridge.log)")
+        if web_cmd:
+            with open(os.path.join(lay.logs, "web.log"), "wb") as log:
+                helpers.append(subprocess.Popen(web_cmd, env=env, stdout=log, stderr=subprocess.STDOUT))
         if env["SERVICE"] == "1":
             say("the first boot takes a minute; SERVICE MODE appears once the logo clears.")
         else:

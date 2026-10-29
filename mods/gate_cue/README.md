@@ -37,11 +37,7 @@ open a gate; a recall that comes from anywhere else is left alone.
 `python mods/patch_update.py C2KNXS2.UPD out.UPD gate_cue` writes both into a
 real update (firmware 1.87).
 
-**Status: works in the emulator (firmware 1.87), not tried on a deck.** From
-pause, holding pad A plays from its cue and letting go returns to the cue and
-stops there, in two of two runs; with the mod off the deck plays on after the
-release, as stock does. The gate leaves the deck stopped at the cue (as after
-CUE) rather than paused where it was. The update validator passes with the mod
-applied.
+From pause, holding pad A plays from its cue and letting go returns to the cue
+and stops there (as after CUE), rather than paused where it was. Not tried on a real deck.
 
-Back to the [mods](../../README.md#mods).
+Back to the [mods](../../docs/mods.md).

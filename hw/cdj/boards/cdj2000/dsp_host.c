@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "dsp_host.h"
-#include "sysemu/runstate.h"
+#include "system/runstate.h"
 /*
  * The core runs on its own thread in chunks, at most one quantum ahead of
  * QEMU's virtual clock. Run on the main loop instead, a chunk of the

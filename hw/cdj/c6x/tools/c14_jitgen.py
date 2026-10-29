@@ -45,7 +45,7 @@ GENERATOR_VERSION = 1
 
 # Bumped whenever the generated C only gets faster or smaller; start-up still
 # loads an older module and offers to build the faster one.
-GENERATOR_REVISION = 1
+GENERATOR_REVISION = 2
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CORE_DIR = os.path.dirname(HERE)
@@ -54,6 +54,7 @@ OPK_CONST, OPK_REG, OPK_PAIR, OPK_MEM, OPK_CTRL, OPK_ADDR = 1, 2, 3, 4, 5, 6
 OPK_ILC = 10
 WK_REG, WK_CTRL = 0, 1
 CR_ILC = 0xd
+CR_FADCR, CR_FMCR = 0x12, 0x14
 MAX_QUEUE = 7          # NBR - 1: never let a region reach the interpreter's overflow trap
 PRE_CYCLES = 17        # WQ_SLOTS + 1: writes scheduled before entry land within this many cycles
 MAX_KNOWN = 4          # registers with a compile-time value carried in the state
@@ -62,6 +63,7 @@ CHAIN_DEPTH = 24       # a region hands over to another root only this many cycl
 CAP_MAX = 16           # C66X_JIT_CAP
 RET_REG = 35           # B3, the return-address register of the TI C6000 calling convention
 WIDE_MEM = False      # opt-in paired RAM accesses; preserve the default output
+NEAREST = False       # --nearest: float ops compiled for round-to-nearest only
 # the module is compiled with the same float semantics as the core
 JIT_CFLAGS = ["-std=gnu11", "-fPIC", "-fvisibility=hidden", "-ffp-contract=off", "-frounding-math",
               "-march=native", "-w"]
@@ -111,6 +113,11 @@ class Decoder:
             fn.restype = ctypes.c_int
         os.environ.pop("C66X_JIT", None)
         os.environ.pop("C66X_JIT_PROFILE", None)
+        # With natives on, the core marks each native kernel's loop head special,
+        # so no region roots there or runs through it and the deck enters the
+        # native form, several times faster than compiled code. Natives off in
+        # the caller's environment would build a module that shadows them.
+        os.environ["C66X_NATIVE"] = "1"
         self.core = self.lib.c66x_new(None)
         self.maps, self.prof, self.idle_head, self.kerns = [], [], 0, []
         self.have = set()          # roots an already loaded module compiles
@@ -264,6 +271,13 @@ def native(ins):
     return False
 
 
+def writes_rounding(dec, addr):
+    """True when a --nearest module must leave the instruction to the interpreter:
+    it writes FADCR or FMCR, which hold the rounding fields its float ops assume."""
+    sh = dec.shape(addr)
+    return NEAREST and sh is not None and any(k == WK_CTRL and i in (CR_FADCR, CR_FMCR) for _, k, i in sh[2])
+
+
 def compilable(dec, pk):
     """Why a packet cannot be compiled, or None."""
     if pk is None:
@@ -271,7 +285,7 @@ def compilable(dec, pk):
     if not pk.cacheable:
         return "not cacheable"
     if pk.special:
-        return "sploop family"
+        return "sploop family or native kernel head"
     if dec.idle_head and pk.pc == dec.idle_head:
         return "idle head"
     for ins in pk.insns:
@@ -284,6 +298,8 @@ def compilable(dec, pk):
             return "handler %s traps" % ins.name
         if sh[1] > CAP_MAX:
             return "handler %s writes too much" % ins.name
+        if writes_rounding(dec, ins.addr):
+            return "handler %s writes the rounding mode" % ins.name
     return None
 
 
@@ -1542,7 +1558,7 @@ def kernel_compilable(dec, k):
             if native(ins):
                 continue
             sh = dec.shape(addr)
-            if sh is None or sh[0] != 0 or sh[1] > CAP_MAX:
+            if sh is None or sh[0] != 0 or sh[1] > CAP_MAX or writes_rounding(dec, addr):
                 return "handler %s" % ins.name
     return None
 
@@ -1768,7 +1784,7 @@ def loop_insn_ok(dec, ins):
     if native(ins):
         return None
     sh = dec.shape(ins.addr)
-    if sh is None or sh[0] != 0 or sh[1] > CAP_MAX:
+    if sh is None or sh[0] != 0 or sh[1] > CAP_MAX or writes_rounding(dec, ins.addr):
         return "handler %s" % ins.name
     return None
 
@@ -2159,7 +2175,14 @@ extern _Thread_local unsigned jit_hop_entry;
  * much as the switches did. Entry points reset it: the core calls in nearest. */
 #define JIT_RM(c) ((c)->jit_xs.f[63])
 
-#ifdef __SSE2__
+#ifdef JIT_NEAREST
+/* Built with --nearest: the core enters the module only while every rounding
+ * field of FADCR and FMCR is clear (c66x_jit_nearest), no compiled packet
+ * writes either register, and the host is in round-to-nearest whenever the core
+ * calls in. Each float op is then the plain host op: no mode to read or switch,
+ * and nothing for a fence to keep in order. */
+static inline void jit_round(c66x_core *c, unsigned rm) { (void)c; (void)rm; }
+#elif defined(__SSE2__)
 #include <xmmintrin.h>
 /* The host's float maths is SSE, so the mode is one MXCSR field; fesetround
  * also rewrites the x87 control word. */
@@ -2188,14 +2211,26 @@ static inline void jit_round(c66x_core *c, unsigned rm)
  * switch: at -O2 a C674x firmware running in a directed mode got products
  * rounded in the default one. The operands' bits pass through an empty asm
  * after the op's switch and the result's bits before any later one. */
+#ifdef JIT_NEAREST
+#define JIT_FENCE(x) ((void)0)
+#else
 #define JIT_FENCE(x) __asm__ volatile("" : "+r"(x) :: "memory")
+#endif
+
+static inline unsigned jit_rmode(c66x_core *c, int unit, int side)
+{
+#ifdef JIT_NEAREST
+    return 0;
+#else
+    uint32_t r = (unit >= 6) ? c->cr[CR_FMCR] : c->cr[CR_FADCR];
+    return side == 2 ? (r >> 25) & 3 : (r >> 9) & 3;
+#endif
+}
 
 /* fop_run's F_ADDSP/F_SUBSP/F_MPYSP */
 static inline uint32_t jit_fop(c66x_core *c, int unit, int side, uint32_t a, uint32_t b, char op)
 {
-    uint32_t r = (unit >= 6) ? c->cr[CR_FMCR] : c->cr[CR_FADCR];
-    unsigned rm = side == 2 ? (r >> 25) & 3 : (r >> 9) & 3;
-    jit_round(c, rm); JIT_FENCE(a); JIT_FENCE(b);
+    jit_round(c, jit_rmode(c, unit, side)); JIT_FENCE(a); JIT_FENCE(b);
     float p, q, res;
     memcpy(&p, &a, 4);
     memcpy(&q, &b, 4);
@@ -2211,9 +2246,7 @@ static inline float jit_u2f(uint32_t v) { float f; memcpy(&f, &v, 4); return f; 
 /* exec_insn's H_DADDSP/H_DSUBSP/H_DMPYSP: the operation on each half of a pair */
 static inline uint64_t jit_dsp(c66x_core *c, int unit, int side, uint64_t a, uint64_t b, char op)
 {
-    uint32_t r = (unit >= 6) ? c->cr[CR_FMCR] : c->cr[CR_FADCR];
-    unsigned rm = side == 2 ? (r >> 25) & 3 : (r >> 9) & 3;
-    jit_round(c, rm); JIT_FENCE(a); JIT_FENCE(b);
+    jit_round(c, jit_rmode(c, unit, side)); JIT_FENCE(a); JIT_FENCE(b);
     uint32_t o[2];
     for (int k = 0; k < 2; k++) {
         float p = jit_u2f((uint32_t)(a >> (32 * k))), q = jit_u2f((uint32_t)(b >> (32 * k)));
@@ -2223,12 +2256,6 @@ static inline uint64_t jit_dsp(c66x_core *c, int unit, int side, uint64_t a, uin
     uint64_t v = ((uint64_t)o[1] << 32) | o[0];
     JIT_FENCE(v);
     return v;
-}
-
-static inline unsigned jit_rmode(c66x_core *c, int unit, int side)
-{
-    uint32_t r = (unit >= 6) ? c->cr[CR_FMCR] : c->cr[CR_FADCR];
-    return side == 2 ? (r >> 25) & 3 : (r >> 9) & 3;
 }
 
 static inline uint32_t jit_f2u(float f) { uint32_t v; memcpy(&v, &f, 4); return v; }
@@ -2631,7 +2658,7 @@ __attribute__((destructor)) static void jit_sites_dump(void)
 
 
 def main():
-    global WIDE_MEM
+    global WIDE_MEM, NEAREST
     ap = argparse.ArgumentParser()
     ap.add_argument("prof")
     ap.add_argument("out")
@@ -2650,6 +2677,9 @@ def main():
                          "requires --wide-mem, which every model's MODEL_DSP_GEN_ARGS passes)")
     ap.add_argument("--wide-mem", action="store_true",
                     help="combine paired RAM loads/stores (experimental; verify with an EXACT replay)")
+    ap.add_argument("--nearest", action="store_true",
+                    help="compile float ops for round-to-nearest only: the core enters the module only "
+                         "while FADCR and FMCR select it (a firmware that never sets a directed mode)")
     # 16-17 gcc at once (~0.8 GB each) beside a running deck hung the WSL VM (c16)
     ap.add_argument("--jobs", type=int, default=min(6, os.cpu_count() or 4), help="parallel gcc processes")
     ap.add_argument("--opt", default="2", help="gcc optimisation level")
@@ -2695,9 +2725,10 @@ def main():
                     help="the busy-wait head regions stop at (the machine's CDJ_C6X_IDLE, 0x80076F00)")
     a = ap.parse_args()
     WIDE_MEM = a.wide_mem
+    NEAREST = a.nearest
     if a.copy_burst and not WIDE_MEM:
         ap.error("--copy-burst requires --wide-mem")
-    prelude = PRELUDE + (WIDE_PRELUDE if WIDE_MEM else "")
+    prelude = ("#define JIT_NEAREST 1\n" if NEAREST else "") + PRELUDE + (WIDE_PRELUDE if WIDE_MEM else "")
     if a.copy_burst:
         prelude += open(os.path.join(os.path.dirname(__file__), "c14_copy_burst.h")).read()
     for path in a.only_file or []:
@@ -2942,6 +2973,8 @@ def main():
     main_parts.append("static const char *const jit_site_why[] = { %s };"
                       % ", ".join('"%s"' % w for p, w in sites or [(0, "")]))
     main_parts.append(SITES_DUMP % nsites)
+    if NEAREST:
+        main_parts.append('__attribute__((visibility("default"))) const uint32_t c66x_jit_nearest = 1;')
     main_parts.append('__attribute__((visibility("default"))) '
                       'const c66x_jit_module c66x_jit_exports = { C66X_JIT_ABI, %d, regions, %d, kernels, %d, regions0, '
                       '%d, loops, %d, qregions };' % (len(table), len(ktable), len(table0), len(ltable), len(qtable)))

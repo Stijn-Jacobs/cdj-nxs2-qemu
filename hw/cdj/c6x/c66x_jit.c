@@ -143,6 +143,8 @@ static int jit_load(c66x_core *c, const char *path)
         return -1;
     }
     j->mods[j->nmods++] = h;
+    if (g_module_symbol(h, "c66x_jit_nearest", &sym))
+        j->nearest = 1;
     for (uint32_t i = 0; i < m->nkernels && j->nkern < 1024; i++) {
         j->kern[j->nkern].k = &m->kernels[i];
         j->kern[j->nkern++].gen = 0;
@@ -673,6 +675,13 @@ static const char *jit_env(const char *name, const char *dflt)
 void jit_init(c66x_core *c)
 {
     c->api = &jit_api;
+#ifdef __EMSCRIPTEN__
+    /* A browser can neither dlopen a native module nor run the generator and
+     * a compiler: the wasm build runs the interpreter only. */
+    if ((getenv("C66X_JIT") && *getenv("C66X_JIT")) || (getenv("C66X_JIT_AUTO") && *getenv("C66X_JIT_AUTO")))
+        fprintf(stderr, "c66x: C66X_JIT and C66X_JIT_AUTO are ignored in a wasm build\n");
+    return;
+#endif
     const char *mods = getenv("C66X_JIT");
     if (mods && *mods) {
         char *list = strdup(mods);

@@ -278,7 +278,7 @@ static void cdj_pnl_summary(CdjPnlLinkState *s, void *extra)
 
     /* 0x0B06C77C: the reject path's saturating error counter.
      * 0x0B06C774 / 0x0B06C778: calibrated touch X / Y. */
-    cpu_physical_memory_read(0x0B06C778, err, sizeof(err));
+    physical_memory_read(0x0B06C778, err, sizeof(err));
     info_report("panel: PnlCom reject errors=%u (last touch y=%u)",
                 (unsigned)(err[4] | (err[5] << 8) | (err[6] << 16) | (err[7] << 24)),
                 (unsigned)(err[0] | (err[1] << 8)));

@@ -32,21 +32,6 @@ connection. The knob selects both patches (`usbmidi` and `usbmiditick` in
 `cdj2000nxs2/patch.py`); `python mods/patch_update.py C2KNXS2.UPD out.UPD
 usb_midi` writes both into a real update (firmware 1.87).
 
-**What is verified.** On the emulated deck, with the rear port read through
-the emulator's UDP relay (two runs with the mod on, two with it off, one deck):
-3614 and 7161 Timing Clocks, never more than one per USB transfer over 10777
-transfers, and a mean gap of 12.202 ms against 12.203 ms expected. The gap is
-quantised to whole milliseconds, so the spread is 0.43 ms; 98.7 and 99.0 % of
-the gaps are within 1 ms. Start, Stop and Continue went out once each in
-order, nothing was sent with the mod off, there was no E-8302 and the playhead
-kept moving. Over a pitch sweep (about -10 % to +10 %) the clock gap followed
-BPM x pitch within 0.5 %.
+Not tried on a real deck.
 
-**Not tried yet.** Everything above was counted at the relay, not by a MIDI
-client on the computer: the port has not been read through Windows' own MIDI
-stack (see [testing against the host](../../README.md#usb-midi-host)), and the
-jitter against the earlier build, which sent from the panel task, has not been
-measured. Nothing has run on a real deck, and the 1 ms hook adds code to a
-real-time interrupt whose cost on the hardware is unmeasured.
-
-Back to the [mods](../../README.md#mods).
+Back to the [mods](../../docs/mods.md).

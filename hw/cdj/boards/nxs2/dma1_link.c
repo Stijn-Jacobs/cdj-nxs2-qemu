@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "cdj.h"
 #include "cdj_getenv.h"
+#include "cdj_link_ring.h"
 /*
  * DMA1 (0xFDC08000) and the SPI link to the GUI processor.
  *
@@ -42,7 +43,7 @@ static inline int cdj_dma1_ch_of(hwaddr off)
 }
 
 typedef struct {
-    CharBackend chr;
+    CharFrontend chr;
     bool present;
     GByteArray *rx;
     uint64_t tx_frames;          /* frames pushed to the GUI over MSIOF1 */
@@ -177,6 +178,9 @@ void cdj_spilink_init(void)
 {
     Chardev *c = qemu_chr_find("spilink");
 
+    if (!c) {
+        c = cdj_link_ring_chardev("spilink");
+    }
     cdj_spilink.rx = g_byte_array_new();
     vmstate_register_any(NULL, &vmstate_cdj_spilink, &cdj_spilink);
     if (!c) {
@@ -369,9 +373,9 @@ void cdj_dma1_run(CdjDma1State *s, unsigned ch)
             g_autofree uint8_t *fr = g_malloc(bytes);
             uint32_t i, nz = 0, first = 0xFFFFFFFF;
 
-            /* sar is a P1/P2 virtual address; cpu_physical_memory_read needs
+            /* sar is a P1/P2 virtual address; physical_memory_read needs
              * the physical one, or it silently reads zeros. */
-            cpu_physical_memory_read(A7ADDR(sar), fr, bytes);
+            physical_memory_read(A7ADDR(sar), fr, bytes);
             for (i = 0; i < bytes; i++) {
                 if (fr[i]) {
                     if (first == 0xFFFFFFFF) {
@@ -417,8 +421,8 @@ void cdj_dma1_run(CdjDma1State *s, unsigned ch)
             if (n && n <= 1 * MiB) {
                 g_autofree uint8_t *buf = g_malloc(n);
 
-                cpu_physical_memory_read(A7ADDR(sar), buf, n);
-                cpu_physical_memory_write(A7ADDR(dar), buf, n);
+                physical_memory_read(A7ADDR(sar), buf, n);
+                physical_memory_write(A7ADDR(dar), buf, n);
                 /* CDJ_CAPTURE: ch3's destination is a fixed port, so the image
                  * only exists as a stream; <prefix>-dma1ch<n>.bin. */
                 {
@@ -484,7 +488,7 @@ void cdj_dma1_run(CdjDma1State *s, unsigned ch)
         g_autofree uint8_t *out = g_malloc((size_t)count * unit);
 
         while (count--) {
-            cpu_physical_memory_read(A7ADDR(sar), out + moved * unit, unit);
+            physical_memory_read(A7ADDR(sar), out + moved * unit, unit);
             if (sm == 1) {
                 sar += unit;
             }
@@ -512,7 +516,7 @@ void cdj_dma1_run(CdjDma1State *s, unsigned ch)
         in = g_malloc((size_t)count * unit);
         cdj_dsp_fill(in, count);
         while (count--) {
-            cpu_physical_memory_write(A7ADDR(dar), in + moved * unit, unit);
+            physical_memory_write(A7ADDR(dar), in + moved * unit, unit);
             if (dm == 1) {
                 dar += unit;
             }
@@ -538,7 +542,7 @@ void cdj_dma1_run(CdjDma1State *s, unsigned ch)
         }
 
         while (count--) {
-            cpu_physical_memory_read(A7ADDR(sar), out + moved * unit, unit);
+            physical_memory_read(A7ADDR(sar), out + moved * unit, unit);
             if (sm == 1) {
                 sar += unit;
             }
@@ -833,7 +837,7 @@ void cdj_dma1_run(CdjDma1State *s, unsigned ch)
 
             memcpy(elem, cdj_spilink.rx->data + moved * unit, unit);
             cdj_spilink_swap(elem, 1, unit);
-            cpu_physical_memory_write(A7ADDR(dar), elem, unit);
+            physical_memory_write(A7ADDR(dar), elem, unit);
             if (dm == 1) {
                 dar += unit;
             }
@@ -847,8 +851,8 @@ void cdj_dma1_run(CdjDma1State *s, unsigned ch)
     while (count--) {
         uint8_t buf[16];
 
-        cpu_physical_memory_read(A7ADDR(sar), buf, unit);
-        cpu_physical_memory_write(A7ADDR(dar), buf, unit);
+        physical_memory_read(A7ADDR(sar), buf, unit);
+        physical_memory_write(A7ADDR(dar), buf, unit);
         if (sm == 1) {
             sar += unit;
         }
@@ -890,7 +894,7 @@ done:
             uint8_t peek[32];
             unsigned i;
 
-            cpu_physical_memory_read(A7ADDR(at), peek, sizeof(peek));
+            physical_memory_read(A7ADDR(at), peek, sizeof(peek));
             for (i = 0; i < sizeof(peek); i++) {
                 snprintf(line + i * 3, 4, "%02x ", peek[i]);
             }

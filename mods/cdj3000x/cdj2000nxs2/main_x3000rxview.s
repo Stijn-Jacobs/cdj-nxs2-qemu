@@ -98,12 +98,19 @@
 ! short of the 10 s, so the display has the new position a few seconds later.
 ! An N of 0 leaves the stock "no wave" path to the framework.
 !
-! Type 0x30 is the track length ([min][sec][ms u16], the 3000X's time format),
-! and the control report already carries it. The NXS2's arm for type 0x30 reads
-! the same bytes as the first of 8 hot cue slots, 10 bytes each, whose flag byte
-! (the fifth) says the slot is used: the length would become that slot's
-! position with the flag clear, and the arm would clear the 8 hot cue slots on
-! every load. It is retyped 0x3F instead.
+! The memory cues and loops (0x2d) are the track length ([min][sec][ms u16]),
+! a count and up to ten records. A 3000X's record is six bytes: the kind (1 a
+! memory cue, 2 and 3 the others; any other is skipped), a colour 1-8 (any
+! other shows red, 2), minutes, seconds and ms u16. The NXS2's arm 0x084FAE5E
+! takes the same header and five-byte records, bit 7 of the first byte set
+! for anything but a memory cue and the colour in the rest, and its converter
+! 0x084D6A52 reads at most the first ten. A count of 0 or above ten is an
+! empty list on the 3000X. The records are rewritten in that form in the stock
+! view, the count to the records kept and the rest of the ten zero.
+!
+! The hot cues (0x30) need nothing: the length and eight six-byte slots (kind,
+! colour 0-64 on the same hue wheel, minutes, seconds, ms u16) are the layout
+! the NXS2's own arm reads, and they reach it as they come.
 !
 ! r4 = the saved r0-r7, r5 at offset 20. r0-r7 are free; r8-r11 are saved.
 
@@ -235,6 +242,70 @@ control:
 	bra	done
 	nop
 
+	! r2 the records left, r3 those kept, r4 the 3000X record, r6 the NXS2 one
+markers:
+	mov.l	p_stock,r6
+	add	#11,r6
+	mov	r10,r4
+	add	#11,r4
+	mov.b	@(10,r10),r0
+	extu.b	r0,r2
+	mov	r2,r0
+	add	#-1,r0
+	mov	#10,r1
+	cmp/hs	r1,r0
+	bf	1f
+	mov	#0,r2
+1:	mov	#0,r3
+2:	tst	r2,r2
+	bt	5f
+	add	#-1,r2
+	mov.b	@r4,r0
+	extu.b	r0,r5
+	mov.b	@(1,r4),r0
+	extu.b	r0,r7
+	add	#-1,r5
+	mov	#3,r1
+	cmp/hs	r1,r5
+	bt/s	2b
+	add	#6,r4
+	mov	r7,r0
+	add	#-1,r0
+	mov	#8,r1
+	cmp/hs	r1,r0
+	bf	3f
+	mov	#2,r7
+3:	tst	r5,r5
+	bt/s	4f
+	mov	r7,r0
+	or	#0x80,r0
+4:	mov.b	r0,@r6
+	mov	r4,r1
+	add	#-4,r1
+	mov.b	@r1+,r0
+	mov.b	r0,@(1,r6)
+	mov.b	@r1+,r0
+	mov.b	r0,@(2,r6)
+	mov.b	@r1+,r0
+	mov.b	r0,@(3,r6)
+	mov.b	@r1,r0
+	mov.b	r0,@(4,r6)
+	add	#5,r6
+	bra	2b
+	add	#1,r3
+5:	mov.l	p_stock,r1
+	mov	r3,r0
+	mov.b	r0,@(10,r1)
+	add	#11 + 10 * 5,r1
+	mov	#0,r0
+6:	cmp/hs	r1,r6
+	bt	7f
+	mov.b	r0,@r6
+	bra	6b
+	add	#1,r6
+7:	bra	done
+	nop
+
 	! the waveform types, r0 the type
 waves:
 	cmp/eq	#0x2c,r0
@@ -245,8 +316,8 @@ waves:
 	bt	detail
 	cmp/eq	#0x36,r0
 	bt	window
-	cmp/eq	#0x30,r0
-	bt	consumed
+	cmp/eq	#0x2d,r0
+	bt	markers
 stock:
 	bra	done
 	nop

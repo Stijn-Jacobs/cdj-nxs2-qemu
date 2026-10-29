@@ -1,14 +1,14 @@
 diff --git a/hw/timer/sh_timer.c b/hw/timer/sh_timer.c
-index 7788939..0876372 100644
+index 41ece9c..180f8ab 100644
 --- a/hw/timer/sh_timer.c
 +++ b/hw/timer/sh_timer.c
 @@ -15,7 +15,9 @@
  #include "hw/sh4/sh.h"
  #include "hw/timer/tmu012.h"
- #include "hw/ptimer.h"
+ #include "hw/core/ptimer.h"
 +#include "migration/vmstate.h"
  #include "trace.h"
-+#include "sysemu/reset.h"
++#include "system/reset.h"
  
  #define TIMER_TCR_TPSC          (7 << 0)
  #define TIMER_TCR_CKEG          (3 << 3)

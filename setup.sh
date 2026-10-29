@@ -11,7 +11,7 @@
 #
 #   1 prerequisites   compilers, libraries and Python packages, with the exact
 #                     pacman / apt / brew command for whatever is missing
-#   2 build           QEMU 9.1.0 fetched and patched, the MAIN and display-board
+#   2 build           QEMU 11.1.2 fetched and patched, the MAIN and display-board
 #                     emulators, the DSP core library (logs in logs/)
 #   3 firmware        your own C2KNXS2.UPD (v1.87) turned into the images the
 #                     emulator boots, each checked against a known SHA-256

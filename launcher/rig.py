@@ -27,7 +27,7 @@ TAP_HOST_IP = "192.168.50.1"
 def default_audiodev():
     k = host.kind()
     if k == host.WINDOWS:
-        # QEMU 9.1 has no WASAPI audiodev, but SDL2's Windows backend is WASAPI.
+        # QEMU has no WASAPI audiodev, but SDL2's Windows backend is WASAPI.
         return "sdl,out.buffer-length=200000,timer-period=5000"
     if k == host.MACOS:
         # Core Audio's buffer-length is per buffer, times buffer-count, not the

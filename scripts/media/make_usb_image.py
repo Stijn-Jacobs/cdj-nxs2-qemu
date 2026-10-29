@@ -35,6 +35,7 @@ pf.close()
 fs = PyFatFS(part, preserve_case=True)
 n = 0
 for root, dirs, files in os.walk(src):
+    dirs.sort()
     rel = os.path.relpath(root, src).replace(os.sep, '/')
     base = '/' if rel == '.' else '/' + rel
     for d in sorted(dirs):

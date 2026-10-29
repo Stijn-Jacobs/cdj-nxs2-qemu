@@ -51,7 +51,7 @@ static void cdj_audio_drain_tick(void *opaque)
     CdjAudioDrain *d = opaque;
     uint32_t level, out;
 
-    cpu_physical_memory_read(A7ADDR(d->addr), &level, sizeof(level));
+    physical_memory_read(A7ADDR(d->addr), &level, sizeof(level));
     level = le32_to_cpu(level);
     /*
      * 0xFFFFFFFF is the firmware's "not filled in yet" marker; e.g. 0x08496898
@@ -67,14 +67,14 @@ static void cdj_audio_drain_tick(void *opaque)
     if (d->per_ship && d->cap && level > d->cap) {
         level = d->cap;
         out = cpu_to_le32(level);
-        cpu_physical_memory_write(A7ADDR(d->addr), &out, sizeof(out));
+        physical_memory_write(A7ADDR(d->addr), &out, sizeof(out));
     }
     if (level > d->floor) {
         uint32_t sub = d->per_tick;
 
         level = (level > d->floor + sub) ? level - sub : d->floor;
         out = cpu_to_le32(level);
-        cpu_physical_memory_write(A7ADDR(d->addr), &out, sizeof(out));
+        physical_memory_write(A7ADDR(d->addr), &out, sizeof(out));
         d->drained += sub;
     }
     d->ticks++;
@@ -139,7 +139,7 @@ static void cdj_dsp_engine_gate_tick(void)
     if (!cdj_dsp_eng.gate_on) {
         return;
     }
-    cpu_physical_memory_read(A7ADDR(cdj_dsp_eng.gate_addr), &v, sizeof(v));
+    physical_memory_read(A7ADDR(cdj_dsp_eng.gate_addr), &v, sizeof(v));
     v = le32_to_cpu(v);
     pass = (v & cdj_dsp_eng.gate_mask) == cdj_dsp_eng.gate_val;
     if (pass) {
@@ -238,11 +238,11 @@ static int cdj_jog_state(void)
     uint32_t v = 0;
     int st = 0;
 
-    cpu_physical_memory_read(A7ADDR(cdj_dsp_eng.jog_mov_addr), &v, sizeof(v));
+    physical_memory_read(A7ADDR(cdj_dsp_eng.jog_mov_addr), &v, sizeof(v));
     st |= le32_to_cpu(v) ? 1 : 0;
-    cpu_physical_memory_read(A7ADDR(cdj_dsp_eng.jog_fwd_addr), &v, sizeof(v));
+    physical_memory_read(A7ADDR(cdj_dsp_eng.jog_fwd_addr), &v, sizeof(v));
     st |= le32_to_cpu(v) ? 2 : 0;
-    cpu_physical_memory_read(A7ADDR(cdj_dsp_eng.jog_touch_addr), &v, sizeof(v));
+    physical_memory_read(A7ADDR(cdj_dsp_eng.jog_touch_addr), &v, sizeof(v));
     st |= le32_to_cpu(v) ? 4 : 0;
     return st;
 }
@@ -304,15 +304,15 @@ static void cdj_dsp_engine_publish(void *opaque)
     v = cpu_to_le32((uint32_t)(pos * 3 / 20));   /* ms -> 1/150 s */
 
     if (cdj_dsp_eng.raw) {
-        cpu_physical_memory_write(A7ADDR(cdj_dsp_eng.pos_addr), &v, sizeof(v));
+        physical_memory_write(A7ADDR(cdj_dsp_eng.pos_addr), &v, sizeof(v));
     } else {
         uint32_t base = cdj_dsp_eng.pos_addr;
 
-        cpu_physical_memory_write(A7ADDR(base + CDJ_DSP_ENG_POS_OFF),
+        physical_memory_write(A7ADDR(base + CDJ_DSP_ENG_POS_OFF),
                                   &v, sizeof(v));
-        cpu_physical_memory_write(A7ADDR(base + CDJ_DSP_ENG_POS_ALT),
+        physical_memory_write(A7ADDR(base + CDJ_DSP_ENG_POS_ALT),
                                   &v, sizeof(v));
-        cpu_physical_memory_write(A7ADDR(base + CDJ_DSP_ENG_POS_ALT2),
+        physical_memory_write(A7ADDR(base + CDJ_DSP_ENG_POS_ALT2),
                                   &v, sizeof(v));
     }
     cdj_dsp_eng.published++;
@@ -707,7 +707,7 @@ void cdj_audio_queue_ship(unsigned ch)
         if (!d->per_ship) {
             continue;                     /* pure-drain spec: old behaviour */
         }
-        cpu_physical_memory_read(A7ADDR(d->addr), &level, sizeof(level));
+        physical_memory_read(A7ADDR(d->addr), &level, sizeof(level));
         level = le32_to_cpu(level);
         if (level == 0xFFFFFFFFu) {
             continue;      /* the firmware's unset sentinel -- never touch it */
@@ -717,7 +717,7 @@ void cdj_audio_queue_ship(unsigned ch)
             level = d->cap;               /* a queue has a depth */
         }
         out = cpu_to_le32(level);
-        cpu_physical_memory_write(A7ADDR(d->addr), &out, sizeof(out));
+        physical_memory_write(A7ADDR(d->addr), &out, sizeof(out));
         d->filled += d->per_ship;
         d->ships++;
     }

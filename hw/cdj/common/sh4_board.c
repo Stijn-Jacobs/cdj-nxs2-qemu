@@ -158,7 +158,7 @@ void cdj_board_load(MachineState *machine)
         /* The reset vector, P2 0xA0000000, is the first word of the flash.
          * Erased there means an image built without the bootloader, and the
          * CPU would run 0xFFFF opcodes. */
-        cpu_physical_memory_read(d->flash_phys, &reset_insn, sizeof(reset_insn));
+        physical_memory_read(d->flash_phys, &reset_insn, sizeof(reset_insn));
         if (reset_insn == 0xFFFF) {
             error_report("%s: the NOR flash holds no bootloader; build it with "
                          "make_flash.py from the firmware update, or pass "
@@ -171,7 +171,7 @@ void cdj_board_load(MachineState *machine)
     } else {
         /* Flat binary, not an ELF. */
         fwsize = load_image_targphys(machine->kernel_filename,
-                                     d->dram_phys, d->dram_size);
+                                     d->dram_phys, d->dram_size, NULL);
         if (fwsize < 0) {
             error_report("%s: cannot load '%s'", d->name,
                          machine->kernel_filename);
@@ -193,7 +193,7 @@ void cdj_board_load(MachineState *machine)
     if (sr_seed_slot) {
         uint32_t sr_seed = cpu_to_le32(d->sr_seed);
 
-        cpu_physical_memory_write(sr_seed_slot, &sr_seed, sizeof(sr_seed));
+        physical_memory_write(sr_seed_slot, &sr_seed, sizeof(sr_seed));
     }
 }
 

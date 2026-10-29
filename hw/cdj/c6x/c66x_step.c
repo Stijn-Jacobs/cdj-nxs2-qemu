@@ -299,7 +299,7 @@ static int fast_cycles(c66x_core *c, uint64_t end, c66x_stop *stop)
                 /* A SPLOOP whose whole invocation is compiled: the general
                  * loop would otherwise run its loading, ramp and drain. */
                 if (!c->jit || !c->jit->nloops || c->nbr || c->idle_ret_pending
-                    || (c->cr[CR_TSR] & TSR_SPLX) || (pe->xmask & c->wmask))
+                    || (c->cr[CR_TSR] & TSR_SPLX) || (pe->xmask & c->wmask) || !jit_mode_ok(c))
                     return FAST_HANDOFF;
                 const c66x_jit_loop *lp = jit_loop_lookup(c, pc);
                 if (!lp)
@@ -324,7 +324,7 @@ static int fast_cycles(c66x_core *c, uint64_t end, c66x_stop *stop)
             }
             if (c->jit) {
                 const pkc_aux *px = &c->pkx[PKC_SLOT(pc)];
-                if (!c->nbr && !c->idle_ret_pending && (px->region || px->region0)) {
+                if (!c->nbr && !c->idle_ret_pending && (px->region || px->region0) && jit_mode_ok(c)) {
                     uint64_t at = c->cycle;
                     if (px->region0 && !c->imm_n && jit_wq_empty(c)) {
                         c->jit->entries0++;
@@ -339,7 +339,8 @@ static int fast_cycles(c66x_core *c, uint64_t end, c66x_stop *stop)
                     continue;
                 }
                 if (c->nbr == 1 && px->qregion && !c->idle_ret_pending
-                    && c->br[0].remaining == px->qregion->rem && c->br[0].target == px->qregion->target) {
+                    && c->br[0].remaining == px->qregion->rem && c->br[0].target == px->qregion->target
+                    && jit_mode_ok(c)) {
                     uint64_t at = c->cycle;
                     c->jit->qentries++;
                     px->qregion->r.fn(c, end);
@@ -474,7 +475,7 @@ static int spl_fast_cycles(c66x_core *c, uint64_t end, c66x_stop *stop)
          * starts running beside the buffer. */
         if (s->kregion && s->kregion->drain_fn && s->terminated && !s->int_drain && !s->abrupt
             && !s->initial_term && c->mcnop == 0 && !c->nbr && k > (uint64_t)s->last_iter
-            && k - (uint64_t)s->last_iter < nstage) {
+            && k - (uint64_t)s->last_iter < nstage && jit_mode_ok(c)) {
             uint64_t lim = end;
             uint64_t pm = c->pm_resume_at, fd = s->drain_start + (uint64_t)s->fetch_delay;
             if (pm > c->cycle && pm < lim)
@@ -491,7 +492,8 @@ static int spl_fast_cycles(c66x_core *c, uint64_t end, c66x_stop *stop)
                 return FAST_BUDGET;
             }
         }
-        if (s->kregion && k >= nstage && k <= (uint64_t)s->last_iter && c->mcnop == 0 && c->cycle - s->t0 >= 3) {
+        if (s->kregion && k >= nstage && k <= (uint64_t)s->last_iter && c->mcnop == 0 && c->cycle - s->t0 >= 3
+            && jit_mode_ok(c)) {
             /* the compiled kernel, from this offset; it returns before a commit */
             uint64_t at = c->cycle;
             c->jit->kentries++;

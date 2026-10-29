@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """What the XDJ-700's mods share: the shape of its MAIN image (v1.15)."""
+from dsppatch import DspProfile
 from sigpatch import Cave, ImageProfile
 
 from players import cdj2000nxs2
@@ -20,3 +21,11 @@ MAIN_PROFILE = ImageProfile(
 # The firmware stores its own MAC with the same routine as the CDJ-2000NXS2, so
 # the NXS2's anchor finds this image's MAC buffer (launcher/sites.py).
 LAUNCHER = dict(own_mac=cdj2000nxs2.LAUNCHER['own_mac'])
+
+# The DSP program MAIN copies to the C6747's SDRAM at 0xC0000000 (0x5F4C0 bytes
+# at 0xE770 of the unpacked image), found by its first eight words. The run of
+# 0xFF at 0xC0051E00 is erased and the program does not point into the part of it a mod may use.
+DSP_PROFILE = DspProfile(
+    load=0xC0000000, length=0x5F4C0,
+    head=(0x000ED02A, 0x0008C06A, 0x00000362, 0x004003E2, 0x028003A2, 0x0C6E4C6E, 0x0C6E0C6E, 0xEC000000),
+    free=(0xC0051E00, 0xC0058000))

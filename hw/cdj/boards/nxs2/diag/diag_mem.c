@@ -30,7 +30,7 @@ static void cdj_dirty_tick(void *opaque)
 {
     uint8_t one = 1;
 
-    cpu_physical_memory_write(CDJ_DIRTY_FLAG_ADDR, &one, 1);
+    physical_memory_write(CDJ_DIRTY_FLAG_ADDR, &one, 1);
     cdj_dirty_writes++;
     timer_mod(cdj_dirty_timer,
               qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + cdj_dirty_ms() * 1000000);

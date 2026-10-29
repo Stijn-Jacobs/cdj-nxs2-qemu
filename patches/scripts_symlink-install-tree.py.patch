@@ -1,5 +1,5 @@
 diff --git a/scripts/symlink-install-tree.py b/scripts/symlink-install-tree.py
-index 8ed97e3..be9b40d 100644
+index b725638..144ff71 100644
 --- a/scripts/symlink-install-tree.py
 +++ b/scripts/symlink-install-tree.py
 @@ -4,6 +4,7 @@
@@ -7,10 +7,10 @@ index 8ed97e3..be9b40d 100644
  import json
  import os
 +import shutil
+ import shlex
  import subprocess
  import sys
- 
-@@ -27,9 +28,20 @@ def destdir_join(d1: str, d2: str) -> str:
+@@ -28,9 +29,20 @@ def destdir_join(d1: str, d2: str) -> str:
      try:
          os.symlink(source, bundle_dest)
      except BaseException as e:

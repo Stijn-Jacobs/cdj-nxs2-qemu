@@ -3,7 +3,7 @@
 #include "cdj_getenv.h"
 #include "usb_r8a66597.h"
 #include "qemu/timer.h"
-#include "hw/usb.h"
+#include "hw/usb/usb.h"
 /*
  * Renesas R8A66597-family USB host controller, in the SH7724 (0xA4D80000) and
  * the SH7763 (0xFE400000). QEMU has no model for it, so
@@ -836,7 +836,7 @@ static const VMStateDescription vmstate_cdj_usb = {
     }
 };
 
-static void cdj_usb_class_init(ObjectClass *klass, void *data)
+static void cdj_usb_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 

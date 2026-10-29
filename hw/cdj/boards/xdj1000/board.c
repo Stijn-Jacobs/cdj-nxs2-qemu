@@ -8,7 +8,7 @@
 #include "cdj_pnl_touch.h"
 #include "cdj_pnl_stateout.h"
 #include "cdj_gui_keys.h"
-#include "hw/char/serial.h"
+#include "hw/char/serial-mm.h"
 /*
  * Pioneer XDJ-1000 MAIN board (Renesas SH7724), in bring-up.
  *

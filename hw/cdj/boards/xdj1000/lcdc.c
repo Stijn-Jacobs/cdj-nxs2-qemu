@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "xdj1000.h"
 #include "qemu/timer.h"
-#include "hw/irq.h"
-#include "exec/cpu-common.h"
+#include "hw/core/irq.h"
+#include "system/physmem.h"
 #include "ui/console.h"
 /*
  * The SH7724 LCD controller at 0xFE940000. The registers keep what is
@@ -93,7 +93,7 @@ static void lcdc_write(void *opaque, hwaddr off, uint64_t val, unsigned size)
     }
 }
 
-static void lcdc_gfx_update(void *opaque)
+static bool lcdc_gfx_update(void *opaque)
 {
     XdjLcdc *s = opaque;
     uint32_t *dst = surface_data(qemu_console_surface(s->con));
@@ -103,10 +103,10 @@ static void lcdc_gfx_update(void *opaque)
     uint16_t line[LCD_W];
 
     if (!(s->reg[LDCNTR] & LDCNTR_DON)) {
-        return;
+        return true;
     }
     for (unsigned y = 0; y < LCD_H; y++) {
-        cpu_physical_memory_read(base + y * stride, line, sizeof(line));
+        physical_memory_read(base + y * stride, line, sizeof(line));
         for (unsigned x = 0; x < LCD_W; x++) {
             uint16_t p = le16_to_cpu(line[x]);
 
@@ -115,7 +115,8 @@ static void lcdc_gfx_update(void *opaque)
                                  (p & 31) * 255 / 31;
         }
     }
-    dpy_gfx_update_full(s->con);
+    qemu_console_update_full(s->con);
+    return true;
 }
 
 static const GraphicHwOps lcdc_gfx_ops = {
@@ -151,7 +152,7 @@ void xdj1000_lcdc_init(MemoryRegion *sysmem, qemu_irq irq)
     s->frame_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, lcdc_frame, s);
     timer_mod(s->frame_timer,
               qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + FRAME_PERIOD_NS);
-    s->con = graphic_console_init(NULL, 0, &lcdc_gfx_ops, s);
+    s->con = qemu_graphic_console_create(NULL, 0, &lcdc_gfx_ops, s);
     qemu_console_resize(s->con, LCD_W, LCD_H);
     vmstate_register_any(NULL, &vmstate_lcdc, s);
 }

@@ -30,7 +30,12 @@ bool cdj_c6x_on(void)
 
 static uint64_t cdj_c6x_thread_cpu_ns(void)
 {
-#ifdef CLOCK_THREAD_CPUTIME_ID
+#if defined(__EMSCRIPTEN__)
+    /* No per-thread CPU clock in a browser (the call fails and every CPU-time
+     * stat would read 0); wall time overstates it by the thread's waits. The
+     * governor steers on wall time and does not read this. */
+    return get_clock_realtime();
+#elif defined(CLOCK_THREAD_CPUTIME_ID)
     struct timespec ts;
 
     if (!clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts)) {
@@ -890,7 +895,7 @@ void cdj_c6x_upp_ship(uint32_t sar, uint32_t bytes)
         return;
     }
     buf = g_malloc(bytes);
-    cpu_physical_memory_read(A7ADDR(sar), buf, bytes);
+    physical_memory_read(A7ADDR(sar), buf, bytes);
     /*
      * Delivered at DMA completion, not queued behind the DSP thread: MAIN's
      * next request (the 0x40/0x18 record arm) must not reach a DSP that has
@@ -1031,7 +1036,7 @@ bool cdj_c6x_link_rx(CdjDma1State *s, unsigned ch, uint32_t dar,
         }
         c->rx_head = (c->rx_head + 1) % C6X_RXQ;
         c->rx_len--;
-        cpu_physical_memory_write(A7ADDR(dar), le, 2);
+        physical_memory_write(A7ADDR(dar), le, 2);
         if (dm == 1) {
             dar += 2;
         }
@@ -1266,7 +1271,7 @@ bool cdj_c6x_link_tx(CdjDma1State *s, unsigned ch, uint32_t sar,
     for (uint32_t i = 0; i < count; i++) {
         uint8_t le[2];
 
-        cpu_physical_memory_read(A7ADDR(sar), le, 2);
+        physical_memory_read(A7ADDR(sar), le, 2);
         if (i < C6X_TXWORDS) {
             c->txf[slot][i] = le[0] | le[1] << 8;
         }
@@ -1468,12 +1473,12 @@ static void cdj_c6x_report(const char *why)
             uint32_t up = 0, frames = 0, st1 = 0, lvl = 0, stat = 0;
             uint16_t ver[2] = { 0, 0 };
 
-            cpu_physical_memory_read(0x0995A138, &up, 4);
-            cpu_physical_memory_read(0x09959F20, &frames, 4);
-            cpu_physical_memory_read(0x0A35F71C, &st1, 4);
-            cpu_physical_memory_read(0x09944170, &lvl, 4);
-            cpu_physical_memory_read(0x09944168, &stat, 4);
-            cpu_physical_memory_read(0x10DBFC7C, ver, 4);
+            physical_memory_read(0x0995A138, &up, 4);
+            physical_memory_read(0x09959F20, &frames, 4);
+            physical_memory_read(0x0A35F71C, &st1, 4);
+            physical_memory_read(0x09944170, &lvl, 4);
+            physical_memory_read(0x09944168, &stat, 4);
+            physical_memory_read(0x10DBFC7C, ver, 4);
             info_report("c6x[%s]: MAIN: link up %u, frames %u, DSP registrar st[1] "
                         "%u, version 0x%04x.%04x, status 0x150 0x%08x, level 0x158 "
                         "0x%08x", why, up, frames, st1, ver[0], ver[1], stat, lvl);
@@ -2093,10 +2098,9 @@ static int cdj_c6x_pre_save(void *opaque)
     return 0;
 }
 
-static int cdj_c6x_post_save(void *opaque)
+static void cdj_c6x_post_save(void *opaque)
 {
     qemu_mutex_unlock(&((CdjC6x *)opaque)->run_lock);
-    return 0;
 }
 
 static int cdj_c6x_post_load(void *opaque, int version_id)

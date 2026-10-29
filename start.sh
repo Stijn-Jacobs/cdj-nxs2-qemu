@@ -10,7 +10,9 @@
 #          ./start.sh --app      start with the virtual deck app as the window
 #                                  (every player that has a face in app/faces/; a player
 #                                  without one keeps its plain window)
-#          ./start.sh stop        stop a running rig from another shell
+#          ./start.sh --web [lan] serve the deck as a web page as well (this PC,
+#                                  or with lan its LAN address and a key in the URL)
+#          ./start.sh stop       stop a running rig from another shell
 #          ./start.sh --dry-run   show what would be started
 #   env:   every knob of scripts/run/rig.sh still works (AUDIODEV=, NOSOUND=1,
 #          GUI_DISPLAY=, PRIO=, TBFAST=0, ...).

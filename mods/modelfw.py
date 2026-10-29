@@ -101,6 +101,15 @@ def player(model):
     return importlib.import_module('players.' + model)
 
 
+def dsp_profile(model):
+    """Where MAIN of `model` carries its DSP program (dsppatch.DspProfile), or
+    None for a player this is not known for."""
+    try:
+        return getattr(player(model), 'DSP_PROFILE', None)
+    except ModuleNotFoundError:
+        return None
+
+
 @functools.lru_cache(maxsize=None)
 def mod_patch(mod, model):
     """The routines `mod` patches into `model`: mods/<mod>/<model>/patch.py."""

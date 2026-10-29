@@ -64,6 +64,7 @@ def test_check_spec_fills_in_the_defaults():
     assert spec["device_name"] == "TESTSTICK"
     assert spec["playlist"] == "Test stick"
     assert spec["tracks"][0]["key"] == ""
+    assert spec["bitrate"] == spec["tracks"][0]["bitrate"] == 320
 
 
 @pytest.mark.parametrize("spec", [
@@ -83,6 +84,11 @@ def test_check_spec_fills_in_the_defaults():
     {"tracks": [_track(memory_cues=[[2, 0.5]])]},
     {"tracks": [_track(hot_cues=list(range(1, 10)))]},  # 9 hot cues, A-H is 8
     {"tracks": [_track(hot_cues=3)]},
+    {"bitrate": 100, "tracks": [_track()]},          # not one of LAME's rates
+    {"bitrate": "128", "tracks": [_track()]},
+    {"bitrate": True, "tracks": [_track()]},
+    {"tracks": [_track(tone=10)]},
+    {"tracks": [_track(tone=30000)]},
 ], ids=lambda s: json.dumps(s)[:60])
 def test_check_spec_refuses_what_cannot_be_built(spec):
     with pytest.raises(mts.SpecError):
@@ -179,6 +185,31 @@ def test_ffmpeg_argv_tags_the_track_and_picks_the_codec_by_extension():
     assert "TKEY=" not in " ".join(mts.ffmpeg_argv(_track(key=""), "/x/b.mp3"))
 
 
+def test_ffmpeg_argv_encodes_at_the_specs_bitrate_and_320_by_default():
+    def rate(spec):
+        argv = mts.ffmpeg_argv(mts.check_spec(spec)["tracks"][0], "/x/a.mp3")
+        return argv[argv.index("-b:a") + 1]
+    assert rate({"tracks": [_track()]}) == "320k"
+    assert rate({"bitrate": 128, "tracks": [_track()]}) == "128k"
+
+
+def test_the_bitrate_option_overrides_the_spec_and_a_bad_one_is_refused(tmp_path, monkeypatch, capsys):
+    fake, record = _fake_baken(tmp_path)
+    rendered = []
+    monkeypatch.setattr(mts, "render_audio", lambda track, path: rendered.append(track["bitrate"]) or _fake_render(track, path))
+    monkeypatch.setattr(mts, "have_ffmpeg", lambda: True)
+    pytest.importorskip("pyfatfs")
+    spec = tmp_path / "spec.json"
+    spec.write_text(json.dumps({"bitrate": 192, "tracks": [_track()]}))
+    args = ["--spec", str(spec), "--out", str(tmp_path / "w"), "--image", str(tmp_path / "s.img"),
+            "--baken", str(fake), "--size-mb", "32"]
+    assert mts.main(args) == 0
+    assert mts.main(args + ["--bitrate", "128"]) == 0
+    assert rendered == [192, 128]
+    assert mts.main(args + ["--bitrate", "100"]) == 2
+    assert "bitrate" in capsys.readouterr().err
+
+
 def _goertzel(x, freq):
     import numpy as np
     n = np.arange(len(x))
@@ -225,6 +256,21 @@ def test_rendered_audio_puts_every_beat_on_its_sample(tmp_path):
             assert tone > 0.02, "beat %d starts a phrase but has no tone" % k
         else:
             assert tone < 0.01, "beat %d does not start a phrase but has a tone" % k
+
+
+@pytest.mark.skipif(not FFMPEG, reason="no ffmpeg on PATH")
+def test_a_tone_sounds_steadily_from_the_first_downbeat(tmp_path):
+    np = pytest.importorskip("numpy")
+    t = mts.check_spec({"tracks": [_track(bpm=120.0, first_downbeat=0.5, bars=2, tone=440)]})["tracks"][0]
+    path = str(tmp_path / "tone.wav")
+    assert mts.run(mts.ffmpeg_argv(t, path), "ffmpeg")
+    with wave.open(path) as w:
+        x = np.frombuffer(w.readframes(w.getnframes()), dtype="<i2").reshape(-1, 2)[:, 0] / 32768.0
+    assert np.abs(x[:int(0.5 * mts.RATE)]).max() == 0.0
+    # Between beats (the kick has died away), the tone alone is left.
+    for at in (0.9, 1.9, 2.9):
+        part = x[int(at * mts.RATE):int((at + 0.05) * mts.RATE)]
+        assert _goertzel(part, 440) > 0.03, "no 440 Hz tone at %.1f s" % at
 
 
 def _fake_baken(tmp_path):

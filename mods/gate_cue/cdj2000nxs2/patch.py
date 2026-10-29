@@ -2,6 +2,7 @@
 """gate_cue on the CDJ-2000NXS2's MAIN 1.87: a hook on the hot cue recall that
 notes a pad pressed while the deck is paused, and a hook on the Player's pad
 pass that sends the deck back to that cue and pauses it when the pad is let go."""
+from players.cdj2000nxs2 import PAD_MODES, PADS
 from sigpatch import Anchor, FreeEnd, Mod
 
 # The hot cue recall 0x08435384 (r4 = the Player slot), at its entry: the
@@ -12,19 +13,6 @@ RECALL_ENTRY = dict(
          0x6BD3, 0x6262, 0x2228, 0x8D02, 0x6ED3],
     start=0,
     end=6,
-)
-
-# The pad pass's mode switch 0x08442D96, at its entry: the pushes of r8-r14
-# and pr. The pad pass 0x08443050 calls it on every Player pass, after the
-# queue of pad edges is built. The span has to take the pr push with it: the
-# trampoline returns through pr, so a push left after the span saves the
-# trampoline's way back instead of the caller's, and the switch's rts then
-# loops on itself.
-PAD_MODES = dict(
-    sig=[0x2F86, 0x2F96, 0x2FA6, 0x2FB6, 0x2FC6, 0x2FD6, 0x2FE6, 0x4F22, 0x4F12, 0xD60C,
-         0x6062, 0x8802, 0x892B, 0x8801, 0x895E],
-    start=0,
-    end=8,
 )
 
 # The CUE key's return to the main cue, 0x084337EE after its checks: a flag
@@ -52,12 +40,6 @@ PAUSED = (0x0B058C10, Anchor(index=3, literal=True, **STOP_STATE))
 # stopped at a cue.
 PLAYER_STATE = (0x0B058BFC, Anchor(sig=[0xD27D, 0x000B, 0x2242, 0xE209, 0x3423, 0x8901, 0xD27B, 0x2242],
                                    index=0, literal=True))
-
-# The pad words of the deck's own panel in the Player key bank, one per slot
-# from slot 0 (source 0 of 0x0B056C90, at +0x24C), as the pad test 0x08442CDA
-# loads them.
-PADS = (0x0B056EDC, Anchor(sig=[0xD644, 0xE504, 0x7604, 0x6262, 0x2228, 0x8B07, 0x5261], index=0,
-                           literal=True))
 
 # The slot the gate is armed with, between the press and the release.
 ARMED = (0x081FFFF8, FreeEnd(-8))

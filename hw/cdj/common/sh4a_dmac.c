@@ -185,13 +185,13 @@ static void cdj_dmac_run(CdjDmacState *s, hwaddr chan, bool from_dreq)
         }
         buf = g_malloc(len);
         if (writing) {
-            cpu_physical_memory_read(A7ADDR(sar), buf, len);
+            physical_memory_read(A7ADDR(sar), buf, len);
         }
         if (!s->fifo_transfer(writing, buf, len)) {
             return;
         }
         if (!writing) {
-            cpu_physical_memory_write(A7ADDR(dar), buf, len);
+            physical_memory_write(A7ADDR(dar), buf, len);
         }
         s->reg[(chan + 0x00) / 4] = sar + (writing ? len : 0);
         s->reg[(chan + 0x04) / 4] = dar + (writing ? 0 : len);
@@ -203,8 +203,8 @@ static void cdj_dmac_run(CdjDmacState *s, hwaddr chan, bool from_dreq)
     if (sm == 1 && dm == 1) {
         /* Plain memcpy, the hot path: one bulk copy. */
         buf = g_malloc(len);
-        cpu_physical_memory_read(A7ADDR(sar), buf, len);
-        cpu_physical_memory_write(A7ADDR(dar), buf, len);
+        physical_memory_read(A7ADDR(sar), buf, len);
+        physical_memory_write(A7ADDR(dar), buf, len);
         s->reg[(chan + 0x00) / 4] = sar + len;
         s->reg[(chan + 0x04) / 4] = dar + len;
         s->reg[(chan + 0x08) / 4] = 0;
@@ -215,8 +215,8 @@ static void cdj_dmac_run(CdjDmacState *s, hwaddr chan, bool from_dreq)
     buf = g_malloc(unit);
     /* One unit at a time, so a fixed end stays put. */
     while (tcr--) {
-        cpu_physical_memory_read(A7ADDR(sar), buf, unit);
-        cpu_physical_memory_write(A7ADDR(dar), buf, unit);
+        physical_memory_read(A7ADDR(sar), buf, unit);
+        physical_memory_write(A7ADDR(dar), buf, unit);
         if (sm == 1) {
             sar += unit;
         } else if (sm == 2) {
@@ -233,7 +233,7 @@ static void cdj_dmac_run(CdjDmacState *s, hwaddr chan, bool from_dreq)
         char hex[3 * sizeof(head) + 1];
         unsigned k;
 
-        cpu_physical_memory_read(A7ADDR(s->reg[(chan + 0x04) / 4]), head,
+        physical_memory_read(A7ADDR(s->reg[(chan + 0x04) / 4]), head,
                                  sizeof(head));
         for (k = 0; k < sizeof(head); k++) {
             snprintf(hex + 3 * k, 4, "%02x ", head[k]);
@@ -242,7 +242,7 @@ static void cdj_dmac_run(CdjDmacState *s, hwaddr chan, bool from_dreq)
                     "head: %s", (unsigned)chan, len,
                     s->reg[(chan + 0x04) / 4], hex);
         /* The tail shows whether a sector arrived (an MBR ends 55 aa). */
-        cpu_physical_memory_read(A7ADDR(s->reg[(chan + 0x04) / 4]) + len - 16,
+        physical_memory_read(A7ADDR(s->reg[(chan + 0x04) / 4]) + len - 16,
                                  head, sizeof(head));
         for (k = 0; k < sizeof(head); k++) {
             snprintf(hex + 3 * k, 4, "%02x ", head[k]);

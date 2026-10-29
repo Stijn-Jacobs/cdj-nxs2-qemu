@@ -4,7 +4,7 @@
 #else
 #include "sh7763.h"
 #include "cdj_getenv.h"
-#include "exec/cpu-common.h"
+#include "system/physmem.h"
 #include "qemu/cutils.h"
 #include "qemu/timer.h"
 #endif
@@ -339,7 +339,7 @@ static void link_send(LinkPort *p)
             p->reg[DMA_CTRL / 4] &= ~CTRL_START;
             return;
         }
-        cpu_physical_memory_read(A7ADDR(p->reg[p->addr_reg / 4]), p->tx_packet, len);
+        physical_memory_read(A7ADDR(p->reg[p->addr_reg / 4]), p->tx_packet, len);
         p->tx_length = len;
         p->tx_scheduled_ns = now;
         p->tx_due_ns = now + delay;
@@ -348,7 +348,7 @@ static void link_send(LinkPort *p)
         return;
     }
     uint8_t pkt[LINK_BUFFER];
-    cpu_physical_memory_read(A7ADDR(p->reg[p->addr_reg / 4]), pkt, len);
+    physical_memory_read(A7ADDR(p->reg[p->addr_reg / 4]), pkt, len);
     link_send_complete(p, pkt, len);
 }
 
@@ -357,7 +357,7 @@ static void link_deliver(LinkPort *p, const uint8_t *pkt, size_t len)
     uint32_t room = link_len(p);
 
     link_dump("display to MAIN", pkt, len);
-    cpu_physical_memory_write(A7ADDR(p->reg[p->addr_reg / 4]), pkt,
+    physical_memory_write(A7ADDR(p->reg[p->addr_reg / 4]), pkt,
                               MIN(len, room));
     p->reg[DMA_CTRL / 4] &= ~CTRL_START;
     p->units = room / LINK_UNIT;

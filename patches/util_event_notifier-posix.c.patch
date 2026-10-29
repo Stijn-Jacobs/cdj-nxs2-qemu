@@ -1,0 +1,81 @@
+diff --git a/util/event_notifier-posix.c b/util/event_notifier-posix.c
+index 83fdbb96..8c838e05 100644
+--- a/util/event_notifier-posix.c
++++ b/util/event_notifier-posix.c
+@@ -20,6 +20,31 @@
+ #include <sys/eventfd.h>
+ #endif
+ 
++#ifdef EMSCRIPTEN
++#include <emscripten/threading.h>
++
++/*
++ * A pipe write or read from a QEMU thread is proxied, synchronously, to the
++ * browser's main thread, so each set cost a round trip to a thread that may
++ * be busy drawing. Here the pipe only gives the notifier an fd for the poll
++ * set: the signal is a flag per read fd, and every set bumps
++ * event_notifier_seq, which qemu_poll_ns sleeps on.
++ */
++#define NOTIFIER_FDS 1024
++static bool notifier_fd[NOTIFIER_FDS];
++static int notifier_pending[NOTIFIER_FDS];
++uint32_t event_notifier_seq;
++
++/* -1 when fd is not a notifier's read end, else whether it is set. */
++int event_notifier_fd_pending(int fd)
++{
++    if (fd < 0 || fd >= NOTIFIER_FDS || !notifier_fd[fd]) {
++        return -1;
++    }
++    return qatomic_read(&notifier_pending[fd]);
++}
++#endif
++
+ #ifdef CONFIG_EVENTFD
+ /*
+  * Initialize @e with existing file descriptor @fd.
+@@ -65,6 +90,10 @@ int event_notifier_init(EventNotifier *e, int active)
+         e->rfd = fds[0];
+         e->wfd = fds[1];
+     }
++#ifdef EMSCRIPTEN
++    assert(e->rfd < NOTIFIER_FDS);
++    notifier_fd[e->rfd] = true;
++#endif
+     e->initialized = true;
+     if (active) {
+         event_notifier_set(e);
+@@ -84,6 +113,10 @@ void event_notifier_cleanup(EventNotifier *e)
+         return;
+     }
+ 
++#ifdef EMSCRIPTEN
++    notifier_fd[e->rfd] = false;
++    notifier_pending[e->rfd] = 0;
++#endif
+     if (e->rfd != e->wfd) {
+         close(e->rfd);
+     }
+@@ -113,6 +146,12 @@ int event_notifier_set(EventNotifier *e)
+         return -1;
+     }
+ 
++#ifdef EMSCRIPTEN
++    qatomic_set(&notifier_pending[e->rfd], 1);
++    qatomic_inc(&event_notifier_seq);
++    emscripten_futex_wake(&event_notifier_seq, INT_MAX);
++    return 0;
++#endif
+     do {
+         ret = write(e->wfd, &value, sizeof(value));
+     } while (ret < 0 && errno == EINTR);
+@@ -134,6 +173,9 @@ int event_notifier_test_and_clear(EventNotifier *e)
+         return 0;
+     }
+ 
++#ifdef EMSCRIPTEN
++    return qatomic_xchg(&notifier_pending[e->rfd], 0);
++#endif
+     /* Drain the notify pipe.  For eventfd, only 8 bytes will be read.  */
+     value = 0;
+     do {
