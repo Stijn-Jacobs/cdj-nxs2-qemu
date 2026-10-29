@@ -90,10 +90,11 @@ if [ -f build.ninja ] && [ "$CFG_ARGS" != "$(cat .cdj-cfg-args 2>/dev/null)" ]; 
 fi
 # A tree configured from another QEMU version cannot regenerate itself: its
 # pyvenv holds that version's Meson (9.1 bundled 1.2.3, 11.1 needs 1.5), and
-# its thin archives name objects the new build never makes. Start it empty.
+# its thin archives name objects the new build never makes. Start it empty,
+# except for qemu_python.sh's cdj-pyvenv, which CFG_ARGS already points at.
 if [ -f build.ninja ] && [ "$(cat "$SRC/VERSION")" != "$(cat .cdj-qemu-version 2>/dev/null)" ]; then
     echo "QEMU source is $(cat "$SRC/VERSION") -- emptying $BUILD and reconfiguring"
-    find . -mindepth 1 -delete
+    find . -mindepth 1 ! -path ./cdj-pyvenv ! -path './cdj-pyvenv/*' -delete
     need_configure=1
 fi
 

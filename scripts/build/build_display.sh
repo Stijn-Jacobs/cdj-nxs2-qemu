@@ -48,7 +48,7 @@ need_configure=0
 # As in build_main.sh: another QEMU version's tree cannot regenerate itself.
 if [ -f build.ninja ] && [ "$(cat "$SRC/VERSION")" != "$(cat .cdj-qemu-version 2>/dev/null)" ]; then
     echo "QEMU source is $(cat "$SRC/VERSION") -- emptying $BUILD and reconfiguring"
-    find . -mindepth 1 -delete
+    find . -mindepth 1 ! -path ./cdj-pyvenv ! -path './cdj-pyvenv/*' -delete
     need_configure=1
 fi
 if [ "$need_configure" = "1" ]; then
