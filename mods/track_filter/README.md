@@ -35,11 +35,7 @@ code, so it applies to firmware 1.15 and refuses a version it does not
 recognise. `python mods/patch_update.py --model xdj700 XDJ700.UPD out.UPD
 track_filter` writes it into a real update.
 
-**Status.** In the emulator, four tracks on the stick and a track of 205 BPM
-loaded: each hold alternates the list between four rows and three (the track
-far from 205 BPM drops out), in two runs, and a run on the stock firmware shows
-the LINK INFO page for the same hold and never changes the list. The deck has no
-lamp or text for it: the missing rows are the only sign that the filter is on.
-Not tried on a real XDJ-700.
+The deck has no lamp or text for it: the missing rows are the only sign that the
+filter is on. Not tried on a real XDJ-700.
 
 Back to the [mods](../../docs/mods.md).

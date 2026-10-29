@@ -26,8 +26,7 @@ only the mods made for it.
 |---|---|
 | [`track_filter`](../mods/track_filter/README.md) | A long press of INFO in the track list shows only tracks within 6 % of the loaded deck's BPM. |
 
-Each mod has a page of its own: its knobs, what it patches, and what has and has
-not been verified. `osc` needs a relay on the emulator
+Each mod has a page of its own: its knobs and what it patches. `osc` needs a relay on the emulator
 (`python3 scripts/net/osc_relay.py`, see its page); `ableton_link` is reached
 through [a TAP adapter](pro-dj-link.md#rekordbox-ableton).
 
@@ -90,11 +89,8 @@ overlap, and mods that hook the same spot in the firmware share it: the spot
 is replaced once by a stub that runs the original code and then each mod in
 turn. The launcher combines the mods you switched on the same way.
 
-**This is untested on real hardware.** The container repacking and the LZSS
-re-encoding have been checked against the real update file byte for byte, and
-the patched image has been checked against `patch_gui.py`'s/`patch_main.py`'s
-own output (see `tests/`), but nobody has flashed a patched update into an
-actual player. Flashing a modified firmware update is entirely at your own
+**This is untested on real hardware.** Nobody has flashed a patched update
+into an actual player. Flashing a modified firmware update is entirely at your own
 risk. Keep the original file, and expect that a mistake here could mean a
 trip through service mode's recovery path, or worse.
 

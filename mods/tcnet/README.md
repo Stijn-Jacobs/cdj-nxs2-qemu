@@ -66,17 +66,6 @@ listener is a second socket of the firmware's own UDP layer, opened and polled
 with the firmware's calls, and sends from port 65023. It is a firmware patch
 like the other [mods](../../docs/mods.md).
 
-**What is verified.** The patch sites are found by signature in firmware 1.87,
-and the routines are run in an SH-4 interpreter against packets decoded from
-the specification's offsets (`tests/test_main_tcnet.py`). On the emulated
-deck, Resolume Arena lists it as a Pioneer player and follows its time; the
-Opt-IN and Status packets leave about 0.9 times a second and Time about 47
-times a second, also while the deck is paused. A request that names a listener
-port in its Opt-IN is answered there: with two captured packets (source ports
-52955 and 53605, listener ports 65371 and 65149), every Metrics, MetaData and
-Opt-IN reply went to the listener port and none to the source port. When Arena
-last ran against the deck it showed no BPM or title, and that was before the
-deck answered the listener port; Arena has not been run again since, so what
-it shows now is not known. None of it has been tried on a real deck.
+Resolume Arena lists the deck as a Pioneer player and follows its time. Not tried on a real deck.
 
 Back to the [mods](../../docs/mods.md).

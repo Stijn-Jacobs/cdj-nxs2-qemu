@@ -39,9 +39,6 @@ It is a real code patch: `python mods/patch_update.py C2KNXS2.UPD out.UPD
 three_band` writes all six into a real update. The display patches are verified against display firmware 1.81, the MAIN patches against
 1.87.
 
-**What is verified.** The waveform keeps moving with the MAIN data patches on
-in the emulator. Drawing from the track's real 3-band data has been tested
-offline only, against the byte layouts the firmware uses. It has not run on a
-real deck, and has not been tried on a range of tracks.
+Not tried on a real deck.
 
 Back to the [mods](../../docs/mods.md).

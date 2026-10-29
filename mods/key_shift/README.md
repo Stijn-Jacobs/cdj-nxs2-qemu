@@ -40,15 +40,7 @@ resamples its output by 2^(n/12) so the pitch moves and the tempo does not.
 `python mods/patch_update.py C2KNXS2.UPD out.UPD key_shift` writes all five
 into a real update (firmware 1.87).
 
-**Status: works in the emulator (firmware 1.87), not tried on a deck.** Measured
-on a test track holding a steady 440 Hz tone over a 120 BPM click grid, two runs
-per case against a run without the mod: with MASTER TEMPO on, a shift of +2
-plays the tone at +2.000 semitones and -3 at -3.002 and -3.013, with the tempo
-at 0.9992 to 0.9998 of the track's; with the shift set and MASTER TEMPO then
-switched off, the tone stays at +2.000 semitones and the tempo at 0.9996. A
-shift costs the DSP what MASTER TEMPO costs, so a host that cannot hold MASTER
-TEMPO in real time cannot hold a shift either. The title bar's key follows the
-pads: on a track in Em it read Em, then F#m+2 after two presses of pad B, then
-Fm+1 after one of pad A. The title bar has room for five characters after the
-key's symbol, so a shift of 10 or more after a three-character key (G#m) shows
-the shifted key alone.
+A shift costs the DSP what MASTER TEMPO costs, so a host that cannot hold MASTER
+TEMPO in real time cannot hold a shift either. The title bar has room for five
+characters after the key's symbol, so a shift of 10 or more after a
+three-character key (G#m) shows the shifted key alone. Not tried on a real deck.

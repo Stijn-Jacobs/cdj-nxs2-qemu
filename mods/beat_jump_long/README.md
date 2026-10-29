@@ -30,10 +30,6 @@ touch screen and a controller's beat jump. The keys still read 2 and 4 on the
 screen. `python mods/patch_update.py C2KNXS2.UPD out.UPD beat_jump_long` writes
 it into a real update (firmware 1.87).
 
-**Status: works in the emulator (firmware 1.87), not tried on a deck.** On a
-200 BPM track, the touch row's +2, -2, +4 and -4 keys jumped +9.6 s, -9.6 s,
-+19.2 s and -19.2 s (32 and 64 beats), and the +2 and +4 keys did so again when
-pressed a second time; with the mod off the same keys jumped 2 and 4 beats. The
-update validator passes with the mod applied.
+Not tried on a real deck.
 
 Back to the [mods](../../docs/mods.md).

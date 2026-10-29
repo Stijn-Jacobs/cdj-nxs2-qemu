@@ -67,24 +67,8 @@ against display firmware 1.81, the MAIN patches against 1.87.
 beat of the grid and the track to end one beat after it. That is exact for a
 fixed tempo, and off by a few columns for a track whose tempo changes. The
 colour sits in bits the display reads only in a palette mode; this deck's
-colour overview is read as direct colours, which is what it was verified in.
+colour overview is read as direct colours.
 
-**What is verified.** In the emulator, with a real rekordbox 7 export of one
-track (11 phrases, masked tag), on one deck: the mod alone loaded and played
-with the playhead moving in 2 of 2 runs, the band was on the strip, and the
-table MAIN builds equalled, byte for byte, the one computed offline from the
-same two tags (boundaries on the columns the beats give). The code is also
-run offline against that tag, an unmasked one, other moods, missing and
-damaged tags. Together with `three_band`, on the same track: the playhead moved in 5 of 6
-runs (in the sixth the deck loaded and drew the band but the clock had not
-started when the run ended), the table was identical to the phrase-only runs
-every time, and the three bands and the phrase band share the strip without
-either damaging the other. On a stick whose track has no phrase analysis the
-deck loaded and played in 2 of 2 runs, MAIN built no table and the strip had
-no band. `three_band` alone and the unmodified firmware ran as before in 2 of
-2 runs each. No run showed the E-8302 error banner.
-
-The patch has not run on a real deck, and has been tried on one track with
-phrase analysis only.
+Not tried on a real deck.
 
 Back to the [mods](../../docs/mods.md).
