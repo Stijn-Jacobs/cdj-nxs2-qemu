@@ -1,8 +1,22 @@
 diff --git a/ui/cocoa.m b/ui/cocoa.m
-index 3751be3..7788d80 100644
+index 3751be3..24f8097 100644
 --- a/ui/cocoa.m
 +++ b/ui/cocoa.m
-@@ -1974,6 +1974,18 @@ static void cocoa_display_init(DisplayState *ds, DisplayOptions *opts)
+@@ -500,10 +500,9 @@ - (void) resizeWindow
+     [[self window] setContentAspectRatio:NSMakeSize(screen.width, screen.height)];
+ 
+     if (!([[self window] styleMask] & NSWindowStyleMaskResizable)) {
+-        CGFloat width = screen.width / [[self window] backingScaleFactor];
+-        CGFloat height = screen.height / [[self window] backingScaleFactor];
+-
+-        [[self window] setContentSize:NSMakeSize(width, height)];
++        /* One guest pixel per point, as QEMU 9.1 sized it: one per device pixel
++         * halves an 800x480 deck screen on a Retina display. */
++        [[self window] setContentSize:NSMakeSize(screen.width, screen.height)];
+         [[self window] center];
+     } else if ([[self window] styleMask] & NSWindowStyleMaskFullScreen) {
+         [[self window] setContentSize:[self fixAspectRatio:[self screenSafeAreaSize]]];
+@@ -1974,6 +1973,18 @@ static void cocoa_display_init(DisplayState *ds, DisplayOptions *opts)
  
      [QemuApplication sharedApplication];
  
