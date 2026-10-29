@@ -1,5 +1,5 @@
 diff --git a/include/hw/sh4/sh_intc.h b/include/hw/sh4/sh_intc.h
-index f62d5c5..76e6647 100644
+index 94f1831..12e3961 100644
 --- a/include/hw/sh4/sh_intc.h
 +++ b/include/hw/sh4/sh_intc.h
 @@ -58,6 +58,7 @@ struct intc_desc {

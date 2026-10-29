@@ -17,7 +17,7 @@ GLIB_LIBS   := $(shell pkg-config --libs gmodule-2.0 2>/dev/null)
 CFLAGS += $(GLIB_CFLAGS)
 SRC     = $(abspath .)
 
-CORE    = c66x_decode.c c66x_image.c c66x_core.c c66x_mem.c c66x_exec.c c66x_step.c c66x_jit.c c66x_native.c c66x_native_play.c c66x_native_engine.c c66x_native_ring.c c66x_native_levels.c c66x_native_phase.c c66x_native_c6747.c
+CORE    = c66x_decode.c c66x_image.c c66x_core.c c66x_mem.c c66x_exec.c c66x_step.c c66x_jit.c c66x_native.c c66x_native_play.c c66x_native_engine.c c66x_native_ring.c c66x_native_levels.c c66x_native_phase.c c66x_native_fft.c c66x_native_vocoder.c c66x_native_c6747.c
 CORE_O  = $(patsubst %.c,$(O)/%.o,$(CORE))
 HDRS    = $(wildcard *.h binutils/*.h)
 
@@ -88,6 +88,17 @@ $(O)/native_test: tests/native_test.c $(CORE_O) | $(O)
 native-test: $(O)/native_test
 	$(O)/native_test $(MAIN_UNPACKED)
 
+$(O)/fft_test: tests/fft_test.c $(CORE_O) | $(O)
+	$(CC) $(CFLAGS) $^ -o $@ -lm $(GLIB_LIBS)
+
+# the same with the native FFT's portable loops in place of SSE2
+$(O)/fft_test_scalar: tests/fft_test.c $(filter-out $(O)/c66x_native_fft.o,$(CORE_O)) c66x_native_fft.c | $(O)
+	$(CC) $(CFLAGS) -U__SSE2__ $^ -o $@ -lm $(GLIB_LIBS)
+
+fft-test: $(O)/fft_test $(O)/fft_test_scalar
+	$(O)/fft_test $(MAIN_UNPACKED)
+	$(O)/fft_test_scalar $(MAIN_UNPACKED)
+
 copy-burst-test:
 	CC="$(CC)" python3 tests/test_jit_copy_burst.py
 
@@ -97,4 +108,4 @@ m1: $(O)/c6xdis
 clean:
 	rm -rf $(O)
 
-.PHONY: all m1 core-test ext-test native-test copy-burst-test clean
+.PHONY: all m1 core-test ext-test native-test fft-test copy-burst-test clean

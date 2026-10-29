@@ -62,7 +62,7 @@ esac
 # installed keeps its old feature set forever and -display help silently stays
 # at "none, dbus". Reconfigure when the requested UI backend is not in the
 # existing config, or when QEMU_RECONFIGURE=1 is set.
-# --disable-fuse: macFUSE 5 headers break QEMU 9.1 block/export/fuse.c, and
+# --disable-fuse: macFUSE 5 headers broke QEMU 9.1 block/export/fuse.c, and
 # nothing here exports block devices.
 CFG_ARGS="--target-list=sh4-softmmu --disable-werror --disable-docs --disable-tools --disable-libnfs --disable-fuse"
 # Ask explicitly for the UI and sound backends, so a missing dependency fails
@@ -88,12 +88,21 @@ if [ -f build.ninja ] && [ "$CFG_ARGS" != "$(cat .cdj-cfg-args 2>/dev/null)" ]; 
     echo "configure flags changed -- reconfiguring"
     need_configure=1
 fi
+# A tree configured from another QEMU version cannot regenerate itself: its
+# pyvenv holds that version's Meson (9.1 bundled 1.2.3, 11.1 needs 1.5), and
+# its thin archives name objects the new build never makes. Start it empty.
+if [ -f build.ninja ] && [ "$(cat "$SRC/VERSION")" != "$(cat .cdj-qemu-version 2>/dev/null)" ]; then
+    echo "QEMU source is $(cat "$SRC/VERSION") -- emptying $BUILD and reconfiguring"
+    find . -mindepth 1 -delete
+    need_configure=1
+fi
 
 if [ "$need_configure" = "1" ]; then
     rm -f build.ninja
     # shellcheck disable=SC2086
     "$SRC/configure" $CFG_ARGS
     printf '%s' "$CFG_ARGS" > .cdj-cfg-args
+    cp "$SRC/VERSION" .cdj-qemu-version
 fi
 . "$HERE/no_werror.sh"
 ninja "qemu-system-sh4$EXESUF"

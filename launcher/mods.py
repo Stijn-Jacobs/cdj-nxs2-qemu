@@ -14,7 +14,7 @@ A mod.conf sets, in the form of models/*.conf:
                    for, or * for every model; setup and start leave it out for
                    any other
   MOD_DESCRIPTION  one line, asked as "<description>?" at setup and shown in
-                   the README's Mods section
+                   docs/mods.md
 
 The folder's name is the row's key, used for the setup prompt. A mod that
 patches the display firmware has a routine gui_<name> in one of its player

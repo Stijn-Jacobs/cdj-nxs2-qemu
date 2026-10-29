@@ -10,7 +10,7 @@ already there:
 
   1 prerequisites   compilers, libraries and Python packages, with the exact
                     pacman / apt / brew command for whatever is missing
-  2 build           QEMU 9.1.0 fetched and patched, the MAIN and display-board
+  2 build           QEMU 11.1.2 fetched and patched, the MAIN and display-board
                     emulators, the DSP core library (logs in logs/)
   3 firmware        your own C2KNXS2.UPD (v1.87) turned into the images the
                     emulator boots, each checked against a known SHA-256
@@ -437,9 +437,9 @@ class Setup:
         phases = (
             (1, "source", os.path.join(lay.root, "qemu-src", "hw", "sh4"),
              "needs git and network access to gitlab.com; delete a half-cloned qemu-src/ and retry",
-             "QEMU 9.1.0 source (a shallow git clone, ~100 MB)"),
+             "QEMU 11.1.2 source (a shallow git clone, ~100 MB)"),
             (2, "patches", "",
-             "a patch that does not apply means qemu-src/ is not a clean v9.1.0: delete it and re-run",
+             "a patch that does not apply means qemu-src/ is not a clean v11.1.2: delete it and re-run",
              "this project's patches to QEMU"),
             (3, "main", main,
              "a missing library shows as a meson 'Dependency ... not found' above; step 1 lists the package",

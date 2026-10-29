@@ -1,8 +1,8 @@
 diff --git a/target/sh4/cpu.h b/target/sh4/cpu.h
-index d928bcf..4cf5f37 100644
+index 6984bb4..3783d3f 100644
 --- a/target/sh4/cpu.h
 +++ b/target/sh4/cpu.h
-@@ -130,6 +130,13 @@ typedef struct tlb_t {
+@@ -127,6 +127,13 @@ typedef struct tlb_t {
  enum sh_features {
      SH_FEATURE_SH4A = 1,
      SH_FEATURE_BCR3_AND_BCR4 = 2,
@@ -16,7 +16,7 @@ index d928bcf..4cf5f37 100644
  };
  
  typedef struct memory_content {
-@@ -201,12 +208,72 @@ typedef struct CPUArchState {
+@@ -198,12 +205,72 @@ typedef struct CPUArchState {
      /* The features that we should emulate. See sh_features above.  */
      uint32_t features;
  
@@ -89,13 +89,13 @@ index d928bcf..4cf5f37 100644
  /**
   * SuperHCPU:
   * @env: #CPUSH4State
-@@ -372,12 +439,19 @@ static inline target_ulong cpu_read_sr(CPUSH4State *env)
+@@ -369,15 +436,62 @@ static inline uint32_t cpu_read_sr(CPUSH4State *env)
                       (env->sr_t << SR_T);
  }
  
 +void helper_sh2a_bank_save(CPUSH4State *env, unsigned bn);
 +
- static inline void cpu_write_sr(CPUSH4State *env, target_ulong sr)
+ static inline void cpu_write_sr(CPUSH4State *env, uint32_t sr)
  {
      env->sr_m = (sr >> SR_M) & 1;
      env->sr_q = (sr >> SR_Q) & 1;
@@ -108,10 +108,8 @@ index d928bcf..4cf5f37 100644
 +    }
  }
  
- static inline void cpu_get_tb_cpu_state(CPUSH4State *env, vaddr *pc,
-@@ -395,4 +469,44 @@ static inline void cpu_get_tb_cpu_state(CPUSH4State *env, vaddr *pc,
- #endif
- }
+ /* Set FPSCR and the derived float_status rounding/flush-to-zero state. */
+ void cpu_load_fpscr(CPUSH4State *env, uint32_t val);
  
 +/*
 + * One CDJ_PPOKE spec: *addr = (*addr & and) | or, applied just before <pc>

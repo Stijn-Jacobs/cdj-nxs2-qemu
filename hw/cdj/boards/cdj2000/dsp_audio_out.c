@@ -18,7 +18,7 @@ static bool have_left;
 void cdj_dsp_audio_arm(void)
 {
     static const CdjHostAudioCfg cfg = {
-        .env = "CDJ_DSP_AUDIO", .card = "cdj-dsp", .voice = "cdj-dsp-mcasp1",
+        .env = "CDJ_DSP_AUDIO", .voice = "cdj-dsp-mcasp1",
         .label = "dsp", .source = "McASP1",
         /* Paused, the DSP program keeps sending the McASP buffer it last
          * filled: 15288 frames (two 7644-frame halves) at deck speed 1.0, bit

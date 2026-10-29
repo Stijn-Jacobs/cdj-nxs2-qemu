@@ -1,17 +1,20 @@
 diff --git a/target/sh4/op_helper.c b/target/sh4/op_helper.c
-index 99394b7..8357721 100644
+index 777380f..9ecb130 100644
 --- a/target/sh4/op_helper.c
 +++ b/target/sh4/op_helper.c
-@@ -22,6 +22,8 @@
- #include "exec/exec-all.h"
- #include "exec/cpu_ldst.h"
+@@ -22,6 +22,11 @@
+ #include "accel/tcg/cpu-ldst.h"
+ #include "accel/tcg/cpu-loop.h"
  #include "fpu/softfloat.h"
-+#include "sysemu/cpu-timers.h"
++#include "system/cpu-timers.h"
++#include "exec/icount.h"
++#include "exec/target_page.h"
++#include "accel/tcg/probe.h"
 +#include "qemu/timer.h"
  
  #ifndef CONFIG_USER_ONLY
  
-@@ -94,6 +96,57 @@ void helper_sleep(CPUSH4State *env)
+@@ -94,6 +99,59 @@ void helper_sleep(CPUSH4State *env)
      raise_exception(env, EXCP_HLT, 0);
  }
  
@@ -27,12 +30,14 @@ index 99394b7..8357721 100644
 + * request the CPU cannot accept yet (SR.IMASK, SR.BL) stays set, and halting on
 + * it would trade a cheap four-instruction loop for an exception per iteration.
 + * The guest then runs its counter loop as before.
++ *
++ * CDJ_MAIN_IDLE_PC runs MAIN's idle task through here as well.
 + */
 +void helper_cdj_gui_idle(CPUSH4State *env)
 +{
 +    CPUState *cs = env_cpu(env);
 +
-+    if (cs->interrupt_request & CPU_INTERRUPT_HARD) {
++    if (cpu_test_interrupt(cs, CPU_INTERRUPT_HARD)) {
 +        return;
 +    }
 +    cs->halted = 1;
@@ -69,9 +74,9 @@ index 99394b7..8357721 100644
  void helper_trapa(CPUSH4State *env, uint32_t tra)
  {
      env->tra = tra << 2;
-@@ -204,6 +257,10 @@ void helper_macw(CPUSH4State *env, int32_t arg0, int32_t arg1)
+@@ -207,6 +265,10 @@ void helper_macw(CPUSH4State *env, int32_t arg0, int32_t arg1)
  
- void helper_ld_fpscr(CPUSH4State *env, uint32_t val)
+ void cpu_load_fpscr(CPUSH4State *env, uint32_t val)
  {
 +    env->cdj_fpscr_lds++;
 +    if ((env->fpscr ^ val) & TB_FLAG_FPSCR_MASK) {
@@ -80,7 +85,7 @@ index 99394b7..8357721 100644
      env->fpscr = val & FPSCR_MASK;
      if ((val & FPSCR_RM_MASK) == FPSCR_RM_ZERO) {
          set_float_rounding_mode(float_round_to_zero, &env->fp_status);
-@@ -497,3 +554,1175 @@ void helper_ftrv(CPUSH4State *env, uint32_t n)
+@@ -505,3 +567,1175 @@ void helper_ftrv(CPUSH4State *env, uint32_t n)
          env->fregs[bank_vector + i] = r[i];
      }
  }

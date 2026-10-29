@@ -44,9 +44,9 @@ BPM x pitch within 0.5 %.
 
 **Not tried yet.** Everything above was counted at the relay, not by a MIDI
 client on the computer: the port has not been read through Windows' own MIDI
-stack (see [testing against the host](../../README.md#usb-midi-host)), and the
+stack (see [testing against the host](../../docs/mods.md#usb-midi-host)), and the
 jitter against the earlier build, which sent from the panel task, has not been
 measured. Nothing has run on a real deck, and the 1 ms hook adds code to a
 real-time interrupt whose cost on the hardware is unmeasured.
 
-Back to the [mods](../../README.md#mods).
+Back to the [mods](../../docs/mods.md).

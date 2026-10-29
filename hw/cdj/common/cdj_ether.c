@@ -382,7 +382,7 @@ static uint32_t cdj_ether_ld(hwaddr addr)
 {
     uint32_t v;
 
-    cpu_physical_memory_read(A7ADDR(addr), &v, sizeof(v));
+    physical_memory_read(A7ADDR(addr), &v, sizeof(v));
     return le32_to_cpu(v);
 }
 
@@ -390,7 +390,7 @@ static void cdj_ether_st(hwaddr addr, uint32_t val)
 {
     uint32_t v = cpu_to_le32(val);
 
-    cpu_physical_memory_write(A7ADDR(addr), &v, sizeof(v));
+    physical_memory_write(A7ADDR(addr), &v, sizeof(v));
 }
 
 /* EDMR DL[1:0]: 00 = 16 bytes, 01 = 32, 10 = 64; 11 is prohibited. */
@@ -556,7 +556,7 @@ static void cdj_ether_tx(CdjEtherState *s)
             }
         }
         if (len) {
-            cpu_physical_memory_read(A7ADDR(td2), s->txbuf + s->txlen, len);
+            physical_memory_read(A7ADDR(td2), s->txbuf + s->txlen, len);
             cdj_ether_swap_payload(s, s->txbuf + s->txlen, len);
             s->txlen += len;
         }
@@ -737,13 +737,13 @@ static ssize_t cdj_ether_receive(NetClientState *nc, const uint8_t *buf,
     /* The frame is const, so a DE = 0 swap goes through a scratch copy.
      * size is bounded by rbl and CDJ_ETHER_MAXFRAME above. */
     if (s->reg[CDJ_ETHER_EDMR / 4] & CDJ_EDMR_DE) {
-        cpu_physical_memory_write(A7ADDR(rd2), buf, size);
+        physical_memory_write(A7ADDR(rd2), buf, size);
     } else {
         uint8_t tmp[CDJ_ETHER_MAXFRAME];
 
         memcpy(tmp, buf, size);
         cdj_ether_swap_payload(s, tmp, size);
-        cpu_physical_memory_write(A7ADDR(rd2), tmp, size);
+        physical_memory_write(A7ADDR(rd2), tmp, size);
     }
 
     /* RFL is the low half of RD1 (RBL in the high half is preserved).

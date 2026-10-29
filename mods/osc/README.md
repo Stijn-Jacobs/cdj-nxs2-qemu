@@ -92,4 +92,4 @@ track's id, `play` carrying 20486, `stop` 0). The other state messages and the
 deck, and the deck clock in `timing` is the firmware's millisecond tick word,
 not measured against a real clock.
 
-Back to the [mods](../../README.md#mods).
+Back to the [mods](../../docs/mods.md).

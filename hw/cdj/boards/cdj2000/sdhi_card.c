@@ -18,12 +18,12 @@
  * electrical or CRC faults are not modelled. */
 #include "sh7763.h"
 #include "hw/sd/sd.h"
-#include "hw/qdev-properties.h"
-#include "hw/sysbus.h"
+#include "hw/core/qdev-properties.h"
+#include "hw/core/sysbus.h"
 #include "qapi/error.h"
-#include "qapi/qmp/qdict.h"
-#include "sysemu/block-backend.h"
-#include "sysemu/blockdev.h"
+#include "qobject/qdict.h"
+#include "system/block-backend.h"
+#include "system/blockdev.h"
 #include "qemu/module.h"
 #include "qemu/timer.h"
 #include "cdj_getenv.h"
@@ -171,7 +171,7 @@ static void cdj_sdhi_command(CdjSdhiState *s, uint16_t cmd)
 
     /* A card the input channel took out answers nothing at all. */
     len = !s->inserted || s->ejected ? 0 :
-          sdbus_do_command(&s->sdbus, &request, response);
+          sdbus_do_command(&s->sdbus, &request, response, sizeof(response));
 
     if (s->trace) {
         info_report("cdj2000-sdhi: cmd %#06x (CMD%u) arg %#010x -> %u bytes",
@@ -226,7 +226,7 @@ static void cdj_sdhi_data_end(CdjSdhiState *s)
         SDRequest request = { .cmd = 12, .arg = 0 };
         uint8_t response[16];
 
-        sdbus_do_command(&s->sdbus, &request, response);
+        sdbus_do_command(&s->sdbus, &request, response, sizeof(response));
         if (s->trace) {
             info_report("cdj2000-sdhi: auto CMD12");
         }
@@ -579,12 +579,12 @@ static const VMStateDescription vmstate_sdhi_card = {
     }
 };
 
-static void cdj_sdhi_class_init(ObjectClass *klass, void *data)
+static void cdj_sdhi_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
     dc->realize = cdj_sdhi_realize;
     dc->vmsd = &vmstate_sdhi_card;
-    dc->reset = cdj_sdhi_reset;
+    device_class_set_legacy_reset(dc, cdj_sdhi_reset);
 }
 
 static const TypeInfo cdj_sdhi_info = {

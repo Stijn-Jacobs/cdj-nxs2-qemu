@@ -87,4 +87,4 @@ no band. `three_band` alone and the unmodified firmware ran as before in 2 of
 The patch has not run on a real deck, and has been tried on one track with
 phrase analysis only.
 
-Back to the [mods](../../README.md#mods).
+Back to the [mods](../../docs/mods.md).

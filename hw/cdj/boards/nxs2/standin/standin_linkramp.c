@@ -69,7 +69,7 @@ static void cdj_linkramp_probe(uint32_t sar)
         return;
     }
     done = true;
-    cpu_physical_memory_read(base, d, sizeof(d));
+    physical_memory_read(base, d, sizeof(d));
 
     for (i = 0; i < 0x40; i++) {
         snprintf(line + 3 * i, 4, "%02x ", d[i]);
@@ -113,7 +113,7 @@ static void cdj_linkramp_probe(uint32_t sar)
                     "checksum should be +0x%x, terminator +0x%x",
                     len2, ty2, seq2, c2, 0x18 + 4 * (c2 - 2),
                     0x18 + 4 * (c2 - 1));
-        cpu_physical_memory_read(base + off, tail, sizeof(tail));
+        physical_memory_read(base + off, tail, sizeof(tail));
         for (k = 0; k < sizeof(tail); k++) {
             snprintf(tl + 3 * k, 4, "%02x ", tail[k]);
         }
@@ -143,7 +143,7 @@ static uint32_t cdj_linkramp_word(uint32_t base, uint32_t i, int be)
 {
     uint8_t w[4];
 
-    cpu_physical_memory_read(base + 4 * i, w, 4);
+    physical_memory_read(base + 4 * i, w, 4);
     if (be) {
         return ((uint32_t)w[0] << 24) | ((uint32_t)w[1] << 16)
              | ((uint32_t)w[2] << 8) | (uint32_t)w[3];
@@ -162,7 +162,7 @@ static void cdj_linkramp_calibrate(uint32_t sar)
     if (cdj_linkramp_ckstart != -1) {
         return;
     }
-    cpu_physical_memory_read(phys, d, sizeof(d));
+    physical_memory_read(phys, d, sizeof(d));
     if (!d[0x18] || d[0x18] != d[0x19] || d[0x18] != d[0x1A]
         || d[0x18] != d[0x1B] || d[0x18] >= 0x32) {
         return;                                  /* not a header; try the next */
@@ -220,7 +220,7 @@ static void cdj_linkramp_fix_checksum(uint32_t sar)
     if (nock || cdj_linkramp_ckstart < 0) {
         return;
     }
-    cpu_physical_memory_read(phys, d, sizeof(d));
+    physical_memory_read(phys, d, sizeof(d));
     if (!d[0x18] || d[0x18] != d[0x19] || d[0x18] != d[0x1A]
         || d[0x18] != d[0x1B] || d[0x18] >= 0x32) {
         return;
@@ -237,7 +237,7 @@ static void cdj_linkramp_fix_checksum(uint32_t sar)
     } else {
         w[3] = sum >> 24; w[2] = sum >> 16; w[1] = sum >> 8; w[0] = sum;
     }
-    cpu_physical_memory_write(base + 4 * (c - 2), w, 4);
+    physical_memory_write(base + 4 * (c - 2), w, 4);
     if (!said) {
         said = true;
         info_report("link ramp: checksum repaired at +0x%x (C=%u) -- ramped "
@@ -326,7 +326,7 @@ static void cdj_beat_write_le(uint32_t sar, uint32_t off, uint32_t v)
     b[1] = (v >> 8) & 0xFF;
     b[2] = (v >> 16) & 0xFF;
     b[3] = (v >> 24) & 0xFF;
-    cpu_physical_memory_write(A7ADDR(sar + off), b, 4);
+    physical_memory_write(A7ADDR(sar + off), b, 4);
 }
 
 /*
@@ -399,7 +399,7 @@ static bool cdj_beatgrid_header_ok(uint32_t a, uint32_t *count_out)
     uint8_t h[CDJ_BEATGRID_HDR];
     uint32_t stride, count, bytes, selfp;
 
-    cpu_physical_memory_read(a, h, sizeof(h));
+    physical_memory_read(a, h, sizeof(h));
     stride = h[2] | (h[3] << 8);
     if (h[0] || h[1] || stride != CDJ_BEATGRID_STRIDE) {
         return false;
@@ -427,7 +427,7 @@ static void cdj_beatgrid_find_downbeat(void)
     for (i = 0; i < lim; i++) {
         uint8_t e[2];
 
-        cpu_physical_memory_read(cdj_beatgrid.base + i * CDJ_BEATGRID_STRIDE,
+        physical_memory_read(cdj_beatgrid.base + i * CDJ_BEATGRID_STRIDE,
                                  e, sizeof(e));
         if ((e[0] | (e[1] << 8)) == 1) {
             cdj_beatgrid.first_downbeat = i;
@@ -453,7 +453,7 @@ static void cdj_beatgrid_scan(void)
         if (n > CDJ_BEATGRID_CHUNK) {
             n = CDJ_BEATGRID_CHUNK;
         }
-        cpu_physical_memory_read(a, buf, n);
+        physical_memory_read(a, buf, n);
         for (i = 0; i + CDJ_BEATGRID_HDR <= n; i += 4) {
             uint32_t selfp = buf[i + 24] | (buf[i + 25] << 8)
                              | (buf[i + 26] << 16)
@@ -526,7 +526,7 @@ static uint32_t cdj_beatgrid_beat_at(uint64_t pos_ms, uint32_t *index_out)
         uint32_t mid = lo + (hi - lo) / 2;
         uint32_t t;
 
-        cpu_physical_memory_read(cdj_beatgrid.base + mid * CDJ_BEATGRID_STRIDE,
+        physical_memory_read(cdj_beatgrid.base + mid * CDJ_BEATGRID_STRIDE,
                                  e, sizeof(e));
         t = e[4] | (e[5] << 8) | (e[6] << 16) | ((uint32_t)e[7] << 24);
         if (t <= pos_ms) {
@@ -612,7 +612,7 @@ void cdj_beat_drive(unsigned ch, uint32_t sar)
             cdj_beatdrive.last_pos_ms = 0;
             return;
         }
-        cpu_physical_memory_read(cdj_beatdrive.bpm_addr, &tenths, 4);
+        physical_memory_read(cdj_beatdrive.bpm_addr, &tenths, 4);
         bpm = (double)le32_to_cpu(tenths) / 10.0;
         if (bpm <= 0.0) {
             return;             /* the deck has not published a BPM yet */
@@ -696,7 +696,7 @@ static uint32_t cdj_pitch_range(void)
     if (cdj_pitchdrive.range) {
         return cdj_pitchdrive.range;        /* an explicit override */
     }
-    cpu_physical_memory_read(0x0A35DF30, &sel, 4);
+    physical_memory_read(0x0A35DF30, &sel, 4);
     sel = le32_to_cpu(sel);
     if (sel != last) {
         last = sel;
@@ -720,7 +720,7 @@ int32_t cdj_pitch_pct(void)
      * The fader word holds the panel byte << 8 (0..255, centre 128). It stays
      * 0 until the first panel report, which must not read as full negative.
      */
-    cpu_physical_memory_read(cdj_pitchdrive.fader, &word, 4);
+    physical_memory_read(cdj_pitchdrive.fader, &word, 4);
     if (!le32_to_cpu(word) && !cdj_pitchdrive.seen) {
         return 0;
     }
@@ -825,7 +825,7 @@ void cdj_link_ramp(unsigned ch, uint32_t sar)
             cdj_linkramp_calibrate(sar);   /* must happen BEFORE any patch */
         }
         for (f = 0; f < r->count; f++) {
-            cpu_physical_memory_write(A7ADDR(sar + r->off + f * r->width),
+            physical_memory_write(A7ADDR(sar + r->off + f * r->width),
                                       b, r->width);
         }
     }

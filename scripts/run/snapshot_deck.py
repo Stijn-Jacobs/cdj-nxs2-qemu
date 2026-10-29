@@ -56,7 +56,8 @@ def _command(mon, line, deadline):
 
 def _status(mon, deadline):
     out = _command(mon, "info migrate", deadline).decode("utf-8", "replace")
-    m = re.search(r"Migration status:\s*(\S+)", out)
+    # QEMU 10 shortened "Migration status:" to "Status:".
+    m = re.search(r"^(?:Migration s|S)tatus:\s*(\S+)", out, re.M)
     return m.group(1) if m else ""
 
 

@@ -21,12 +21,22 @@ typedef struct native_store {
 
 /* A register result still in the pipeline at a loop head entered mid-pipeline:
  * it lands before the packet ahead + 1 cycles on. A conditional one may be
- * absent. */
+ * absent. A load's has read its memory already, at its issue. */
 typedef struct native_pend {
-    uint8_t reg, ahead, cond;
+    uint8_t reg, ahead, cond, load;
 } native_pend;
 
 #define NATIVE_PENDS 16
+
+/* A span of RAM a pass writes whole, too large for single stores: len bytes
+ * to dst from bulk_buf + off. */
+typedef struct native_bulk {
+    uint32_t dst, len, off;
+    uint64_t hash;
+} native_bulk;
+
+#define NATIVE_BULKS 2
+#define NATIVE_BULK_BYTES 0xC000    /* the pass's own scratch and staged spans */
 
 typedef struct native_state {
     uint32_t reg[C66X_NREGS];
@@ -43,6 +53,9 @@ typedef struct native_state {
     uint32_t addr[2];               /* in: the data addresses its MVK/MVKH pairs build */
     uint32_t pend[NATIVE_PENDS];    /* in and out: the values of the kernel's in-flight writes */
     uint32_t pend_live;             /* which of them are in flight; an absent one holds the register */
+    native_bulk bulk[NATIVE_BULKS];
+    unsigned nbulk;
+    uint8_t *bulk_buf;              /* NATIVE_BULK_BYTES, owned by the driver like st */
 } native_state;
 
 /* An instruction field a relink changes, left out of the comparison. The
@@ -147,6 +160,7 @@ static inline int same_word(uint32_t a, uint32_t b)
 extern const native_kernel native_fir, native_ring_walk, native_interp, native_filter_step,
     native_ring_copy, native_mt_env_a, native_mt_env_b, native_mt_mark, native_peak_scan,
     native_xdj_interp, native_engine, native_fifo_drop, native_mt_extrema, native_slope_flags,
-    native_mt_phase_a, native_mt_phase_b;
+    native_mt_phase_a, native_mt_phase_b, native_fft_scaled, native_fft_plain, native_voc_window, native_voc_frame,
+    native_mt_phase_a1, native_mt_phase_b1, native_voc_ratio, native_voc_bytes, native_voc_lock, native_voc_peaks;
 
 #endif

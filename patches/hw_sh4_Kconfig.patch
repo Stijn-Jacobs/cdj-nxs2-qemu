@@ -1,8 +1,8 @@
 diff --git a/hw/sh4/Kconfig b/hw/sh4/Kconfig
-index 99a76a9..a272971 100644
+index 1660d292..a2d0c082 100644
 --- a/hw/sh4/Kconfig
 +++ b/hw/sh4/Kconfig
-@@ -25,3 +25,31 @@ config SH7750
+@@ -18,3 +18,35 @@ config SH7750
      select SH_INTC
      select SH_SCI
      select SH_TIMER
@@ -10,17 +10,21 @@ index 99a76a9..a272971 100644
 +# What every CDJ MAIN board shares (hw/cdj/common/).
 +config CDJ_COMMON
 +    bool
++    select SH_INTC
 +    select SH_SCI
 +    select SH_TIMER
 +    select UNIMP
 +    select PFLASH_CFI02
 +    select SD
++    select USB
 +
++# Also builds the XDJ-1000 machines, whose 16550 UARTs are serial_mm_init().
 +config CDJ2000NXS2
 +    bool
 +    default y
 +    depends on SH4
 +    select CDJ_COMMON
++    select SERIAL_MM
 +
 +# The CDJ-2000 and CDJ-2000NXS (SH7763), machines cdj2000 and cdj2000nxs.
 +config CDJ2000

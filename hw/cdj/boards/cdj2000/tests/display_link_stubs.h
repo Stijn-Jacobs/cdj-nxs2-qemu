@@ -65,8 +65,8 @@ static inline QEMUTimer *timer_new_ns(int clock,void (*callback)(void *),void *o
 {assert(test_timer_count<4);QEMUTimer *t=&test_timers[test_timer_count++];*t=(QEMUTimer){.callback=callback,.opaque=opaque};return t;}
 static inline void timer_mod(QEMUTimer *t,int64_t due) {t->due=due;t->armed=true;}
 static void qemu_set_irq(qemu_irq irq,int level);
-static inline void cpu_physical_memory_read(hwaddr at,void *to,size_t n) {assert(at+n<=sizeof(test_memory));memcpy(to,test_memory+at,n);}
-static inline void cpu_physical_memory_write(hwaddr at,const void *from,size_t n) {assert(at+n<=sizeof(test_memory));memcpy(test_memory+at,from,n);}
+static inline void physical_memory_read(hwaddr at,void *to,size_t n) {assert(at+n<=sizeof(test_memory));memcpy(to,test_memory+at,n);}
+static inline void physical_memory_write(hwaddr at,const void *from,size_t n) {assert(at+n<=sizeof(test_memory));memcpy(test_memory+at,from,n);}
 static inline void qemu_hexdump(FILE *f,const char *prefix,const uint8_t *p,size_t n) {}
 static inline void cdj_add_exit_report(Notifier *n) {}
 static inline void vmstate_register_any(void *owner,const VMStateDescription *desc,void *state) {}

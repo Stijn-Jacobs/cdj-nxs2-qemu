@@ -10,7 +10,7 @@
 #include "qemu/main-loop.h"
 #include "qemu/sockets.h"
 #include "qapi/error.h"
-#include "sysemu/runstate.h"
+#include "system/runstate.h"
 #include <errno.h>
 /*
  * CDJ-2000/CDJ-2000NXS display processor: the ADSP-BF531 on the other end
@@ -88,7 +88,7 @@ static void cdj_bf531_frame(void *opaque, const uint16_t *px, unsigned w, unsign
     unsigned n;
 
     if (w != s->w || h != s->h) {
-        dpy_gfx_replace_surface(s->con, qemu_create_displaysurface(w, h));
+        qemu_console_set_surface(s->con, qemu_create_displaysurface(w, h));
         qemu_console_resize(s->con, w, h);
         s->w = w;
         s->h = h;
@@ -102,15 +102,16 @@ static void cdj_bf531_frame(void *opaque, const uint16_t *px, unsigned w, unsign
                  (((p >> 5) & 0x1F) * 255 / 31) << 8 | ((p & 0x1F) * 255 / 31);
     }
     s->frames++;
-    dpy_gfx_update(s->con, 0, 0, w, h);
+    qemu_console_update(s->con, 0, 0, w, h);
 }
 
 static void cdj_bf531_invalidate(void *opaque)
 {
 }
 
-static void cdj_bf531_update(void *opaque)
+static bool cdj_bf531_update(void *opaque)
 {
+    return true;
 }
 
 static const GraphicHwOps cdj_bf531_ops = {
@@ -289,7 +290,7 @@ static void cdj_bf531_gdb_listen(CdjBf531 *s, const char *spec)
         error_report_err(err);
         return;
     }
-    qemu_socket_set_nonblock(s->gdb_listen);
+    qemu_set_blocking(s->gdb_listen, false, &error_abort);
     qemu_set_fd_handler(s->gdb_listen, cdj_bf531_gdb_accept, NULL, s);
     info_report("cdj_bf531: gdb listening on %s", str);
 }
@@ -550,13 +551,12 @@ static int cdj_bf531_pre_save(void *opaque)
     return 0;
 }
 
-static int cdj_bf531_post_save(void *opaque)
+static void cdj_bf531_post_save(void *opaque)
 {
     CdjBf531 *s = opaque;
 
     g_byte_array_free(s->snap, true);
     s->snap = NULL;
-    return 0;
 }
 
 static int cdj_bf531_post_load(void *opaque, int version_id)
@@ -807,8 +807,8 @@ bool cdj2000_display_init(const Cdj2000Display *desc)
 
     s->w = CDJ_BF531_W;
     s->h = CDJ_BF531_H;
-    s->con = graphic_console_init(NULL, 0, &cdj_bf531_ops, s);
-    dpy_gfx_replace_surface(s->con, qemu_create_displaysurface(s->w, s->h));
+    s->con = qemu_graphic_console_create(NULL, 0, &cdj_bf531_ops, s);
+    qemu_console_set_surface(s->con, qemu_create_displaysurface(s->w, s->h));
     qemu_console_resize(s->con, s->w, s->h);
     cdj_gui_keys_init(desc->keys, desc->key_count, "cdj_bf531");
     cdj_gui_pointer_init();

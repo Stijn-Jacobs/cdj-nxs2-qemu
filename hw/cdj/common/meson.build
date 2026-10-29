@@ -2,5 +2,8 @@
 # Shared by every CDJ MAIN board; each board's Kconfig entry selects CDJ_COMMON.
 sh4_ss.add(when: 'CONFIG_CDJ_COMMON', if_true: files(
   'cdj_env.c', 'sh4_board.c', 'sh4_intc.c', 'sh4_periph.c', 'sh4a_dmac.c',
-  'cdj_pnl_link.c', 'cdj_pnl_touch.c', 'cdj_pnl_stateout.c', 'cdj_gui_keys.c', 'cdj_ether.c', 'cdj_netsim.c', 'cdj_ata.c', 'cdj_auth_chip.c', 'cdj_host_audio.c', 'cdj_loop_mute.c', 'cdj_mpoke.c', 'usb_r8a66597.c',
+  'cdj_pnl_link.c', 'cdj_pnl_touch.c', 'cdj_pnl_stateout.c', 'cdj_gui_keys.c', 'cdj_ether.c', 'cdj_netsim.c', 'cdj_ata.c', 'cdj_auth_chip.c', cdj_web ? 'cdj_host_audio_web.c' : 'cdj_host_audio.c', 'cdj_loop_mute.c', 'cdj_mpoke.c', 'usb_r8a66597.c',
 ))
+if cdj_web
+  sh4_ss.add(when: 'CONFIG_CDJ_COMMON', if_true: files('cdj_link_ring.c', 'cdj_web.c'))
+endif

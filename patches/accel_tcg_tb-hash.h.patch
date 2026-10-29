@@ -1,8 +1,8 @@
 diff --git a/accel/tcg/tb-hash.h b/accel/tcg/tb-hash.h
-index a0c61f2..7dfb51a 100644
+index f7b159f..257f8ea 100644
 --- a/accel/tcg/tb-hash.h
 +++ b/accel/tcg/tb-hash.h
-@@ -45,6 +45,11 @@ static inline unsigned int tb_jmp_cache_hash_page(vaddr pc)
+@@ -46,6 +46,11 @@ static inline unsigned int tb_jmp_cache_hash_page(vaddr pc)
  static inline unsigned int tb_jmp_cache_hash_func(vaddr pc)
  {
      vaddr tmp;

@@ -1,20 +1,23 @@
 diff --git a/target/sh4/helper.c b/target/sh4/helper.c
-index 9659c69..bfdd801 100644
+index b6b057f..3711300 100644
 --- a/target/sh4/helper.c
 +++ b/target/sh4/helper.c
-@@ -21,8 +21,11 @@
+@@ -21,11 +21,14 @@
  
  #include "cpu.h"
- #include "exec/exec-all.h"
-+#include "exec/cpu_ldst.h"      /* SH-2A entry pushes its frame with cpu_st*_data */
+ #include "exec/cputlb.h"
++#include "accel/tcg/cpu-ldst.h"   /* SH-2A entry pushes its frame with cpu_st*_data */
  #include "exec/page-protection.h"
+ #include "exec/target_page.h"
  #include "exec/log.h"
+ #include "accel/tcg/cpu-loop.h"
+ #include "qemu/plugin.h"
 +#include "qemu/error-report.h"
 +#include "exec/cdj-pcring.h"
  
  #if !defined(CONFIG_USER_ONLY)
  #include "hw/sh4/sh_intc.h"
-@@ -73,6 +76,28 @@ void superh_cpu_do_interrupt(CPUState *cs)
+@@ -77,6 +80,28 @@ void superh_cpu_do_interrupt(CPUState *cs)
                 initrd, they need to be reloaded and the program counter
                 should be loaded with the kernel entry point.
                 qemu_system_reset_request takes care of that.  */
@@ -43,7 +46,7 @@ index 9659c69..bfdd801 100644
              qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
              return;
          }
-@@ -83,10 +108,19 @@ void superh_cpu_do_interrupt(CPUState *cs)
+@@ -87,10 +112,19 @@ void superh_cpu_do_interrupt(CPUState *cs)
      env->in_sleep = 0;
  
      if (do_irq) {
@@ -67,7 +70,7 @@ index 9659c69..bfdd801 100644
          }
      }
  
-@@ -141,6 +175,118 @@ void superh_cpu_do_interrupt(CPUState *cs)
+@@ -145,6 +179,118 @@ void superh_cpu_do_interrupt(CPUState *cs)
          log_cpu_state(cs, 0);
      }
  
@@ -186,7 +189,7 @@ index 9659c69..bfdd801 100644
      env->ssr = cpu_read_sr(env);
      env->spc = env->pc;
      env->sgr = env->gregs[15];
-@@ -179,8 +325,24 @@ void superh_cpu_do_interrupt(CPUState *cs)
+@@ -184,8 +330,24 @@ void superh_cpu_do_interrupt(CPUState *cs)
      }
  
      if (do_irq) {
@@ -208,10 +211,10 @@ index 9659c69..bfdd801 100644
 +            env->sr &= ~(0xfu << 4);
 +            env->sr |= ((uint32_t)prio & 0xf) << 4;
 +        }
+         qemu_plugin_vcpu_interrupt_cb(cs, last_pc);
          return;
      }
- }
-@@ -781,13 +943,43 @@ int cpu_sh4_is_cached(CPUSH4State * env, target_ulong addr)
+@@ -787,13 +949,43 @@ int cpu_sh4_is_cached(CPUSH4State *env, uint32_t addr)
  bool superh_cpu_exec_interrupt(CPUState *cs, int interrupt_request)
  {
      if (interrupt_request & CPU_INTERRUPT_HARD) {

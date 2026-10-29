@@ -189,6 +189,19 @@ def pick_tcp_port(wanted):
     return wanted
 
 
+def lan_address():
+    """This PC's address on its LAN, the one its default route leaves from
+    (connecting a UDP socket sends nothing), or None without a network."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("192.0.2.1", 9))
+        return s.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        s.close()
+
+
 def pick_udp_port(wanted):
     """`wanted`, or the next one BELOW it: Windows reserves the high ranges."""
     p = _unreserved(wanted, -1, windows_reserved_ranges("udp"))

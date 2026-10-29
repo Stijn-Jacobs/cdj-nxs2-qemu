@@ -65,11 +65,13 @@
 #include "hw/core/cpu.h"
 
 #include "cdj_netsim.h"
-#include "sysemu/cpu-timers.h"
-#include "sysemu/runstate.h"
+#include "exec/icount.h"
+#include "system/cpu-timers.h"
+#include "system/runstate.h"
 
-#ifdef _WIN32
-/* The wire is BSD sockets and poll(). */
+#if defined(_WIN32) || defined(__EMSCRIPTEN__)
+/* The wire is BSD sockets and poll(), which Windows lacks; a browser has
+ * neither sockets nor the shared clock file. */
 bool cdj_netsim_active(void)
 {
     return false;
@@ -84,7 +86,11 @@ bool cdj_netsim_init(CdjNetsimFrameFn sink, void *opaque)
     const char *spec = getenv("CDJ_NETSIM");
 
     if (spec && *spec) {
+#ifdef _WIN32
         error_report("cdj2000-netsim: CDJ_NETSIM is not supported on Windows");
+#else
+        error_report("cdj2000-netsim: CDJ_NETSIM is not supported in a browser");
+#endif
         exit(1);
     }
     return false;

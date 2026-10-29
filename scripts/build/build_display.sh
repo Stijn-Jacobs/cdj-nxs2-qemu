@@ -45,11 +45,18 @@ esac
 need_configure=0
 [ -f build.ninja ] || need_configure=1
 [ "${QEMU_RECONFIGURE:-0}" = "1" ] && need_configure=1
+# As in build_main.sh: another QEMU version's tree cannot regenerate itself.
+if [ -f build.ninja ] && [ "$(cat "$SRC/VERSION")" != "$(cat .cdj-qemu-version 2>/dev/null)" ]; then
+    echo "QEMU source is $(cat "$SRC/VERSION") -- emptying $BUILD and reconfiguring"
+    find . -mindepth 1 -delete
+    need_configure=1
+fi
 if [ "$need_configure" = "1" ]; then
     rm -f build.ninja
     # shellcheck disable=SC2086
     "$SRC/configure" $CFG_ARGS
     printf '%s' "$CFG_ARGS" > .cdj-eb-cfg-args
+    cp "$SRC/VERSION" .cdj-qemu-version
 fi
 . "$HERE/no_werror.sh"
 ninja "qemu-system-sh4eb$EXESUF"

@@ -45,13 +45,13 @@
 #include "qemu/log.h"
 #include "qemu/timer.h"
 #include "qemu/error-report.h"
-#include "exec/address-spaces.h"
-#include "exec/memory.h"
+#include "system/address-spaces.h"
+#include "system/memory.h"
 
 #include "cdj2000_ata.h"
 #include "cdj_common.h"
 #include "cdj_getenv.h"
-#include "hw/boards.h"
+#include "hw/core/boards.h"
 #include "qapi/error.h"
 #include "qemu/module.h"
 #include "qom/object.h"
@@ -1486,13 +1486,12 @@ static int ata_pre_save(void *opaque)
     return 0;
 }
 
-static int ata_post_save(void *opaque)
+static void ata_post_save(void *opaque)
 {
     CdjAta *s = opaque;
 
     g_clear_pointer(&s->disc_path, g_byte_array_unref);
     g_clear_pointer(&s->mouth_path, g_byte_array_unref);
-    return 0;
 }
 
 static bool ata_reopen(GByteArray *saved, CdjDisc **d)

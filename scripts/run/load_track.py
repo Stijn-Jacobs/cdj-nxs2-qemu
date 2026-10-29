@@ -104,12 +104,23 @@ MODAL_ON = 0.60
 MODAL_OFF = 0.30
 
 
+# KEYGAP: the least machine time between two keys. A tap holds its bit for
+# 150 ms and a push sent inside that window ORs into the same press, so the
+# firmware sees one push. wait_settled() returns as soon as the screen has
+# settled, which on a fast monitor can be ~100 ms after the key.
+KEYGAP = float(os.environ.get("KEYGAP", "0.3"))
+_last_key = [None]
+
+
 def key(spec):
+    if _last_key[0] is not None:
+        vsleep(_last_key[0] + KEYGAP - vnow())
     env = dict(os.environ, CDJ_PANEL_KEYSOCK=KEYSOCK)
     arg = {"push": "0x11:0x01", "rot+1": "rot:0x0e:+1",
            "rot-1": "rot:0x0e:-1"}.get(spec, spec)
     subprocess.run([sys.executable, os.path.join(HERE, "panel_key.py"), arg],
                    env=env, check=False)
+    _last_key[0] = vnow()
 
 
 def grab(name, timeout=3.0):

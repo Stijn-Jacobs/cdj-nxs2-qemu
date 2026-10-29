@@ -1,0 +1,14 @@
+diff --git a/include/qemu/event_notifier.h b/include/qemu/event_notifier.h
+index 8a4ff308..0c3a728a 100644
+--- a/include/qemu/event_notifier.h
++++ b/include/qemu/event_notifier.h
+@@ -43,4 +43,9 @@ int event_notifier_get_wfd(const EventNotifier *);
+ HANDLE event_notifier_get_handle(EventNotifier *);
+ #endif
+ 
++#ifdef EMSCRIPTEN
++extern uint32_t event_notifier_seq;
++int event_notifier_fd_pending(int fd);
++#endif
++
+ #endif

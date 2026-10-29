@@ -23,7 +23,6 @@ typedef struct CdjHostAudio CdjHostAudio;
 
 typedef struct CdjHostAudioCfg {
     const char *env;        /* knob name, e.g. "CDJ_C6X_AUDIO" */
-    const char *card;       /* QEMU sound card name */
     const char *voice;      /* QEMU voice name */
     const char *label;      /* log prefix, e.g. "c6x" */
     const char *source;     /* what feeds it, for the start-up line */

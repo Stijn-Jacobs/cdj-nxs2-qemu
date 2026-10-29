@@ -44,4 +44,4 @@ release, as stock does. The gate leaves the deck stopped at the cue (as after
 CUE) rather than paused where it was. The update validator passes with the mod
 applied.
 
-Back to the [mods](../../README.md#mods).
+Back to the [mods](../../docs/mods.md).

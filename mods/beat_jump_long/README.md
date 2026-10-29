@@ -36,4 +36,4 @@ it into a real update (firmware 1.87).
 pressed a second time; with the mod off the same keys jumped 2 and 4 beats. The
 update validator passes with the mod applied.
 
-Back to the [mods](../../README.md#mods).
+Back to the [mods](../../docs/mods.md).

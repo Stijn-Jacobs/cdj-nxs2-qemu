@@ -1,0 +1,11 @@
+diff --git a/meson_options.txt b/meson_options.txt
+index a07cb47d..f3e811b1 100644
+--- a/meson_options.txt
++++ b/meson_options.txt
+@@ -385,3 +385,6 @@ option('rust', type: 'feature', value: 'disabled',
+        description: 'Rust support')
+ option('strict_rust_lints', type: 'boolean', value: false,
+        description: 'Enable stricter set of Rust warnings')
++
++option('wasm64_32bit_address_limit', type: 'boolean', value: false,
++       description: 'Restrict wasm64 address space to 32-bit (default is to use the whole 64-bit range).')

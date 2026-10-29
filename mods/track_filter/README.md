@@ -42,4 +42,4 @@ the LINK INFO page for the same hold and never changes the list. The deck has no
 lamp or text for it: the missing rows are the only sign that the filter is on.
 Not tried on a real XDJ-700.
 
-Back to the [mods](../../README.md#mods).
+Back to the [mods](../../docs/mods.md).

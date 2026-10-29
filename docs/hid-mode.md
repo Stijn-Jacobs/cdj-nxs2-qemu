@@ -10,7 +10,7 @@ turns the relay into a HID device.
 > there is no virtual-HID device yet (Windows needs a Virtual HID Framework
 > minidriver, macOS a DriverKit one), so rekordbox there cannot open the deck over
 > HID. Pro DJ Link over a TAP adapter in **Export mode** is the working path — see
-> *Connecting rekordbox and Ableton Live on this PC* in the top-level `README.md`.
+> [Connecting rekordbox and Ableton Live on this PC](pro-dj-link.md#rekordbox-ableton).
 > HID mode is for watching the handshake anywhere and, on Linux, real HID software.
 
 ## Run it

@@ -8,10 +8,10 @@ Pioneer DJ players on your computer, from the CDJ-2000 to the NXS2 and XDJ famil
 
 [![License: GPL-2.0-or-later](https://img.shields.io/badge/license-GPL--2.0--or--later-blue.svg)](LICENSE)
 [![Platform: Windows | Linux | macOS](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)](#quick-start)
-[![QEMU 9.1](https://img.shields.io/badge/QEMU-9.1-orange.svg)](https://www.qemu.org/)
+[![QEMU 11.1](https://img.shields.io/badge/QEMU-11.1-orange.svg)](https://www.qemu.org/)
 [![Firmware not included](https://img.shields.io/badge/firmware-not%20included-red.svg)](#not-included)
 
-[Supported players](#supported-players) · [Quick start](#quick-start) · [Keyboard](#keyboard) · [Virtual deck](#virtual-deck) · [Mods](#mods) · [How it works](#how-it-works)
+[Supported players](#supported-players) · [Quick start](#quick-start) · [Documentation](#documentation) · [Mods](docs/mods.md) · [How it works](docs/how-it-works.md)
 
 <table>
   <tr>
@@ -34,7 +34,7 @@ The **CDJ-2000NXS2** boots, mounts a virtual USB stick, and loads and plays trac
 scrolls, the time counts down, and the sound you hear is computed by the
 player's own DSP program on an emulated DSP. Start two and they find each other
 on an emulated Pro DJ Link network, where MASTER and SYNC work between them.
-Plug in a MIDI controller and it plays them, or use the [virtual deck](#virtual-deck).
+Plug in a MIDI controller and it plays them, or use the [virtual deck](docs/using-the-deck.md#virtual-deck).
 
 Seven older players have experimental emulation, with further models in
 development. The [status table](#supported-players) separates usable features
@@ -93,7 +93,7 @@ show the firmware interface, not a claim of feature parity.
 
 | player | status | what works |
 |---|---|---|
-| **CDJ-2000NXS2** | ✅ Fully supported | Plays tracks from USB in real time with sound. Pro DJ Link, MIDI controllers and [mods](#mods). |
+| **CDJ-2000NXS2** | ✅ Fully supported | Plays tracks from USB in real time with sound. Pro DJ Link, MIDI controllers and [mods](docs/mods.md). |
 | **XDJ-1000MK2** | 🧪 Experimental | Loads and plays from USB with the DSP module setup builds; an MP3 breaks up about every 6 s and MASTER TEMPO runs below real time. PLAY, CUE and touch work. Two decks link. |
 | **XDJ-700** | 🧪 Experimental | Loads and plays from USB with the DSP module setup builds; an MP3 breaks up about every 6 s and MASTER TEMPO runs below real time. Touch works. |
 | **XDJ-1000** | 🧪 Experimental | Loads and plays from USB in real time with the DSP module setup builds. MASTER TEMPO runs below real time. PLAY, CUE, tempo, jog and touch work. |
@@ -152,8 +152,6 @@ Firmware: CDJ-2000NXS2 1.87, XDJ-1000MK2 1.45, XDJ-700 1.15, XDJ-1000 1.13, CDJ-
 </details>
 <!-- feature-matrix:end -->
 
-Everything below describes the CDJ-2000NXS2 unless it says otherwise.
-
 <a id="not-included"></a>
 
 ## Nothing from Pioneer DJ is included
@@ -164,7 +162,7 @@ Everything below describes the CDJ-2000NXS2 unless it says otherwise.
 > firmware update file for the player, which the setup unpacks on your machine, into a folder
 > that is never committed.
 >
-> The screenshots in this README show the emulated firmware's own interface, running in
+> The screenshots in this README and in `docs/` show the emulated firmware's own interface, running in
 > this emulator, for illustration.
 >
 > This project is not affiliated with, endorsed by or supported by Pioneer DJ or
@@ -196,29 +194,12 @@ cd cdj-nxs2
 ./setup.sh
 ```
 
-`setup.sh` walks you through seven steps. Every one is safe to re-run and is
-skipped when it is already done:
-
-1. **Prerequisites**: checks compilers, libraries and Python packages, and
-   prints the exact `pacman`, `apt` or `brew` command for whatever is missing.
-2. **Build**: fetches QEMU 9.1.0, applies this project's patches and builds
-   the MAIN emulator, the display-board emulator and the DSP library, with a
-   progress line per phase and full logs in `logs/` (10–40 minutes).
-3. **Firmware**: asks for your update file (`C2KNXS2.UPD` for the CDJ-2000NXS2)
-   and turns it into the images the emulator boots, checking each against a
-   known SHA-256.
-4. **USB stick**: either a folder of your own music exported by rekordbox
-   (the folder that holds `PIONEER/`), or a plain folder of music files
-   (MP3, FLAC, AAC/M4A, WAV, AIFF, ALAC), which
-   [baken](https://github.com/M-Igashi/baken) analyses instead, so no
-   rekordbox is needed. Either way, a disk image is built from the result.
-5. **DSP module**: asks whether to build the [DSP module](#dsp-module) now
-   (about 20-40 minutes, about 2 GB of free disk while it runs; the default is
-   yes). `--skip-dsp`, or answering no, leaves it for later.
-6. **Your setup**: one deck or two, Pro DJ Link, sound, a MIDI controller;
-   saved to `cdj.conf`.
-7. **Mods**: small on/off tweaks to how the deck behaves. Take the defaults in
-   one answer or choose each (see [Mods](#mods)); saved alongside your setup.
+`setup.sh` walks you through seven steps: prerequisites, the build (10–40
+minutes), your update file, the USB stick (a rekordbox export or a plain folder
+of music), the [DSP module](docs/dsp-module.md), your setup and the
+[mods](docs/mods.md). Every one is safe to re-run and is skipped when it is
+already done. [Setup in detail](docs/setup.md) has each step, every option and
+the notes for macOS.
 
 **3. Play:**
 
@@ -228,612 +209,16 @@ skipped when it is already done:
 
 The deck window opens and the CDJ-2000NXS2 boots to its screen. Click the window,
 press `U` for the USB stick, `↓` to a track, `Enter` to load it and `Space` to
-play (every key: [Keyboard](#keyboard)). Click the screen to touch it.
+play (every key: [Keyboard](docs/using-the-deck.md#keyboard)). Click the screen to touch it.
 
 **Updating:** `git pull`, then `./start.sh` as usual. The emulator is compiled,
 so when a pull changed its code `start.sh` notices and offers to rebuild
 (`./build.sh main display` does the same by hand). A pull that changed the DSP
-module's generator also needs the module built again (see [DSP module](#dsp-module)).
-
-<details>
-<summary><b>On macOS</b></summary>
-
-- The deck window is QEMU's native **Cocoa** window and the sound goes to the
-  default output through **Core Audio**; neither needs anything from
-  Homebrew. `GUI_DISPLAY=sdl` and `AUDIODEV=...` choose others, as elsewhere.
-- **Pro DJ Link** runs over multicast on your network interface. The first
-  time, macOS may ask whether your terminal may find devices on the local
-  network: allow it, or the two decks will not see each other.
-- The DSP module compiles with Apple's clang (`gcc` on macOS is clang), and
-  its profile-guided build uses clang's own with Xcode's `llvm-profdata`.
-- Python packages go into `.venv/` in this folder, since Homebrew's Python
-  refuses `pip install` outside a virtual environment; setup offers the exact
-  command. QEMU 9.1's configure needs `distlib`, which current `pip` no longer
-  carries, so the build makes itself a small venv with it in the build tree.
-- Over `ssh`, with no desktop session, the decks run without a window.
-
-</details>
-
-<details>
-<summary><b>Setup and start options</b></summary>
-
-```text
-./setup.sh --dry-run            show every step and command, change nothing
-./setup.sh --reconfigure        ask the "your setup" and "mods" questions again
-./setup.sh --yes                never ask; take the defaults and the options below
-./setup.sh --skip-build         leave the build out (a build tree you made yourself)
-./setup.sh --rebuild            build even when the emulators are already built
-./setup.sh --skip-dsp           leave the DSP module out (./start.sh says how to build it later)
-  --model <id>                  the player (see Other players); asked when not given
-  --firmware <file>             your update file for that player (re-installs the images)
-  --music <folder>              the rekordbox USB export to image
-  --tracks <folder>             a plain folder of music to image instead, analysed by baken
-  --decks 1|2   --name <deck name>   --djlink on|off   --audio on|off
-  --controller none|<profile>|learn  --relay-port <port>
-  --build-dir <dir>             where the two QEMU build trees go
-
-./start.sh                      start what cdj.conf describes
-./start.sh --model <id>         start that player
-./start.sh --app | --no-app     the virtual deck app, or the plain window
-./start.sh --service | --no-service   boot into SERVICE MODE or not
-./start.sh stop                 stop a running rig from another shell
-./start.sh --dry-run            show what would be started
-./build.sh [source|patches|main|display|dsp]   one build phase at a time
-```
-
-</details>
-
-### Other players
-
-The XDJ-1000MK2, XDJ-700, XDJ-1000, CDJ-900NXS, CDJ-2000NXS, CDJ-900 and
-CDJ-2000 start from the same two commands with `--model`; plain `./setup.sh`
-also asks which player you want (Enter keeps the CDJ-2000NXS2). Pass the
-update file as `--firmware`:
-
-| `--model` | update file | firmware |
-|---|---|---|
-| `xdj1000mk2` | `XDJ1KMK2.UPD` | 1.45 |
-| `xdj700` | `XDJ700.UPD` | 1.15 |
-| `xdj1000` | `XDJ1000.UPD` | 1.13 |
-| `cdj900nxs` | `C900NXS.UPD` | 1.31 |
-| `cdj2000nxs` | `C2KNXS.UPD` | 1.44 |
-| `cdj900` | `C900GUI.UPD`, `C900DRIV.UPD`, `C900MAIN.UPD`, `C900PANL.UPD` | 4.32 |
-| `cdj2000` | `C2KGUI.UPD`, `C2KDRIV.UPD`, `C2KMAIN.UPD`, `C2KPANL.UPD` | 4.33 |
-
-```sh
-./setup.sh --model cdj2000 --firmware path/to/C2KGUI.UPD   # the other three files beside it
-./start.sh --model cdj2000
-```
-
-Setup stores the player in `cdj.conf`, so `./start.sh` alone starts it from
-then on. An older player gets the build, firmware and USB steps and opens one
-window with your stick; a second deck, Pro DJ Link, MIDI controllers, mods and
-the virtual deck app are CDJ-2000NXS2 features and are skipped. The CDJ-2000,
-CDJ-2000NXS, XDJ-1000, XDJ-1000MK2, XDJ-700 and CDJ-900NXS also get the DSP
-module step. Which players exist is
-whatever has a profile in `models/`.
-
-Not every key is mapped on the older players yet. On the XDJ-700, XDJ-1000 and
-CDJ-900NXS only `U` (USB), `Enter` (the select knob's push) and `Space`
-(PLAY) are: `U` and seven `Enter`s load the first track. The CDJ-900 also has
-`↑` / `↓`, `,` (TRACK back), `[` / `]` (SEARCH), `B`, `T`, `I`, `M`, `L` and
-`D`; `U` and four `Enter`s load the first track. `C` (CUE) and `Esc` (BACK)
-are mapped, but the emulated CDJ-900 does not react to them yet.
-
-### Another firmware version, or a modded update
-
-Setup refuses an update file that is not the version in the tables above. To try
-another version, or an update that was already modded, add `--any-firmware`:
-
-```sh
-./setup.sh --firmware path/to/C2KNXS2.UPD --any-firmware
-```
-
-This is **unsupported**: setup unpacks the file anyway (a file it cannot unpack
-still fails) and prints which image differed; `./start.sh` sees the same from
-the installed images, says so and lists what it left out. Whether the player boots depends on
-how far the firmware moved from the supported one: on the CDJ-2000NXS2, 1.85
-loads a track, while 1.83 boots to the player screen but did not load one.
-
-What the emulator pokes into the firmware is looked up in the installed MAIN
-image by the instructions around each place, not by address, so it follows the
-firmware when it moves: the load poke, the Pro DJ Link start call, the
-firmware's own MAC, the colour capability byte, the deck-ready word that the
-auto-load waits for, and the place the RTOS keeps its status register (seeded
-at power-on). The mods find their sites the same way. A site that is not found
-exactly once is not guessed: the poke that needs it is left out and the list at
-start names it.
-
-Some things have no way to be looked up and are switched off for any other
-firmware, and the start-up list says so: the log and trace taps and the play-key
-holds of the lab runs, the native `memcmp`/`strlen`/`memcpy` speed-ups (the
-machine runs the firmware's own code, which is slower), the display board's
-idle-loop halt when the display firmware differs, and on the older players
-the DSP idle-loop skip and the status-register seed (and the DSP module is not
-built). The DSP module of the CDJ-2000NXS2 is built from the installed
-firmware itself, so it follows.
-
-<a id="keyboard"></a>
-
-## Keyboard
-
-No controller needed: click a deck's window and play it from the keyboard.
-Each window drives its own deck. The mouse is the touch screen.
-
-| key | does | key | does |
-|---|---|---|---|
-| `Space` | PLAY/PAUSE | `C` | CUE (held, as on the deck) |
-| `↑` / `↓` | turn the browse knob | `PgUp` / `PgDn` | ten rows at a time |
-| `Enter` / `→` | push the knob: open a folder, load a track | `Esc` / `←` / `Backspace` | BACK |
-| `,` / `.` | TRACK previous / next | `[` / `]` | SEARCH back / forward (held) |
-| `-` / `=` | nudge slower / faster while held (`Shift` for more) | `Q` / `W` / `E` | LOOP IN / OUT / RELOOP |
-| `B` | BROWSE | `M` | MENU (UTILITY) |
-| `U` / `L` / `R` / `D` | USB / LINK / REKORDBOX / DISC source | `T` / `I` | TAG LIST / INFO |
-| `S` | SYNC | `A` | MASTER |
-| `K` | MASTER TEMPO | `P` | TEMPO RANGE |
-| `V` | SLIP | `Z` | REVERSE |
-| `J` | JOG MODE | | |
-
-<a id="virtual-deck"></a>
-
-## The virtual deck app
-
-<p align="center">
-<img src="docs/img/app-deck.png" alt="The virtual deck app: a drawn NXS2-style player, a track loaded and playing, PLAY and CUE lit, a loop active" height="480">
-</p>
-
-A full player drawn around the emulated screen instead of a bare window:
-source and browse keys, the rotary selector, hot cue pads, the loop section,
-CUE and PLAY, a jog with its centre display, the tempo fader. Everything on
-it is drawn by the app itself; no photo, logo or artwork of the real unit is
-used.
-
-```sh
-./start.sh --app          # or CDJ_APP=1 in cdj.conf; --no-app for the plain window
-```
-
-With two decks both stand side by side in one window. Closing the window, or
-Ctrl-C, stops the decks.
-
-<details>
-<summary><b>Mouse and keyboard</b></summary>
-
-| you do | the deck gets |
-|---|---|
-| click a key | the key, held for as long as the mouse button is |
-| drag the jog round | the platter turning: the rim bends the track, the top plate is touch-sensitive |
-| mouse wheel over the jog | a nudge |
-| wheel over (or drag) the rotary selector, click its centre | turn, push |
-| drag the tempo fader | the tempo slider |
-| click the screen | a touch |
-| type | the [keyboard](#keyboard) map, to the deck under the mouse |
-| `F2` | the screen beside the face at full size, on/off |
-| `F3`, or right-click the screen | the screen in a window of its own (resizable, `F11` full screen) |
-
-</details>
-
-<details>
-<summary><b>Lamps</b></summary>
-
-The lamps are the deck's own: PLAY, CUE, SLIP, MASTER TEMPO and the jog ring
-light and blink from MAIN's panel-lamp frame, and the jog's centre display
-turns with the firmware's own pointer. Keys whose report bit is decoded from
-the firmware but not yet tried on a running deck carry a small amber ring;
-keys with no known report bit (hot cues, BANK, QUANTIZE, TRACK FILTER, SHORT
-CUT, the vinyl speed knobs, the needle strip) are drawn but do nothing.
-Hovering a control says which is which in the status line.
-
-</details>
-
-<details>
-<summary><b>A bigger screen</b></summary>
-
-The NXS2's 7-inch screen is a small part of a tall deck, so a face that fits
-a monitor shows it at about half size. `F3` opens a deck's screen in a
-window of its own at any size (`F11` there for full screen); `F2` docks it
-beside the face at its own 800 x 480 instead. The default is the decks
-alone (`--screen face|dock|window|auto`, or `CDJ_APP_SCREEN`).
-
-</details>
-
-<details>
-<summary><b>Stuck on "Waiting for the screen"</b></summary>
-
-The screen comes from each deck's display board, a QEMU of its own. After
-45 seconds without it the status strip says why, and the terminal prints the
-end of that board's log (`bridge-gui-show1.log` in `/tmp`, or the system's
-temp folder on Windows). `logs/app.log` records every attempt the app made
-to reach each screen. Those two files are what to send with a bug report.
-The emulator itself prints little; `CDJ_REPORT=1` brings back its exit reports
-for diagnostics.
-
-</details>
-
-<details>
-<summary><b>How it is built</b></summary>
-
-Pillow draws the face and pygame-ce (SDL) puts it on screen; both are in
-`requirements.txt`, which `./setup.sh` installs into `.venv/`. The window is
-laid out in points and drawn in the display's own pixels, so on a Retina Mac
-or a scaled Windows display the face is drawn at 2x (or whatever the
-display's density is) rather than stretched. The face is drawn once per
-window size with anti-aliasing and every lamp is a small pre-drawn image, so
-a lamp or the jog costs almost nothing per frame and the time goes to the
-screen: about 4 ms for an 800 x 480 frame at 2x on an Apple-silicon Mac, with
-the window shown at the display's refresh rate (120 Hz there). The app talks
-to the deck three ways:
-
-- **the screen** comes from a frame file the display board writes whenever
-  its picture changes (`CDJ_GUI_FRAME_FILE`, checked up to 120 times a
-  second), so every frame the firmware draws is shown: with the
-  `high_fps` mod about 70 a second while zoomed in on a playing track.
-  QEMU's VNC server, the portable alternative, stops at 33 updates a second
-  and is kept only as the fallback for an older build;
-- **the touch screen and the keyboard** go over that VNC server (loopback
-  only, one port per deck from 5921, or the next free one: the launcher
-  tells the app which), straight into the display board's own
-  touch and key handlers, exactly as with the plain window;
-- **the drawn controls and the lamps** go through the controller relay, the
-  same path and the same key table (`midi/cdj_actions.py`) as a MIDI
-  controller, which can stay connected alongside.
-
-</details>
-
-## MIDI controllers
-
-**Using one:** plug the controller in before `./setup.sh`. Setup recognises a
-controller it has a profile for (or offers to learn a new one) and saves your
-choice, and from then on `./start.sh` starts the bridge together with the decks.
-With two decks the controller's left side plays deck 1 and its right side deck 2.
-The bridge's own output is in `logs/bridge.log`. On Windows it runs on a normal
-Windows Python (python.org or the Microsoft Store) with `mido` and
-`python-rtmidi` installed, because MSYS2's Python cannot open MIDI devices; setup
-finds it and prints the one `pip` command it needs if the packages are missing.
-On macOS the packages go into this folder's `.venv/` (setup prints that command
-too), and the bridge reaches the controller through Core MIDI.
-
-Any controller works as a **profile** (what the hardware sends,
-`midi/controllers/<name>.json`) plus a **mapping** (which CDJ key each control
-presses, `midi/mappings/<name>.json`). The Roland DJ-202 ships with both. For
-another controller:
-
-```sh
-python midi/learn.py new                          # name it, move each control, name each one
-python midi/learn.py map --controller <name>      # bind controls to CDJ actions
-python midi/bridge.py --controller <name> --dry-run
-```
-
-Every key of the player's front panel can be mapped, including ones nothing
-binds yet. `./setup.sh --reconfigure` offers the same walk-through. Details,
-the mapping format and the full action catalogue: [`midi/README.md`](midi/README.md).
-
-## Pro DJ Link
-
-Setup asks for one deck or two (`--decks 1|2`, or `CDJ_DECKS=2` in `cdj.conf`).
-Two decks find each other over an emulated Pro DJ Link network, and MASTER and
-SYNC light up between them, same as the real players.
-
-<a id="rekordbox-ableton"></a>
-
-### Connecting rekordbox and Ableton Live on this PC
-
-<details>
-<summary><b>Setup, start command and troubleshooting</b></summary>
-
-The decks' usual Pro DJ Link network is QEMU's multicast segment, which no
-program on your PC can join. On Windows the deck can instead sit on a virtual
-network adapter of your PC, and then:
-
-- **rekordbox** on the PC is a Pro DJ Link peer of the deck. In Export mode
-  they see each other, the deck browses the rekordbox library (the deck's
-  REKORDBOX / LINK source) and loads and plays tracks from it.
-- **Ableton Live** (12 tested) shows `1 Link` at the deck's BPM, and follows
-  the deck's tempo, with the [`ableton_link`](#mods) mod on. rekordbox in
-  Performance mode also lists the deck as a Link peer and syncs to it.
-
-**One-time setup.** The adapter is the TAP-Windows6 driver that ships with
-[OpenVPN](https://openvpn.net/community-downloads/) (the "TAP Virtual Ethernet
-Adapter" component is enough). Install OpenVPN, then from an **elevated**
-PowerShell:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\net\tap_setup.ps1
-```
-
-It creates an adapter named `CDJ-Link` with its `tapctl.exe` (expected in
-`C:\Program Files\OpenVPN\bin`; pass `-TapCtl <path>` if OpenVPN lives
-elsewhere) and gives it the address `192.168.50.1/24`. It also caps the
-adapter's MTU at 1500, adds a fixed ARP entry for the deck (`192.168.50.10`),
-and opens one firewall rule on that adapter for UDP 67 (DHCP), 20808 (Ableton
-Link) and 50000-50002 (Pro DJ Link). It is safe to run again, and starting a
-deck afterwards needs no admin rights.
-
-**Start the deck on it** (one deck; the rig's own DHCP server gives it
-`192.168.50.10`):
-
-```sh
-DJLINK=tap:CDJ-Link bash scripts/run/rig.sh show
-# with the ableton_link mod:
-DJLINK=tap:CDJ-Link CDJ_MAIN_ABLETONLINK=1 CDJ_MAIN_ABLETONLINKPONG=1 bash scripts/run/rig.sh show
-```
-
-**In rekordbox**, switch to **Export mode** (the deck does not show up in
-Performance mode for browsing). Once the deck has booted it appears in the
-player list. On the deck press `L` (LINK) or `R` (REKORDBOX) for the source,
-browse the library and load a track as from a USB stick.
-
-**In Ableton Live**, turn on *Preferences > Link/Tempo/MIDI > Show Link
-Toggle*, then press `LINK` in the transport. With the mod on, the toggle shows
-`1 Link` and Live's tempo follows the deck's.
-
-**If it does not work:**
-
-- **`E-8309` on the deck when you load from rekordbox**: the adapter's MTU is
-  not capped at 1500. TAP-Windows reports 65500, so Windows sends rekordbox's
-  NFS replies as single oversized frames, which the deck drops. Run
-  `tap_setup.ps1` again, or
-  `netsh interface ipv4 set subinterface "CDJ-Link" mtu=1500 store=persistent`.
-- **rekordbox does not see the deck**: rekordbox is in Performance mode, or it
-  is sending on another adapter. Switch to Export mode; if the deck still does
-  not appear, check that `CDJ-Link` is the adapter rekordbox's network settings
-  use.
-- **The launcher says there is no adapter of that name, or that it has no
-  address**: the setup has not run, or the adapter was renamed.
-- **One deck only, and Windows only.** A TAP adapter carries a single deck
-  (`NDECKS=1`), and `DJLINK=tap:` is refused on other systems.
-
-</details>
-
-<a id="mods"></a>
-
-## Mods
-
-Optional changes to the firmware, each with a folder of its own under `mods/`
-(see [adding a mod](#adding-a-mod)). Two small display fixes are on by default;
-the mods below are off until you switch them on. Setup and start offer a player
-only the mods made for it.
-
-**CDJ-2000NXS2**
-
-| mod | what it does |
-|---|---|
-| [`three_band`](mods/three_band/README.md) | Three-band waveforms (low blue, mid amber, high white), CDJ-3000 style, from the track's own 3-band data. |
-| [`phrase`](mods/phrase/README.md) | A coloured phrase band under the overview, CDJ-3000 style, from the track's phrase analysis. |
-| [`osc`](mods/osc/README.md) | Beats, state and transport events as OSC messages, for lighting desks and scripts. |
-| [`usb_midi`](mods/usb_midi/README.md) | MIDI clock and Start/Stop over the rear USB-B port, so a DAW or drum machine follows the deck. |
-| [`ableton_link`](mods/ableton_link/README.md) | Joins Ableton Link, so Live or any Link app follows the deck's tempo and beat. |
-| [`tcnet`](mods/tcnet/README.md) | A TCNet Master node, so ShowKontrol, Resolume and other TCNet receivers follow the deck. |
-| [`gate_cue`](mods/gate_cue/README.md) | Gate Cue, CDJ-3000 style: from pause, a hot cue pad plays only while held and letting go returns to the cue. |
-| [`beat_jump_long`](mods/beat_jump_long/README.md) | Long beat jumps, CDJ-3000 style: the 2 and 4 beat jump keys jump 32 and 64 beats. |
-| [`key_shift`](mods/key_shift/README.md) | Key shift, CDJ-3000 style: hold MASTER TEMPO and press pad A or B to move the key a semitone down or up, pad C to reset, while the tempo stays put. |
-| [`cdj3000x`](mods/cdj3000x/README.md) | Experimental. Serato DJ Pro sees the deck as a CDJ-3000X and shows its browse list, detail waveform, beat boxes and key on it. |
-
-**XDJ-700**
-
-| mod | what it does |
-|---|---|
-| [`track_filter`](mods/track_filter/README.md) | A long press of INFO in the track list shows only tracks within 6 % of the loaded deck's BPM. |
-
-Each mod has a page of its own: its knobs, what it patches, and what has and has
-not been verified. `osc` needs a relay on the emulator
-(`python3 scripts/net/osc_relay.py`, see its page); `ableton_link` is reached
-through [a TAP adapter](#rekordbox-ableton).
-
-<a id="usb-midi-host"></a>
-
-**Testing `usb_midi` against the host.** The rear USB-B port is relayed by the
-machine's built-in host: start the deck with `CDJ_USBF_HOST=27020` (deck 1;
-deck 2 uses 27021) together with `CDJ_MAIN_USBMIDI=1`, for example
-`CDJ_USBF_HOST=27020 CDJ_MAIN_USBMIDI=1 bash scripts/run/rig.sh show`.
-`python3 scripts/net/usb_midi_port.py --count` then prints the messages per
-second by status byte, and `--monitor` one line per message. To have Windows'
-own MIDI stack read the clock instead, put
-`python3 scripts/net/usbip_server.py` in front of the same port and run
-`usbip.exe attach -r 127.0.0.1 -b 1-1` ([usbip-win2](https://github.com/vadimgrn/usbip-win2));
-the deck shows up as a "CDJ-2000NXS2" device with a MIDI port that any MIDI
-monitor can open. Attach after the deck has booted, and check `usbip port`
-first so the deck is not attached twice. The bridge keeps at most 256 unread
-packets per endpoint, so a monitor that reads slower than the clock loses
-messages. The relay is covered in [`docs/hid-mode.md`](docs/hid-mode.md).
-
-`./setup.sh` shows the defaults (step 7) and either takes them or asks about
-each one, and saves your answers to `cdj.conf`; `./setup.sh --reconfigure`
-asks again. You can also edit `cdj.conf` directly,
-or override any of them for one run with the environment, e.g.
-`CDJ_GUI_FRAME_MS=0 ./start.sh` (a caller's own environment always wins over
-`cdj.conf`).
-
-[SERVICE MODE](#service-mode) is a separate boot option, not a mod: it changes
-what the deck boots into, not how it behaves once it is up.
-
-### Patching a real firmware update
-
-`three_band`, `phrase`, `osc`, `usb_midi`, `ableton_link`, `tcnet`,
-`gate_cue`, `beat_jump_long` and `track_filter` are firmware code patches, not emulator knobs: the launcher applies the display ones to a copy of
-the display image at boot (`mods/patch_gui.py`) and the MAIN ones to a copy of
-the MAIN image (`mods/patch_main.py`), the same code a real update would carry.
-`mods/patch_update.py` makes the same patches to a real Pioneer `.UPD` file, so
-they end up on an actual player instead of a copy this emulator throws away on
-exit; each mod's page gives its command, for example:
-
-```sh
-python mods/patch_update.py C2KNXS2.UPD C2KNXS2-link.UPD ableton_link
-```
-
-MAIN has no scatter-load table of its own: it runs in place, so a mod's routine
-goes straight into a run of erased flash inside its own address space rather
-than being copied out to RAM the way a display patch is.
-
-Only a mod that is an actual firmware code patch is offered this way. An
-emulator-only knob such as `high_fps` or `live_clock` has nothing to write into
-a real update, and does not appear. `python mods/patch_update.py --list` shows
-what is available (`--model xdj700 --list` for another player) and which firmware version it was verified against; a
-mismatched version is refused unless you pass `--force-version`.
-
-**Combining mods.** Name as many as you like in one command, e.g.
-`python mods/patch_update.py C2KNXS2.UPD out.UPD three_band osc ableton_link`.
-Each name brings every patch its `mod.conf` switches on. All routines
-of one image are placed in a single pass into one free area, so they cannot
-overlap, and mods that hook the same spot in the firmware share it: the spot
-is replaced once by a stub that runs the original code and then each mod in
-turn. The launcher combines the mods you switched on the same way.
-
-**This is untested on real hardware.** The container repacking and the LZSS
-re-encoding have been checked against the real update file byte for byte, and
-the patched image has been checked against `patch_gui.py`'s/`patch_main.py`'s
-own output (see `tests/`), but nobody has flashed a patched update into an
-actual player. Flashing a modified firmware update is entirely at your own
-risk. Keep the original file, and expect that a mistake here could mean a
-trip through service mode's recovery path, or worse.
-
-**Checking an update someone else modded.** One command checks any `.UPD`
-before you flash it, ours or not:
-
-```sh
-python mods/validate.py downloaded.UPD
-python mods/validate.py --stock official/XDJ700.UPD downloaded.UPD   # name the official file yourself
-```
-
-The player and version are read from the file's own section labels (for the
-CDJ-2000 and CDJ-900, whichever of their four files you name). If the file is
-byte for byte the official update, it says so and passes. Otherwise it looks for
-the official file of that player and version in the folder of the file, in `fw/`
-and in the player's firmware folder, and compares. A modded file never has the
-official checksums, so none are compared with the official ones: every
-checksum in the file (S-record lines, section CRC-16, packed MAIN sum, emergency
-image sum) is recomputed from the file's own bytes and has to agree with what
-the file stores. Then it prints what changed (sections, size growth, the
-firmware address ranges, whether our patcher writes the same bytes) and fails a
-change that lands in code the boot, the updater, the panel, the display link or
-the USB stick can run, a rewrite of existing code bigger than a call site, a
-write into "erased" bytes that something points at or a task can reach, and a
-packed MAIN that no longer fits the updater's window. A player nobody wrote
-patches for is checked the same way, from the erased bytes and the tasks in the
-image.
-
-| exit | meaning |
-|---|---|
-| 0 | safe as far as this checks |
-| 1 | a check failed; do not flash |
-| 2 | not shown safe: nothing failed, but there is no official copy of that version to compare with (only the checksums and the updater's window were checked), or a write could not be proven |
-
-NOT CHECKED, and printed after every run: indirect calls through RAM tables
-(the code a task reaches is a lower bound), what the firmware itself writes
-into a span at run time, that the boot loader and emergency updater in your
-unit are the ones in the file, whether the updater takes an update of equal
-version, and the display image's boot path (no call graph). Nothing here boots
-the file. A pass does not replace testing on a real deck, with a way back
-(the official file and service mode) at hand.
-
-**Then run it.** `mod_check.py` boots a modified MAIN image beside the
-installed stock one on a one-window deck, takes its pictures at the same points
-in both (idle, the browser, a cued track, the menus), and passes when the image
-matches stock outside the `--allow` regions the change is meant to touch:
-
-```sh
-python scripts/test/mod_check.py --model cdj900nxs my_main.bin /tmp/check \
-    --allow 131,144,662,262
-```
-
-`<out>/summary.txt` gives a verdict per picture and `<out>/diff/` marks every
-difference; `mod_check.py --help` has the steps and the verdicts.
-
-<a id="adding-a-mod"></a>
-
-### Adding a mod
-
-Everything about one mod sits in its own folder, with a folder per player it
-patches:
-
-```
-mods/track_filter/
-  mod.conf                  its row: knobs, on/off values, default, players, description
-  README.md                 its page
-  xdj700/
-    patch.py                where each routine hooks the firmware and what it imports
-    main_trackfilter.s      a MAIN routine (gui_<name>.s for the display)
-    main_trackfilter.bin    the same, assembled (patch_main.py --assemble)
-```
-
-The tools find mods by these folders: setup reads every `mod.conf`, and
-`patch_main.py`, `patch_gui.py`, `patch_update.py` and the validator read every
-`<player>/patch.py`. A `patch.py` holds a `MODS` dict, one `sigpatch.Mod` per
-routine, keyed by the routine's name, whose knob is `CDJ_MAIN_<NAME>` or
-`CDJ_GUI_<NAME>` (list them all in `MOD_ENV`, joined by `+`). What a mod finds
-in the firmware by signature and needs only for itself stays in its own
-`patch.py`. What several mods of one player share lives in
-`mods/players/<player>.py`, where each mod imports it from: the image profile,
-a hook site two mods sit on (both are then called from one stub at that site),
-and an address more than one mod imports (`malloc`, `free`, the tick word, the
-UDP send wrapper, ...). Words a mod's routines hand each other at the end of
-the free space (`FreeEnd`) belong to that mod; no two mods may take the same
-bytes, which the tests check. An emulator-only knob (`high_fps`) has just its
-`mod.conf` and page.
-
-<a id="service-mode"></a>
-
-## Service mode
-
-```sh
-./start.sh --service      # or CDJ_SERVICE=1 in cdj.conf; --no-service overrides it
-```
-
-This is the service manual's own diagnostic screen: on real hardware you get
-it by holding **TEMPO RANGE** and **MEMORY** while powering the unit on, until
-the Pioneer logo clears, and this flag does exactly that at boot. The screen
-lists BUTTON, JOG, ENCODER, NEEDLE, SLIDER VOLUME, JOG TOUCH VOLUME and JOG
-RELEASE VOLUME; press or move a control and its own row lights up, so it is a
-live test of every input rather than the player screen.
-
-Both keys release once the logo clears, so nothing stays held down and the
-rest of the deck is otherwise normal.
-
-By default every run boots from a shared, throwaway flash image, so nothing you
-change in SERVICE MODE (or anywhere else) survives past Ctrl-C. With
-`PERSIST=1` a deck keeps its own flash image between runs
-(`extract/flash-<tag>.bin`), the same as a real unit's memory: a setting
-changed in SERVICE MODE on a persistent deck stays changed.
-
-<a id="dsp-module"></a>
-
-## The DSP module
-
-A deck keeps up with real time only with a native module of the DSP program's
-hot code. None is shipped, because it would be derived from Pioneer's code;
-setup builds it from your own firmware (step 5) and installs it into
-`~/c14gen/`. A headless deck plays a track for 30 seconds, the DSP's hot code is
-compiled to a native module from what it ran, and a second 30-second play with
-that module collects the profile-guided counts for the final build. It uses 6
-compile jobs (less on an idle machine). With the module, playback holds real
-time from the first seconds after a load.
-
-The module is installed with a stamp naming what it was built from: the
-generator version and revision, the DSP core's interface, the firmware and the player.
-`./start.sh` compares the stamp with the current code. After a `git pull` that
-changed the generator or the core's interface it does not load the module and
-shows a banner that it needs building again (`./setup.sh` rebuilds it); the
-deck runs far below real time until then. If you skipped step 5, the banner
-says how to build the module.
-
-A generator change that only makes the module faster bumps a separate revision
-in the stamp instead. The older module still loads, and at a terminal
-`./start.sh` offers once per revision to build the faster one (about 30
-minutes); answering no is remembered beside the stamp. Starts without a
-terminal never ask.
-
-Mods do not affect it: they patch the MAIN and display firmware, never the DSP
-program the module is built from, so turning a mod on or off later needs no
-rebuild. To compare without the module, start with `MODULE=none ./start.sh`
-(the DSP's hot code is then compiled as it plays).
-
-For the CDJ-2000NXS, `DSP_SUPPLEMENT=1 scripts/build/build_dsp_module.sh` also
-builds a second, smaller module (`m.extra.so`, `MODEL_DSP_SUPPLEMENT_ARGS`)
-that is loaded after the first under the same stamp. It is off by default: its
-gain (about 1.3x on a complete MP3 and MASTER TEMPO replay) was measured on one
-broad private profile, not on the short play setup uses.
-`scripts/test/dsp_native_replay.py --record <dsp.c6rec>` replays a recording
-with the interpreter and with the installed modules, and passes only when every
-record is EXACT and the final hashes are equal.
+module's generator also needs the module built again (see [DSP module](docs/dsp-module.md)).
+
+**Another player:** `./setup.sh --model <id> --firmware <update file>`, then
+`./start.sh`; [Other players](docs/setup.md#other-players) lists the ids and
+files.
 
 <a id="limits"></a>
 
@@ -851,165 +236,27 @@ record is EXACT and the final hashes are equal.
   only medium so far. Some panel keys are decoded by the firmware but have not
   been tried here; the controller tools say so when you bind one.
 
-## How it works
+## Documentation
 
-A CDJ-2000NXS2 is three computers in one box, and all three run here (the
-older players are built the same way, from their own parts):
+The pages describe the CDJ-2000NXS2 unless they say otherwise.
 
-| chip | job in the player | here |
-|---|---|---|
-| Renesas SH7724 (SH-4A) | **MAIN**: transport, file system, rekordbox database, Pro DJ Link, the front panel | QEMU's SH-4 with a board model written for this project (`hw/cdj/`) |
-| Renesas SH7269 (SH-2A) | the **display processor**: draws the 7-inch screen from what MAIN sends it | a second, big-endian QEMU with its own board model (`hw/cdj/boards/nxs2/sh7269gui.c`) and a window on your desktop |
-| TI TMS320C6655 (C66x) | the **DSP**: decodes the track, time-stretches it, produces the audio | a C66x core written for this project (`hw/cdj/c6x/`), running the program MAIN uploads to it at boot |
-
-```mermaid
-flowchart LR
-    subgraph deck1["Deck 1"]
-        direction LR
-        MAIN1["MAIN<br/>SH7724 (SH-4A)"] <-- "SPI link" --> GUI1["Display<br/>SH7269 (SH-2A)"]
-        MAIN1 <-- "host port / McBSP" --> DSP1["DSP<br/>C66x"]
-        DSP1 --> AUDIO1(["🔊 audio"])
-        GUI1 --> WIN1(["🖥️ window"])
-    end
-    subgraph deck2["Deck 2"]
-        direction LR
-        MAIN2["MAIN<br/>SH7724 (SH-4A)"] <-- "SPI link" --> GUI2["Display<br/>SH7269 (SH-2A)"]
-        MAIN2 <-- "host port / McBSP" --> DSP2["DSP<br/>C66x"]
-    end
-    MAIN1 <-- "Pro DJ Link (emulated Ethernet)" --> MAIN2
-    CTRL(["🎛️ MIDI controller"]) --> BRIDGE["midi/bridge.py"] -- TCP --> RELAY["midi_relay.py"] -- "panel report" --> MAIN1
-    RELAY -- "panel report" --> MAIN2
-```
-
-The CDJ-2000 and CDJ-2000NXS have a board model of their own
-(`hw/cdj/boards/cdj2000/`): an SH7763 MAIN, a Blackfin BF531 display
-processor, and a DSP behind a host port (a C6727 on the CDJ-2000, a C6747 on
-the CDJ-2000NXS). The XDJ-700, XDJ-1000 and CDJ-900NXS share the NXS2's
-SH7724 MAIN, which draws their screen itself, with a C6747 DSP
-(`hw/cdj/boards/xdj1000/`). The launcher starts each older player in one
-window (see [Other players](#other-players)).
-
-None of the three knows it is emulated. MAIN talks to the display processor
-over the same SPI link, to the DSP over the same host port and McBSP audio bus,
-and reads its front panel through the same report from the panel
-microcontroller as on the real board. The models were written device by
-device, from what the firmware actually touches.
-
-**How it was done.** By reverse engineering, under QEMU, one blocked boot at a
-time. The firmware update was unpacked (its container, the LZSS packing of the
-MAIN and display images, the resource archives), and the boards were modelled
-wherever the firmware stopped: interrupt controllers, DMA, I²C, the USB host
-controller, the Ethernet MAC, the SPI link between the two processors, the
-DSP's boot path and command protocol. The firmware turned out to be its own
-best documentation: it logs to an internal ring, it names its tasks, its keys
-and its errors, and a trace hook at any firmware address plus a memory watch
-said the rest.
-
-**The NXS2's DSP** needed the most work. There is no usable C66x emulator, so this
-project has its own: a VLIW core that issues up to eight instructions a cycle,
-with the SoC peripherals the program uses. Interpreted, it is far too slow for
-real-time audio, so a **JIT** compiles the hot parts of the DSP program to
-native code (`hw/cdj/c6x/tools/`); the [DSP module](#dsp-module) is that
-code, built ahead of time. The instruction decode tables come from GNU binutils.
-
-## A platform for modding the firmware
-
-Running the firmware is the first step; changing what a player does is the
-next, and this is built for it. The emulator makes the whole machine
-observable and every part of it adjustable, without touching a real deck:
-
-| | |
-|---|---|
-| 🔍 **Watch it think** | `CDJ_FWLOG` prints the firmware's own internal log; `CDJ_FWTRACE=<address>,...` prints the registers each time execution passes an address; `CDJ_MWATCH=<address>` reports which instruction changed a memory word; QEMU's monitor dumps memory and the screen while it runs. |
-| ✏️ **Change it while it runs** | `CDJ_MPOKE` holds memory at a value, `CDJ_PPOKE` writes one when a chosen instruction executes, and `CDJ_PCALL2` calls any firmware function from inside a running task. |
-| 🕹️ **Drive it from outside** | Every front-panel key, the jog, the pots and the touch screen are one datagram away (`scripts/run/panel_key.py`, `midi/bridge.py`), so input can be scripted, remapped or generated. |
-| 🔁 **Replay the DSP** | The DSP core can record its execution and replay it deterministically, so a change to the audio path can be tested against a recording. |
-
-From here, new behaviour is a question of finding the right code and writing
-the right change: remapping controls, adding features to the deck, studying the
-Pro DJ Link protocol from a player that speaks it natively, or experimenting
-with the audio chain. Keep what you derive from the firmware on your own
-machine: the update file, and anything built from it, is Pioneer's.
-
-### Booting from the flash
-
-```sh
-MAIN_BOOT=flash ./start.sh
-```
-
-By default MAIN starts with its firmware already unpacked into memory
-(`extract/main_unpacked.bin`), past the point where the player's own
-bootloader hands over. With `MAIN_BOOT=flash` it starts the way the real unit
-does: from the reset vector, in Pioneer's bootloader. The firmware update's
-MAIN section carries that bootloader, an emergency updater and the packed MAIN
-image, at the flash addresses the player's own updater writes them to, and
-`./setup.sh --firmware` lays them into `extract/flash.bin` the same way. The
-bootloader sets up the clocks and memory, checks the image's checksum, unpacks
-it and starts it; a damaged image starts the emergency updater instead, as on
-the real player. It adds about two seconds to MAIN's start.
-
-A `flash.bin` made by an older setup holds no bootloader; MAIN then refuses to
-start and says so. Run `./setup.sh --firmware <C2KNXS2.UPD>` again to rebuild it.
-
-### Starting from a saved deck
-
-Booting a deck and loading a track takes minutes on the older players and
-longer on the NXS2; a test or a change to the firmware's later stages should
-not pay that every time. A deck can be saved while it runs and started from
-that moment:
-
-```sh
-SNAPSHOT=loaded ./start.sh --model xdj1000      # or idle, the settled screen
-```
-
-The first start boots as usual, drives the deck to the point (the model
-profile's `MODEL_IDLE_S` and `MODEL_LOAD_STEPS`) and saves it; every later
-start restores it at once. Saves live in `/tmp/cdj-snap/`, one folder per
-combination of QEMU build, firmware, USB image and `MAIN_ARGS`, so a rebuild or
-a new stick starts a fresh save by itself; delete the folder to forget them.
-A save only comes back into the machine that wrote it, so a device that gains
-state needs that state in its `VMStateDescription` before saves of it restore
-correctly. The USB image is not part of a save: the stick is attached as a
-read-only-in-practice snapshot and comes back as the original file.
-
-`scripts/test/quick.sh snap` is the same thing as a test: with the deck table
-of `deck_smoke.py` it restores each deck's loaded point and checks that the
-playhead moves (`deck_smoke.py --snapshot`). The first run saves the points,
-so it takes as long as `decks2`; after that a deck takes a minute and a half.
-
-<details>
-<summary><b>📁 Repository layout</b></summary>
-
-| path | what it is |
-|---|---|
-| `setup.sh`, `start.sh` | the guided setup and the everyday start |
-| `launcher/` | what `setup.sh`, `start.sh` and the scripts in `scripts/run/` do (`python -m launcher`), and what the portable program runs |
-| `packaging/` | the portable program: `package.py` builds it for this OS, `release.sh` builds everything and then packages; a GitHub release runs that for Windows, macOS and Linux |
-| `build.sh` | the build step underneath setup (`./build.sh main`, `display`, …) |
-| `hw/cdj/common/` | what every board shares: the boot (DRAM, NOR flash, image, reset vector), the SH-4 core blocks and the board descriptor (`cdj_common.h`) |
-| `hw/cdj/boards/nxs2/` | the CDJ-2000NXS2: its MAIN board, one file per device, and the display board (`sh7269gui.c`); `diag/` holds the diagnostic hooks, `standin/` historical models that are off by default |
-| `hw/cdj/boards/cdj2000/` | the CDJ-2000 and CDJ-2000NXS: MAIN board (Renesas SH7763), Blackfin display and C6727 / C6747 DSP models, experimental |
-| `hw/cdj/boards/cdj900/` and `hw/cdj/m16c/` | the CDJ-900: the CDJ-2000's MAIN board with its M16C display micro (core, SoC and the display model), experimental |
-| `hw/cdj/boards/xdj1000/` | the XDJ-700, XDJ-1000 and CDJ-900NXS: their SH7724 MAIN board with its LCD controller and graphics blocks, experimental |
-| `mods/` | the [mods](#mods), one folder each, and the tools that patch them into the display and MAIN firmware |
-| `models/` | one profile per player, read by the firmware and launch scripts (see `models/README.md`) |
-| `hw/cdj/c6x/` | the C66x DSP core, its SoC peripherals, the JIT generator (`tools/`) and unit tests |
-| `patches/` | the changes to QEMU 9.1.0 itself |
-| `scripts/build/` | the QEMU builds (Linux, macOS and MSYS2), the board installer and the DSP module build |
-| `scripts/firmware/` | unpacking and verifying the update file |
-| `scripts/media/` | the USB stick image builder; `collection_xml.py` and `bpm_estimate.py` turn a plain folder of music into the XML [baken](https://github.com/M-Igashi/baken) reads for the other USB step; `make_test_stick.py` builds a stick of synthetic test tracks whose grid, key and cues are known exactly |
-| `scripts/run/` | the run chain behind the launchers, the panel and monitor sockets, the controller relay and the run reports |
-| `scripts/net/` | the Pro DJ Link segment: DHCP server, capture, capture scorer, `tempo_master.py` (a tempo master player the decks can sync to), and `tap_setup.ps1` for the [TAP adapter](#rekordbox-ableton) |
-| `scripts/debug/` | the display processor's debugging aids: `bfin_trace.py` reads `CDJ_BF531_TRACE` tracepoint files, `gui_dump.py` dumps a GUI runtime's state over the `CDJ_BF531_GDB` debugger |
-| `midi/` | the MIDI controller bridge, controller profiles, mappings and the learn tool |
-| `app/` | the [virtual deck app](#virtual-deck): the drawn player around the emulated screen |
-| `tests/`, `scripts/test/` | the offline unit tests (`python -m pytest tests`, no firmware needed) and the quick check: `scripts/test/quick.sh` runs them beside a replay of DSP recordings and a headless boot of each deck to its first stable screen (`deck_smoke.py`), in a couple of minutes; `mod_check.py` compares a modified MAIN image's screens with stock |
-| `docs/img/` | the screenshots on this page |
-
-The board sources are copied into the QEMU tree on every build; edit them here,
-never in `qemu-src/`.
-
-</details>
+- [Setup in detail](docs/setup.md): every setup step and option, macOS, the
+  older players, another firmware version or a modded update
+- [Using the deck](docs/using-the-deck.md): the keyboard, the virtual deck app
+  and its web page, service mode
+- [MIDI controllers](midi/README.md): using a controller, learning a new one,
+  the DJ-202 mapping and its LEDs, the deck's own USB-MIDI port
+- [Pro DJ Link](docs/pro-dj-link.md): two decks, and rekordbox and Ableton Live
+  on this PC
+- [Mods](docs/mods.md): what each one does, patching and checking a real
+  firmware update, adding a mod
+- [HID mode](docs/hid-mode.md): the deck as a HID controller over its USB-B port
+- [The DSP module](docs/dsp-module.md): the native module setup builds, and
+  when it needs building again
+- [How it works](docs/how-it-works.md): the three processors, a platform for
+  modding the firmware, booting from the flash, starting from a saved deck,
+  the repository layout
+- [Model profiles](models/README.md): one file per player, and adding one
 
 ## Licence
 

@@ -957,7 +957,7 @@ void cdj2000_usbf_init(MemoryRegion *sysmem, qemu_irq irq)
             s->fd = -1;
             return;
         }
-        qemu_socket_set_nonblock(s->fd);
+        qemu_set_blocking(s->fd, false, &error_abort);
         qemu_set_fd_handler(s->fd, host_read, NULL, s);
         timer_mod(s->timer, qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) + 500);
         info_report("usbf: M66291 host relay on udp 127.0.0.1:%s", port);

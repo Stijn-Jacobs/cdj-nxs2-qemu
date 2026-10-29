@@ -207,8 +207,10 @@ if [ "$OLDER" = 1 ]; then
     # shellcheck disable=SC2206  # the profile's options are words
     GEN_ARGS+=(--idle-head "$IDLE_HEAD" $MODEL_DSP_GEN_ARGS)
 else
+    # The rig players' DSP program never sets a directed rounding mode, so their
+    # float ops compile to plain host ops.
     GEN_ARGS+=(--idle-head "$IDLE_HEAD" --clean-prof "$(native "$PROF")" --clean-roots 2000
-               --qprof "$(native "$PROF")")
+               --qprof "$(native "$PROF")" --nearest)
 fi
 run python3 "$C6X/tools/c14_jitgen.py" "$(native "$PROF")" "$(native "$GEN")/m" \
     --lib "$(native "$LIBDIR/libc66x.so")" --no-cc "${GEN_ARGS[@]}" \

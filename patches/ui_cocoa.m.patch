@@ -1,8 +1,8 @@
 diff --git a/ui/cocoa.m b/ui/cocoa.m
-index 4c2dd33..305b25b 100644
+index 3751be3..7788d80 100644
 --- a/ui/cocoa.m
 +++ b/ui/cocoa.m
-@@ -2129,6 +2129,18 @@ static void cocoa_display_init(DisplayState *ds, DisplayOptions *opts)
+@@ -1974,6 +1974,18 @@ static void cocoa_display_init(DisplayState *ds, DisplayOptions *opts)
  
      [QemuApplication sharedApplication];
  

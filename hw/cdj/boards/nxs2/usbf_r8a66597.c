@@ -696,7 +696,7 @@ static const VMStateDescription vmstate_cdj_usbf = {
     }
 };
 
-static void cdj_usbf_class_init(ObjectClass *klass, void *data)
+static void cdj_usbf_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 

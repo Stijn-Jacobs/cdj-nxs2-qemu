@@ -12,6 +12,7 @@ if EMU not in sys.path:
     sys.path.insert(0, EMU)
 
 from launcher import deck, dsp_module, host, model, start  # noqa: E402
+from launcher.layout import Layout  # noqa: E402
 
 
 @pytest.fixture
@@ -88,8 +89,7 @@ def test_deck_loads_supplement_after_curated_and_rejects_both_if_stale(lay):
 def test_dsp_stamp_writes_the_stamp_the_check_reads(tmp_path, monkeypatch):
     monkeypatch.setenv("CDJ_MODEL", "xdj1000")
     assert dsp_module.main([str(tmp_path)]) == 0
-    lay = SimpleNamespace(emu=EMU, extract=str(tmp_path / "extract"), root=str(tmp_path))
-    assert dsp_module.differences(str(tmp_path), dsp_module.current(lay, model.load("xdj1000"))) == []
+    assert dsp_module.differences(str(tmp_path), dsp_module.current(Layout(), model.load("xdj1000"))) == []
     assert dsp_module.differences(str(tmp_path / "nowhere"), {}) is None
 
 

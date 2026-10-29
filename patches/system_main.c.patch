@@ -1,0 +1,16 @@
+diff --git a/system/main.c b/system/main.c
+index b8f7157c..1b20d80e 100644
+--- a/system/main.c
++++ b/system/main.c
+@@ -68,6 +68,11 @@ int (*qemu_main)(void) = os_darwin_cfrunloop_main;
+ 
+ int main(int argc, char **argv)
+ {
++#ifdef EMSCRIPTEN
++    static char stderr_buf[1 << 16];
++
++    setvbuf(stderr, stderr_buf, _IOFBF, sizeof(stderr_buf));
++#endif
+     qemu_init(argc, argv);
+ 
+     /*

@@ -294,7 +294,7 @@ static bool time_dot(const CdjM16cGui *s, unsigned x, unsigned y)
     return false;
 }
 
-static void m16c_update(void *opaque)
+static bool m16c_update(void *opaque)
 {
     CdjM16cGui *s = opaque;
     DisplaySurface *ds = qemu_console_surface(s->con);
@@ -302,7 +302,7 @@ static void m16c_update(void *opaque)
     unsigned y, x, sy, sx;
 
     if (!s->dirty) {
-        return;
+        return true;
     }
     s->dirty = false;
     for (y = 0; y < LCD_ROWS + TIME_ROWS; y++) {
@@ -318,8 +318,9 @@ static void m16c_update(void *opaque)
             }
         }
     }
-    dpy_gfx_update(s->con, 0, 0, LCD_COLS * SCALE,
-                   (LCD_ROWS + TIME_ROWS) * SCALE);
+    qemu_console_update(s->con, 0, 0, LCD_COLS * SCALE,
+                        (LCD_ROWS + TIME_ROWS) * SCALE);
+    return true;
 }
 
 static void m16c_invalidate(void *opaque)
@@ -444,8 +445,8 @@ bool cdj900_gui_init(void)
     }
     s->chip = m16c63_new(flash, M16C_BASE, len, &ops);
 
-    s->con = graphic_console_init(NULL, 0, &m16c_ops, s);
-    dpy_gfx_replace_surface(s->con, qemu_create_displaysurface(
+    s->con = qemu_graphic_console_create(NULL, 0, &m16c_ops, s);
+    qemu_console_set_surface(s->con, qemu_create_displaysurface(
         LCD_COLS * SCALE, (LCD_ROWS + TIME_ROWS) * SCALE));
     qemu_console_resize(s->con, LCD_COLS * SCALE,
                         (LCD_ROWS + TIME_ROWS) * SCALE);

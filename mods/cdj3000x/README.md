@@ -235,4 +235,4 @@ deck.
 Each of them passes the update validator with it applied, and none has been
 tried on a real deck.
 
-Back to the [mods](../../README.md#mods).
+Back to the [mods](../../docs/mods.md).
