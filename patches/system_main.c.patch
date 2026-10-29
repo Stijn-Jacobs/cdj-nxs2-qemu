@@ -1,9 +1,28 @@
 diff --git a/system/main.c b/system/main.c
-index b8f7157c..1b20d80e 100644
+index b8f7157..57d12ef 100644
 --- a/system/main.c
 +++ b/system/main.c
-@@ -68,6 +68,11 @@ int (*qemu_main)(void) = os_darwin_cfrunloop_main;
+@@ -55,19 +55,21 @@ static void *qemu_default_main(void *opaque)
+     exit(status);
+ }
  
++/*
++ * The main loop stays on the main thread, as on the other hosts, unless a
++ * display needs that thread: cocoa sets its own qemu_main. Upstream parks the
++ * main thread in CFRunLoop on every macOS run, which the boards here never
++ * had under QEMU 9.1.
++ */
+ int (*qemu_main)(void);
+ 
+-#ifdef CONFIG_DARWIN
+-static int os_darwin_cfrunloop_main(void)
+-{
+-    CFRunLoopRun();
+-    g_assert_not_reached();
+-}
+-int (*qemu_main)(void) = os_darwin_cfrunloop_main;
+-#endif
+-
  int main(int argc, char **argv)
  {
 +#ifdef EMSCRIPTEN
