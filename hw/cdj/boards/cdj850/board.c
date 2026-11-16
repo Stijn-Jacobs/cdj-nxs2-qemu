@@ -4,6 +4,8 @@
 #include "xc/adc.h"
 #include "xc/cmt.h"
 #include "xc/intc.h"
+#include "xc/loader.h"
+#include "xc/mtu2.h"
 #include "xc/panel_link.h"
 #include "xc/panel_peer.h"
 #include "xc/port.h"
@@ -366,6 +368,9 @@ static void cdj850_init(MachineState *machine)
     cdj850_adc_init(sysmem, cpu);
     cdj850_dsp_init();
     cdj850_port_init(sysmem, cpu);
+    cdj850_mtu2_init(sysmem, cpu);
+    /* CD loader mechanism: reads PDDRL (port) and TIOC3C duty (mtu2). */
+    cdj850_loader_init();
     cdj850_ser_init(sysmem, cpu);
     cdj850_scif_init(sysmem, cpu);
     /* Panel CPU on the SCIF1 link (needs the SCIF, INTC and port models). */

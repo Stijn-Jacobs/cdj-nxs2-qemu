@@ -8,6 +8,85 @@ Goal: add Pioneer CDJ-850 firmware support to the emulator.
 Constraint: never commit C850MAIN.UPD or anything derived from it.
 New code license: GPL-2.0-or-later.
 
+## Corrections (2026-11-16) — read before trusting older entries
+
+The entries below are history and are left as written. Several
+attributions in them were later shown to be wrong (commits cde25d1,
+011ec7d; evidence is the service manual 10.2 MAIN ASSY schematic and the
+MAIN image). Where an older entry rests on one of them it carries a
+`SUPERSEDED` marker under its heading. Current code comments in
+hw/cdj/boards/cdj850/xc/ (intc.c, dsp_shi.c, port.c, scif.c,
+panel_peer.c) are authoritative.
+
+- **SSU0 (0xFFFE7000) is the audio DSP link, not the panel link.** It is
+  the SHI of the DSP56371 (IC301): IC103 PF0/SSCK0 = AUDIO_SCK, PF1/SSI0 =
+  AUDIO_SI, PF2/SSO0 = AUDIO_SO, PF3/SCS0 = DSPCS. The DSP is strapped to
+  boot mode 5 (SHI slave, SPI). The 1140-byte "panel boot upload" is DSP
+  bootstrap framing: 24-bit words, a word count, a load address, then the
+  program words. MAIN holds four such segments at 0x0C155B28-0x0C1593A1
+  (9, 82, 896 and 3824 words; the first three end in JMP $FF0000, i.e.
+  back into the bootstrap ROM). The table at 0x0C1C1AE8 lists the DSPDREQ
+  level MAIN expects after each segment: 0, 1, 0, 1. The earlier
+  conclusion that no DSP program exists in the MAIN image is wrong. The
+  6-byte `c2 00 00 08 00 00` exchange on SSU0 (wrapper 0x0C077570) is a
+  DSP exchange, not a panel exchange. xc/panel_link.c and xc/ser.c are
+  misnamed (they model the DSP side of SSU0; names kept for now).
+- **The panel CPU is on SCIF1 (0xFFFE8800)**, clock-synchronous slave
+  (MAIN) with the panel as clock master. Pins: PE3/SCK1 = TSCK, PE5/TXD1 =
+  TSO, PE4/RXD1 = TSI, PE9/IRQ5 = PNL_XBUSY (panel to MAIN), PC14 =
+  MAIN_XBUSY (MAIN to panel). One transaction per PNL_XBUSY rising edge,
+  two or three 16-byte full-duplex frames. Type 1: byte 0 = 0x01, byte 15 =
+  checksum of bytes 0..14. Type 2: byte 0 = 0x02, byte 12 = checksum of
+  bytes 0..11. Checksum = 8-bit end-around-carry sum (routine 0x0C0F9EE8).
+  ISRs: IRQ5 0x0C0FA05E, TXI1 (vector 199) 0x0C0FA13C. SCIF0 is the ASCII
+  debug console. Evidence: MAIN driver (init 0x0C0F9F7A) plus schematic
+  nets.
+- **Interrupts.** The firmware registers 31 ISR descriptors; before
+  cde25d1 only CMT0 (vector 142) was ever delivered. External IRQ routing:
+  IRQ1 = PB1 SRVSBSY, IRQ2 = PB2 SPDLFG, IRQ4 = PB4 ZERO, IRQ5 = PE9
+  PNL_XBUSY, IRQ7 = PE11 DSPDREQ (ICR1 = 0x4924, IPR01 = 0x0770, IPR02 =
+  0x7907 as the firmware programs them). The "outer caller 0x0C105004"
+  with zero hits in the dispatch-arming analysis is the IRQ1 handler
+  (vector 65); 0x0C107484 is the IRQ2 handler (vector 66), 0x0C107232 the
+  vector-146 handler. Nothing in those analyses could fire them because no
+  external IRQ was modelled.
+- **Port E pins.** DSPDREQ is PE11, not PE12. PE7 = SRVRST and PE6 =
+  SRVCCE (Task 8m's report had PE7 = SRVCCE and PE6 = spare); PE8 =
+  SRVBCLK, PE12 = SRVBUS0. PE6/PE8/PE12 are therefore not DSP READY lines.
+  The Port-E bit-bang stream (bring-up 0x0C0FD7CC, transfer 0x0C0FC9DC,
+  validator 0x0C0FC71C-87E) is the CD servo bus; Task 8m's conclusion on
+  that stands. The 519-byte "DSP init image" is a servo image.
+- **Board input pins that read 0 and should not:** PB3 = 5MON (5 V
+  monitor, high on a running unit; the power task 0x0C0FF7DA counts lows as
+  a supply fault); PF25/PF26 = LPS1/LPS2 loader switches, each pulled up by
+  10 k (R140/R141); PF24 = INSIDE, no pull-up on the sheet, stays 0.
+- **"E90" on the debug UART.** In every run, including the old baseline,
+  the firmware prints `E90\r` on SCIF0 about 11-15 s after boot: error
+  code 0x90 from the CD loader state machine at 0x0C106194-0x0C10622E
+  (reported via 0x0C102F70; it waits for LPS2 high and times out). It went
+  unnoticed because SCIF TX is only captured under CDJ850_TRACE.
+- **Status (2026-11-16).** With CDJ850_DSP_BOOT_HLE=1 MAIN uploads all four
+  DSP segments. The panel link exchanges frames (vectors 69 and 199 taken,
+  frames accepted). The CD loader model (xc/loader.c + xc/mtu2.c: PWM on
+  PD10/TIOC3C, enable PD9, switches LPS1/LPS2) lets the no-disc homing
+  finish: loader state 0x0C7F6D98 = 0, no "E90", and the display pages
+  MAIN sends read "EJEC" then "NO DISC". The unit therefore reaches its
+  idle no-disc state. Open: USB host (not wired), execution of the
+  uploaded DSP program, CD servo (only needed with a disc).
+
+Environment knobs added by these commits (all read once at start-up):
+
+| Variable | Default | Effect |
+|---|---|---|
+| CDJ850_IRQ_PULSE=`n@ms[,n@ms...]` | unset | Diagnostic: invert IRQn pin for 1 ms at virtual time `ms`. Invents an event; nothing may depend on it. |
+| CDJ850_IRQ_IDLE=`0xNN` | 0x80 | Idle level of IRQ0-7 pins, bit n = IRQn (default: only IRQ7/DSPDREQ high). |
+| CDJ850_DSP_BOOT_HLE=1 | off | Toggle DSPDREQ after each DSP SHI segment (idle high: 0,1,0,1). Stand-in for the DSP program. |
+| CDJ850_5MON=0 | 5MON reads 1 | `0` makes PB3 read low (old behaviour). |
+| CDJ850_LOADER_SW=`0xNNNN` | 0x0600 | Overrides PFDRH bits 8-10 (INSIDE, LPS1, LPS2); default LPS1/LPS2 high, INSIDE low. |
+| CDJ850_PANEL=0 | enabled | `0` disables the emulated panel peer (xc/panel_peer.c). |
+| CDJ850_PANEL_PERIOD_MS=`n` | 10 | Idle gap between panel transactions; 0 or unparsable gives the default. The real rate is unknown. |
+| CDJ850_LOADER=`0` | model on | Disables the loader mechanism model; LPS1/LPS2 read the constant 0x0600. |
+
 ## Task 1 baseline (2026-10-12)
 
 - Step 1: cloned upstream, created branch `cdj850-bringup`. Base short hash: 9042f71.
@@ -419,6 +498,8 @@ vectors) required before any IRQ wiring — do not guess vectors.
 
 ## Task 8a: DSP/servo signaler hunt — BLOCKED (stop rule; 2026-10-13)
 
+> SUPERSEDED 2026-11-16: see Corrections at top (DSPDREQ is PE11; Port E is servo).
+
 Wall reproduced exactly (no bridge, EB rebuild of 07df07e): outer
 0x0C0B8EAE spins, scan 0x0C0B8ED8 returns mask 0 over 17 slots
 (claim bytes 0x0CE49CBC = 00 02..0E 00 00, words 0x0CE49C74 =
@@ -534,6 +615,8 @@ report). Live GDB RSP + `info registers` + `CDJ850_TRACE` + standing
 
 ## Task 8c: DSP bootstrap READY + recorded init image; reply BLOCKED (2026-10-13)
 
+> SUPERSEDED 2026-11-16: see Corrections at top (DSP READY pins; Port E is servo).
+
 Full report:
 .superpowers/sdd/2026-10-12-cdj850-support/task-8c-report.md.
 EB `~/qemu-build-eb/qemu-system-sh4eb`, BASE `97ae419`.
@@ -622,6 +705,8 @@ datasheets live in /tmp only (never committed:
 
 ## Task 8e: SHI-framed reinterpretation + header search + unpacker-PC trace — carve BLOCKED with new evidence (2026-10-13)
 
+> SUPERSEDED 2026-11-16: see Corrections at top (DSP program is in MAIN image).
+
 Full report:
 .superpowers/sdd/2026-10-12-cdj850-support/task-8e-report.md.
 EB `~/qemu-build-eb/qemu-system-sh4eb`, BASE `694cc05`. No subagents.
@@ -709,6 +794,8 @@ byte `((H<<1|1)<<4)|(L<<1|1)`.
   timing/sequence + DSPDREQ pulse behavior) replaces the knob.
 
 ## Task 8h: PE12-pulse-at-sampler micro-experiment — NOTHING (honest negative; 2026-10-14)
+
+> SUPERSEDED 2026-11-16: see Corrections at top (PE12 is SRVBUS0, not DSPDREQ).
 
 Full report:
 .superpowers/sdd/2026-10-12-cdj850-support/task-8h-report.md.
@@ -836,6 +923,8 @@ Firmware read-only; no new extract files.
 
 ## Task VFD-1: MAIN display-command format mapped; vfd.c decodes frames (2026-10-14)
 
+> SUPERSEDED 2026-11-16: see Corrections at top (SSU0 is DSP link, not panel).
+
 Verdict: panel-side-opaque (MAIN sends control indices only; the panel
 CPU renders all glass text from its own ROM). vfd.c passes the exchange
 frame bytes through as hex, synced on TX[0].bit7. No firmware bytes in
@@ -919,6 +1008,8 @@ qemu-src/target/sh4/translate.c + the live 0xFFFE391E load at
 
 ## Task 8k: service-mode holds, USB-attached boot, panel ACTIVE frames (2026-10-14)
 
+> SUPERSEDED 2026-11-16: see Corrections at top (panel link is SCIF1, not SSU0).
+
 Full report:
 .superpowers/sdd/2026-10-12-cdj850-support/task-8k-report.md.
 Branch `cdj850-bringup`, BASE `8c79b14` (actual HEAD at task time).
@@ -984,6 +1075,8 @@ in /tmp only (uncommitted).
 - Suite: `test_sh2a_smoke + test_firmware_cdj850` 15 passed.
 
 ## Task 8l: sequenced panel hold (bank triples) — NOTHING, consumer fires into nothing new (2026-10-14)
+
+> SUPERSEDED 2026-11-16: see Corrections at top (panel link is SCIF1, not SSU0).
 
 Full report:
 .superpowers/sdd/2026-10-12-cdj850-support/task-8l-report.md.

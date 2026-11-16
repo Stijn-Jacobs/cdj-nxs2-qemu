@@ -2,6 +2,7 @@
 #include "cdj_common.h"
 #include "../dsp56371.h"
 #include "intc.h"
+#include "loader.h"
 #include "port.h"
 #include "trace.h"
 
@@ -60,10 +61,12 @@
  *     manual 10.2 MAIN ASSY 2/4, IC103 pins 135/134), each pulled up by
  *     10 k (R140/R141). The loader state machine at 0x0C106194 waits for
  *     LPS2 high on PFDRH bit 10 and reports error 0x90 ("E90" on the debug
- *     UART) when its timer runs out first. With no mechanism modelled the
- *     switches read open, i.e. the pulled-up 1. CDJ850_LOADER_SW=0xNNNN
- *     overrides the PFDRH bits 8-10 (INSIDE, LPS1, LPS2); INSIDE (PF24)
- *     has no pull-up on the sheet and stays 0 by default.
+ *     UART) when its timer runs out first. The levels come from the
+ *     loader mechanism model (xc/loader.c), which also owns the knobs:
+ *     CDJ850_LOADER=0 falls back to both switches open (the pulled-up 1),
+ *     CDJ850_LOADER_SW=0xNNNN overrides the PFDRH bits 8-10 (INSIDE, LPS1,
+ *     LPS2) and turns the model off. INSIDE (PF24) has no pull-up on the
+ *     sheet and stays 0 by default.
  * Both the data register and the pin-state register return the pin for an
  * input (manual Table 30.10 and 30.6.3).
  */
@@ -80,6 +83,8 @@
  */
 #define CDJ850_PCDRL_OFF    0x102
 #define CDJ850_MAIN_XBUSY   0x40
+/* PDDRL, 0xFFFE3982: PD9 (bit 9) is DRVMUTE2, the loader motor driver enable. */
+#define CDJ850_PDDRL_OFF    0x182
 
 typedef struct {
     MemoryRegion iomem;
@@ -88,6 +93,12 @@ typedef struct {
 } Cdj850Port;
 
 static Cdj850Port *cdj850_port;
+
+uint16_t cdj850_port_pddrl(void)
+{
+    return cdj850_port ? (cdj850_port->reg[CDJ850_PDDRL_OFF] << 8) |
+                         cdj850_port->reg[CDJ850_PDDRL_OFF + 1] : 0;
+}
 
 bool cdj850_port_main_xbusy(void)
 {
@@ -114,14 +125,7 @@ static uint16_t cdj850_port_pb_pins(void)
 
 static uint16_t cdj850_port_pf_hi_pins(void)
 {
-    static int sw = -1;
-
-    if (sw < 0) {
-        const char *e = getenv("CDJ850_LOADER_SW");
-
-        sw = e ? (strtoul(e, NULL, 0) & 0x0700) : 0x0600;
-    }
-    return sw;
+    return cdj850_loader_pf_hi_pins();
 }
 
 static uint16_t cdj850_port_pe_pins(void)

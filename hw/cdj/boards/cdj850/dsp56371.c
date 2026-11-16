@@ -9,7 +9,7 @@
  * bring-up 0x0C0FD7CC, gates 0x0C0FCA7A/0x0C0FCBB0, transfer 0x0C0FC9DC,
  * sampler 0x0C0FC8FA, collector 0x0C0FC8DC, validator 0x0C0FC71C-87E
  * (Task 8a §2e, 8b §§1-2) is SERVO init — MAIN→servo DSP IC201 TC94A15FG
- * via SRVCCE (PE7) / SRVBCLK (PE8) / SRVBUS0-3 (PE12-15) plus RAM table
+ * via SRVCCE (PE6) / SRVBCLK (PE8) / SRVBUS0-3 (PE12-15) plus RAM table
  * staging at 0x0CE4B5D3 — NOT an Audio-DSP (IC301 DSPC56371AF180)
  * upload. PE11/DSPDREQ is never driven/sampled in the stream, the AUDIO
  * SPI master never runs, DSPCS never toggles. DSP upload happens
@@ -21,8 +21,8 @@
  * What this models (Task 8c step 2):
  *
  * 1. Bootstrap READY. After MAIN drives the servo Port-E bring-up (PEDRL 0 → 0x40
- *    → 0x140 → 0x1C0 at ~1530 ms, bits 6/8/7 in order = PE6 spare / PE8 SRVBCLK /
- *    PE7 SRVCCE servo enable/clock init per Task 8m §3 — NOT DSPRST, which is
+ *    → 0x140 → 0x1C0 at ~1530 ms, bits 6/8/7 in order = PE6 SRVCCE / PE8 SRVBCLK /
+ *    PE7 SRVRST servo enable/clock init per Task 8m §3 — NOT DSPRST, which is
  *    RESET_B pin 47 with unlabeled origin and is not a PE pin), the servo peer
  *    is alive and
  *    asserts its host-boot READY levels: HREQ/DSPDREQ (MAIN PE12, IC103

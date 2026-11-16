@@ -8,4 +8,8 @@ void cdj850_port_init(MemoryRegion *sysmem, SuperHCPU *cpu);
 
 /* MAIN_XBUSY (PC14, PCDRL bit 14): MAIN's "link ready" output to the panel. */
 bool cdj850_port_main_xbusy(void);
+
+/* PDDRL (0xFFFE3982) as last written; bit 9 = PD9 = DRVMUTE2, the CD loader
+ * motor driver enable. */
+uint16_t cdj850_port_pddrl(void);
 #endif
