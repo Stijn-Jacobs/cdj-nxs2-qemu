@@ -3,6 +3,7 @@
 #include "dsp56371.h"
 #include "xc/adc.h"
 #include "xc/cmt.h"
+#include "xc/intc.h"
 #include "xc/panel_link.h"
 #include "xc/port.h"
 #include "xc/scif.h"
@@ -128,83 +129,6 @@ static bool cdj850_trace(void)
 static uint64_t cdj850_vms(void)
 {
     return qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) / 1000000;
-}
-
-/*
- * INTC at 0xFFFE0800, as plain storage so the firmware's read-modify-writes
- * of the ICR/IRQSR/IPR registers read back. Interrupt delivery does not
- * consult these (see xc/cmt.c).
- */
-#define CDJ850_INTC_BASE    0xFFFE0800
-#define CDJ850_INTC_SIZE    0x800
-
-typedef struct {
-    MemoryRegion iomem;
-    SuperHCPU *cpu;
-    uint8_t reg[CDJ850_INTC_SIZE];
-} Cdj850Intc;
-
-static uint64_t cdj850_intc_read(void *opaque, hwaddr off, unsigned size)
-{
-    Cdj850Intc *s = opaque;
-    uint64_t v = 0;
-    unsigned i;
-
-    for (i = 0; i < size; i++) {
-        v = (v << 8) | s->reg[(off + i) & (CDJ850_INTC_SIZE - 1)];
-    }
-    if (cdj850_trace()) {
-        info_report("cdj850: intc read +0x%x size %u = 0x%x at pc=0x%08x "
-                    "%" PRIu64 " ms", (unsigned)off, size, (unsigned)v,
-                    s->cpu->env.pc, cdj850_vms());
-    }
-    return v;
-}
-
-static void cdj850_intc_write(void *opaque, hwaddr off, uint64_t val,
-                              unsigned size)
-{
-    Cdj850Intc *s = opaque;
-    unsigned i;
-
-    for (i = 0; i < size; i++) {
-        s->reg[(off + size - 1 - i) & (CDJ850_INTC_SIZE - 1)] = val >> (8 * i);
-    }
-    if (cdj850_trace()) {
-        info_report("cdj850: intc write +0x%x size %u = 0x%x at pc=0x%08x "
-                    "%" PRIu64 " ms", (unsigned)off, size, (unsigned)val,
-                    s->cpu->env.pc, cdj850_vms());
-    }
-}
-
-static const MemoryRegionOps cdj850_intc_ops = {
-    .read = cdj850_intc_read,
-    .write = cdj850_intc_write,
-    .endianness = DEVICE_BIG_ENDIAN,
-    .valid = { .min_access_size = 1, .max_access_size = 4 },
-};
-
-static const VMStateDescription vmstate_cdj850_intc = {
-    .name = "cdj850-intc",
-    .version_id = 1,
-    .minimum_version_id = 1,
-    .fields = (const VMStateField[]) {
-        VMSTATE_UINT8_ARRAY(reg, Cdj850Intc, CDJ850_INTC_SIZE),
-        VMSTATE_END_OF_LIST()
-    }
-};
-
-static void cdj850_intc_init(MemoryRegion *sysmem, SuperHCPU *cpu)
-{
-    Cdj850Intc *s = g_new0(Cdj850Intc, 1);
-
-    s->cpu = cpu;
-    vmstate_register_any(NULL, &vmstate_cdj850_intc, s);
-    memory_region_init_io(&s->iomem, NULL, &cdj850_intc_ops, s,
-                          "cdj850.intc", CDJ850_INTC_SIZE);
-    /* Priority 1: sh7263.internal covers this range. */
-    memory_region_add_subregion_overlap(sysmem, CDJ850_INTC_BASE, &s->iomem,
-                                        1);
 }
 
 /*

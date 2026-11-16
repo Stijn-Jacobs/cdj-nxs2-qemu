@@ -233,6 +233,12 @@ static void cdj850_raise(SuperHCPU *cpu, uint16_t vec, uint8_t level)
     cdj850_irq_pump(NULL);
 }
 
+/* Entry point for the other interrupt sources (xc/intc.c). */
+void cdj850_irq_raise(SuperHCPU *cpu, uint16_t vec, uint8_t level)
+{
+    cdj850_raise(cpu, vec, level);
+}
+
 static const VMStateDescription vmstate_cdj850_irq = {
     .name = "cdj850-irq",
     .version_id = 1,

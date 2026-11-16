@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "cdj_common.h"
 #include "../dsp56371.h"
+#include "intc.h"
 #include "port.h"
 #include "trace.h"
 
@@ -42,11 +43,75 @@
 #define CDJ850_PORT_READY_OFF 0x11F
 #define CDJ850_PORT_READY_BIT 0x04
 
+/*
+ * Input pins whose level comes from the board, not the output latch
+ * (PFC values from the boot block; nets from service manual 10.2 MAIN
+ * ASSY 1/4, IC103 pins 180-185):
+ *   PB1 = IRQ1, SRVSBSY    PB2 = IRQ2, SPDLFG    PB4 = IRQ4, ZERO
+ *     -- level tracked by xc/intc.c, which also latches their edges.
+ *   PB3 = 5MON, the 5 V rail monitor. The power task at 0x0C0FF7DA polls
+ *     PBPRL bit 3 every tick and counts consecutive lows as a supply
+ *     fault; with the pin reading 0 it never stops counting. The rail is
+ *     up on a running unit, so the pin reads 1 (CDJ850_5MON=0 restores
+ *     the old low level).
+ *   PE9 = IRQ5, PNL_XBUSY  PE11 = IRQ7, DSPDREQ  -- reported on PEPRL only;
+ *     PEDRL reads stay with the servo-bus adjustments in dsp56371.c.
+ *   PF25 = LPS1, PF26 = LPS2: the CD loader position switches (service
+ *     manual 10.2 MAIN ASSY 2/4, IC103 pins 135/134), each pulled up by
+ *     10 k (R140/R141). The loader state machine at 0x0C106194 waits for
+ *     LPS2 high on PFDRH bit 10 and reports error 0x90 ("E90" on the debug
+ *     UART) when its timer runs out first. With no mechanism modelled the
+ *     switches read open, i.e. the pulled-up 1. CDJ850_LOADER_SW=0xNNNN
+ *     overrides the PFDRH bits 8-10 (INSIDE, LPS1, LPS2); INSIDE (PF24)
+ *     has no pull-up on the sheet and stays 0 by default.
+ * Both the data register and the pin-state register return the pin for an
+ * input (manual Table 30.10 and 30.6.3).
+ */
+#define CDJ850_PFDRH_OFF    0x280
+#define CDJ850_PBDRL_OFF    0x82
+#define CDJ850_PBPRL_OFF    0x9E
+#define CDJ850_PEPRL_OFF    0x21E
+
 typedef struct {
     MemoryRegion iomem;
     SuperHCPU *cpu;
     uint8_t reg[CDJ850_PORT_SIZE];
 } Cdj850Port;
+
+static uint16_t cdj850_port_pb_pins(void)
+{
+    static int mon = -1;
+    uint16_t v = 0;
+
+    if (mon < 0) {
+        const char *e = getenv("CDJ850_5MON");
+
+        mon = !(e && *e == '0');
+    }
+    v |= cdj850_intc_get_pin(1) ? 1u << 1 : 0;
+    v |= cdj850_intc_get_pin(2) ? 1u << 2 : 0;
+    v |= mon ? 1u << 3 : 0;
+    v |= cdj850_intc_get_pin(4) ? 1u << 4 : 0;
+    return v;
+}
+
+static uint16_t cdj850_port_pf_hi_pins(void)
+{
+    static int sw = -1;
+
+    if (sw < 0) {
+        const char *e = getenv("CDJ850_LOADER_SW");
+
+        sw = e ? (strtoul(e, NULL, 0) & 0x0700) : 0x0600;
+    }
+    return sw;
+}
+
+static uint16_t cdj850_port_pe_pins(void)
+{
+    return (cdj850_intc_get_pin(5) ? 1u << 9 : 0) |
+           (cdj850_intc_get_pin(7) ? 1u << 11 : 0);
+}
 
 static uint64_t cdj850_port_read(void *opaque, hwaddr off, unsigned size)
 {
@@ -63,6 +128,35 @@ static uint64_t cdj850_port_read(void *opaque, hwaddr off, unsigned size)
         if (((off + i) & (CDJ850_PORT_SIZE - 1)) == CDJ850_PORT_READY_OFF) {
             v |= (uint64_t)CDJ850_PORT_READY_BIT << ((size - 1 - i) * 8);
         }
+    }
+    /* Board-driven input pins (see the table above). */
+    for (i = 0; i < size; i++) {
+        hwaddr a = (off + i) & (CDJ850_PORT_SIZE - 1);
+        unsigned sh = (size - 1 - i) * 8;
+        uint16_t pins = 0, mask = 0;
+        hwaddr base = 0;
+
+        if ((a & ~1) == CDJ850_PBDRL_OFF || (a & ~1) == CDJ850_PBPRL_OFF) {
+            pins = cdj850_port_pb_pins();
+            mask = 0x001E;
+            base = a & ~1;
+        } else if ((a & ~1) == CDJ850_PEPRL_OFF) {
+            pins = cdj850_port_pe_pins();
+            mask = 0x0A00;
+            base = a & ~1;
+        } else if ((a & ~1) == CDJ850_PFDRH_OFF) {
+            pins = cdj850_port_pf_hi_pins();
+            mask = 0x0700;
+            base = a & ~1;
+        } else {
+            continue;
+        }
+        if (a == base) {            /* high byte */
+            pins >>= 8;
+            mask >>= 8;
+        }
+        v = (v & ~((uint64_t)(mask & 0xff) << sh)) |
+            ((uint64_t)(pins & mask & 0xff) << sh);
     }
     /* Servo-gated input levels (Task 8n): PE6/PE8/SRVBUS0 READY only
      * with $CDJ850_SERVO_READY=1 once the peer is alive; SRVBUS nibble

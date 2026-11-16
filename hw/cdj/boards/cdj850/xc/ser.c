@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "cdj_common.h"
+#include "dsp_shi.h"
 #include "panel_link.h"
 #include "ser.h"
 #include "trace.h"
@@ -160,6 +161,10 @@ static void cdj850_ser_write(void *opaque, hwaddr off, uint64_t val,
             }
         }
         panel_ssu_tx_byte(byte);
+        /* The DSP bootstrap upload is transmit-only (SSER.RE clear). */
+        if (!(s->reg[3] & CDJ850_SER_RE)) {
+            cdj850_dsp_shi_tx(byte);
+        }
         if (cdj850_trace()) {
             info_report("cdj850: ser TX 0x%02x ('%c') at pc=0x%08x "
                         "%" PRIu64 " ms", byte,
