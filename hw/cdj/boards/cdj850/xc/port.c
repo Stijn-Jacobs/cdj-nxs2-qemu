@@ -57,6 +57,10 @@
  *     the old low level).
  *   PE9 = IRQ5, PNL_XBUSY  PE11 = IRQ7, DSPDREQ  -- reported on PEPRL only;
  *     PEDRL reads stay with the servo-bus adjustments in dsp56371.c.
+ *   PE10 = IRQ6, USB_CDETFLG (IC103 pin 71): the USB-A over-current flag,
+ *     high = normal (service manual 10.15). Reported on PEPRL and PEDRL:
+ *     the firmware polls PEDRL bit 10 (0x0C10DCEA) and counts lows as an
+ *     over-current. Level from xc/intc.c (IRQ6 idle high).
  *   PF25 = LPS1, PF26 = LPS2: the CD loader position switches (service
  *     manual 10.2 MAIN ASSY 2/4, IC103 pins 135/134), each pulled up by
  *     10 k (R140/R141). The loader state machine at 0x0C106194 waits for
@@ -74,6 +78,7 @@
 #define CDJ850_PBDRL_OFF    0x82
 #define CDJ850_PBPRL_OFF    0x9E
 #define CDJ850_PEPRL_OFF    0x21E
+#define CDJ850_PEDRL_OFF    0x202
 /*
  * PC14 = MAIN_XBUSY, MAIN's output to the panel CPU. PCDRL is the 16-bit
  * register at 0xFFFE3902 (+0x102), PC14 is its bit 14, i.e. bit 6 of the
@@ -106,6 +111,12 @@ bool cdj850_port_main_xbusy(void)
            (cdj850_port->reg[CDJ850_PCDRL_OFF] & CDJ850_MAIN_XBUSY);
 }
 
+uint16_t cdj850_port_pbdrl(void)
+{
+    return cdj850_port ? (cdj850_port->reg[CDJ850_PBDRL_OFF] << 8) |
+                         cdj850_port->reg[CDJ850_PBDRL_OFF + 1] : 0;
+}
+
 static uint16_t cdj850_port_pb_pins(void)
 {
     static int mon = -1;
@@ -131,6 +142,7 @@ static uint16_t cdj850_port_pf_hi_pins(void)
 static uint16_t cdj850_port_pe_pins(void)
 {
     return (cdj850_intc_get_pin(5) ? 1u << 9 : 0) |
+           (cdj850_intc_get_pin(6) ? 1u << 10 : 0) |
            (cdj850_intc_get_pin(7) ? 1u << 11 : 0);
 }
 
@@ -163,7 +175,11 @@ static uint64_t cdj850_port_read(void *opaque, hwaddr off, unsigned size)
             base = a & ~1;
         } else if ((a & ~1) == CDJ850_PEPRL_OFF) {
             pins = cdj850_port_pe_pins();
-            mask = 0x0A00;
+            mask = 0x0E00;
+            base = a & ~1;
+        } else if ((a & ~1) == CDJ850_PEDRL_OFF) {
+            pins = cdj850_port_pe_pins();
+            mask = 0x0400;           /* PE10 only; see the table above */
             base = a & ~1;
         } else if ((a & ~1) == CDJ850_PFDRH_OFF) {
             pins = cdj850_port_pf_hi_pins();

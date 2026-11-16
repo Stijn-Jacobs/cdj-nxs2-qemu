@@ -29,6 +29,8 @@
  * manual 10.2 MAIN ASSY 1/4 for the nets):
  *   IRQ1 = PB1, net SRVSBSY (servo)     IRQ2 = PB2, net SPDLFG (spindle FG)
  *   IRQ4 = PB4, net ZERO                IRQ5 = PE9, net PNL_XBUSY (panel)
+ *   IRQ6 = PE10, net USB_CDETFLG (USB-A over-current flag, PECRL3 =
+ *          0x2220; priority 0, polled through PEDRL instead)
  *   IRQ7 = PE11, net DSPDREQ (audio DSP)
  *
  * Everything else in the block stays plain storage so read-modify-writes
@@ -171,6 +173,14 @@ bool cdj850_intc_get_pin(unsigned irq)
     return cdj850_intc && irq < 8 && (cdj850_intc->pins & (1u << irq));
 }
 
+uint16_t cdj850_intc_reg16(unsigned off)
+{
+    if (!cdj850_intc || off + 1 >= CDJ850_INTC_SIZE) {
+        return 0;
+    }
+    return intc_reg16(cdj850_intc, off);
+}
+
 static uint8_t intc_irqrr(Cdj850Intc *s)
 {
     uint8_t v = 0;
@@ -307,9 +317,17 @@ void cdj850_intc_init(MemoryRegion *sysmem, SuperHCPU *cpu)
     const char *idle = getenv("CDJ850_IRQ_IDLE");
 
     /*
-     * Idle pin levels, bit n = IRQn; 0x80 = only DSPDREQ (IRQ7) idles high:
-     * R513 10 k pull-up, low pulse per transaction (service manual 10.14
-     * waveform 5). PNL_XBUSY (IRQ5) idles low and is driven by the panel
+     * Idle pin levels, bit n = IRQn; 0xC0 = DSPDREQ (IRQ7) and USB_CDETFLG
+     * (IRQ6) idle high. DSPDREQ: R513 10 k pull-up, low pulse per
+     * transaction (service manual 10.14 waveform 5). USB_CDETFLG (PE10,
+     * IC103 pin 71, from the USB-A power switch IC2003 on the CMPX board):
+     * service manual 10.15 "H (3.3 V): Normal, L (0 V): Overcurrent
+     * detection", and [4-1] step 3 (VBUSON H with CODETFLG L = short). The
+     * firmware arms IRQ6 at priority 0 (IPR02 = 0x7907) and instead polls
+     * PEDRL bit 10 at 0x0C10DCEA, latching an over-current after 15
+     * consecutive lows (counter 0x0C1E1270, flag 0x0C1E1271); before this
+     * the pin read 0 and that fault was reported continuously. No
+     * over-current is modelled. PNL_XBUSY (IRQ5) idles low and is driven by the panel
      * peer, xc/panel_peer.c. SRVSBSY (IRQ1), SPDLFG (IRQ2) and ZERO (IRQ4)
      * have no peer model and read low. An earlier inference that IRQ1 and
      * IRQ5 idle high is withdrawn: the firmware arms those pins at a nonzero
@@ -317,7 +335,7 @@ void cdj850_intc_init(MemoryRegion *sysmem, SuperHCPU *cpu)
      * in low-level mode, so the brief low-level window proves nothing about
      * the resting level. CDJ850_IRQ_IDLE overrides.
      */
-    s->pins = idle ? strtoul(idle, NULL, 0) : 0x80;
+    s->pins = idle ? strtoul(idle, NULL, 0) : 0xC0;
     s->level_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, intc_level_settle, s);
     cdj850_intc = s;
     vmstate_register_any(NULL, &vmstate_cdj850_intc, s);

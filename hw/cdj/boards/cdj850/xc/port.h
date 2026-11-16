@@ -12,4 +12,8 @@ bool cdj850_port_main_xbusy(void);
 /* PDDRL (0xFFFE3982) as last written; bit 9 = PD9 = DRVMUTE2, the CD loader
  * motor driver enable. */
 uint16_t cdj850_port_pddrl(void);
+
+/* PBDRL (0xFFFE3882) as last written; bit 10 = PB10 = USB_ABSEL (high =
+ * USB-A host port), bit 11 = PB11 = USB_VBUSON (high = VBUS on). */
+uint16_t cdj850_port_pbdrl(void);
 #endif

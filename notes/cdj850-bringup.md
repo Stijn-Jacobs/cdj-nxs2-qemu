@@ -71,15 +71,57 @@ panel_peer.c) are authoritative.
   PD10/TIOC3C, enable PD9, switches LPS1/LPS2) lets the no-disc homing
   finish: loader state 0x0C7F6D98 = 0, no "E90", and the display pages
   MAIN sends read "EJEC" then "NO DISC". The unit therefore reaches its
-  idle no-disc state. Open: USB host (not wired), execution of the
+  idle no-disc state. Open: execution of the
   uploaded DSP program, CD servo (only needed with a disc).
+
+- **USB host (2026-11-16, reviewed and verified).** The 0xFFFC1C00 block is the
+  SH7263 USB module, but its register layout is NOT the SH7724 one in
+  hw/cdj/common/usb_r8a66597.h (the "offsets match exactly" claim in the
+  Task 8 entry below is wrong): SYSSTS +0x02, DVSTCTR +0x04, CFIFO/D0FIFO/
+  D1FIFO +0x10/+0x14/+0x18, CFIFOSEL +0x1E, PIPECFG +0x66, DEVSEL in MAXP
+  bits 15:14, transaction counter in DnFIFOTRN (manual Table 25.2, and the
+  firmware's own accesses). xc/usb.c translates onto the shared model;
+  xc/dmac.c models the DMAC channel the driver uses for sector data (ch7,
+  DMARS3 = USB_DMA0, DEI7 vector 136). USBI is vector 140, IPR08[15:12]
+  (firmware sets 6). PE10 = USB_CDETFLG (service manual 10.15: H = normal,
+  L = over-current); it used to read 0, and the firmware (poll 0x0C10DCEA,
+  flag 0x0C1E1271) reported a USB over-current all the time. PB10 =
+  USB_ABSEL (H = A/host port), PB11 = USB_VBUSON. With
+  `MAIN_ARGS="-drive if=none,id=usbstk,format=raw,file=<img> -device
+  usb-storage,drive=usbstk,port=1"` the firmware enumerates the stick,
+  runs BOT, reads the FAT16 tables and root directory, and creates
+  /PIONEER/{CDJ,MPJ,USBANLZ} and /PIONEER/USBANLZ/USBMNG.DAT on it (use
+  snapshot=on to keep the image unchanged). Display text stays "NO DISC".
+  Review fixes preserve the programmed DnFIFOTRN preset when TRCLR clears
+  the current counter (manual 25.4.4(e)), hold DEIn while TE and IE remain
+  set (100 us re-evaluation also picks up a later INTC priority enable),
+  and keep reserved DMAC offsets 0x80..0xFF from indexing nonexistent
+  channels 8..15. Five QTest regressions in `tests/test_cdj850_usb.py`
+  exercise both FIFO presets, DMA addressing, reserved storage, delayed
+  priority enable and an uncleared completion interrupt. They run the
+  built big-endian QEMU with a synthetic ROM, without Pioneer firmware.
+  All five pass after rebuilding. Full suite: 687 passed, 38 skipped,
+  1 xfailed; the existing baken download-preview test now explicitly
+  simulates a missing tool. Firmware boots with and without USB reach
+  idle without E90 or queue overflow. USB trace: 144 READ(10), 40 WRITE(10),
+  184 DMA completions. A disposable FAT16 copy contains USBMNG.DAT
+  (400058 bytes, PMNG header), with matching FAT copies. Original update,
+  flash and USB image checksums are unchanged. Audio playback is unverified;
+  DSP program execution remains unimplemented.
+  Known limits: DnFIFOTRN readback currently returns its programmed preset
+  even with TRENB set; hardware then returns the current ascending count.
+  USB frontend state (local registers, cached pipe directions, interrupt
+  level/poll timer) is not migrated, so save/restore with USB attached is
+  not supported. `snapshot=on` above is block-image write isolation, not
+  a VM save/restore guarantee. Other peripherals also have incomplete
+  migration support; these review fixes do not establish it.
 
 Environment knobs added by these commits (all read once at start-up):
 
 | Variable | Default | Effect |
 |---|---|---|
 | CDJ850_IRQ_PULSE=`n@ms[,n@ms...]` | unset | Diagnostic: invert IRQn pin for 1 ms at virtual time `ms`. Invents an event; nothing may depend on it. |
-| CDJ850_IRQ_IDLE=`0xNN` | 0x80 | Idle level of IRQ0-7 pins, bit n = IRQn (default: only IRQ7/DSPDREQ high). |
+| CDJ850_IRQ_IDLE=`0xNN` | 0xC0 | Idle level of IRQ0-7 pins, bit n = IRQn (default: IRQ7/DSPDREQ and IRQ6/USB_CDETFLG high; 0x80 = the old level, which reads as a USB over-current). |
 | CDJ850_DSP_BOOT_HLE=1 | off | Toggle DSPDREQ after each DSP SHI segment (idle high: 0,1,0,1). Stand-in for the DSP program. |
 | CDJ850_5MON=0 | 5MON reads 1 | `0` makes PB3 read low (old behaviour). |
 | CDJ850_LOADER_SW=`0xNNNN` | 0x0600 | Overrides PFDRH bits 8-10 (INSIDE, LPS1, LPS2); default LPS1/LPS2 high, INSIDE low. |

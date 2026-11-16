@@ -216,6 +216,24 @@ static void cdj850_raise(SuperHCPU *cpu, uint16_t vec, uint8_t level)
 
     next = (cdj850_irq.tail + 1) % CDJ850_IRQ_QUEUE_LEN;
     if (next == cdj850_irq.head) {
+        /* Entries taken or withdrawn out of order leave holes that only
+         * close when the head passes them; squeeze them out first. */
+        Cdj850Irq live[CDJ850_IRQ_QUEUE_LEN];
+        unsigned n = 0;
+
+        for (i = cdj850_irq.head; i != cdj850_irq.tail;
+             i = (i + 1) % CDJ850_IRQ_QUEUE_LEN) {
+            if (cdj850_irq.q[i].used) {
+                live[n++] = cdj850_irq.q[i];
+            }
+        }
+        memset(cdj850_irq.q, 0, sizeof(cdj850_irq.q));
+        memcpy(cdj850_irq.q, live, n * sizeof(live[0]));
+        cdj850_irq.head = 0;
+        cdj850_irq.tail = n;
+        next = (cdj850_irq.tail + 1) % CDJ850_IRQ_QUEUE_LEN;
+    }
+    if (next == cdj850_irq.head) {
         if (cdj850_irq.dropped++ < 8) {
             warn_report("cdj850: interrupt queue full, dropping vector %u",
                         vec);
@@ -237,6 +255,48 @@ static void cdj850_raise(SuperHCPU *cpu, uint16_t vec, uint8_t level)
 void cdj850_irq_raise(SuperHCPU *cpu, uint16_t vec, uint8_t level)
 {
     cdj850_raise(cpu, vec, level);
+}
+
+/*
+ * For level-sensitive sources (xc/usb.c): is a request for vec queued, or
+ * presented to the CPU and not yet taken?
+ */
+bool cdj850_irq_pending(uint16_t vec)
+{
+    unsigned i;
+
+    for (i = cdj850_irq.head; i != cdj850_irq.tail;
+         i = (i + 1) % CDJ850_IRQ_QUEUE_LEN) {
+        if (cdj850_irq.q[i].used && cdj850_irq.q[i].vec == vec) {
+            return true;
+        }
+    }
+    return cdj850_irq.cpu && cdj850_irq.cur_valid &&
+           cdj850_irq.cur_vec == vec &&
+           (CPU(cdj850_irq.cpu)->interrupt_request & CPU_INTERRUPT_HARD);
+}
+
+/*
+ * A level-sensitive source whose request line dropped: remove its queued
+ * request and withdraw it from the CPU if presented but not yet taken.
+ */
+void cdj850_irq_withdraw(SuperHCPU *cpu, uint16_t vec)
+{
+    unsigned i;
+
+    for (i = cdj850_irq.head; i != cdj850_irq.tail;
+         i = (i + 1) % CDJ850_IRQ_QUEUE_LEN) {
+        if (cdj850_irq.q[i].used && cdj850_irq.q[i].vec == vec) {
+            cdj850_irq.q[i].used = false;
+        }
+    }
+    while (cdj850_irq.head != cdj850_irq.tail &&
+           !cdj850_irq.q[cdj850_irq.head].used) {
+        cdj850_irq.head = (cdj850_irq.head + 1) % CDJ850_IRQ_QUEUE_LEN;
+    }
+    if (cdj850_irq.cur_valid && cdj850_irq.cur_vec == vec) {
+        cdj850_ack(cpu, vec);
+    }
 }
 
 static const VMStateDescription vmstate_cdj850_irq = {

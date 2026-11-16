@@ -3,6 +3,7 @@
 #include "dsp56371.h"
 #include "xc/adc.h"
 #include "xc/cmt.h"
+#include "xc/dmac.h"
 #include "xc/intc.h"
 #include "xc/loader.h"
 #include "xc/mtu2.h"
@@ -12,6 +13,7 @@
 #include "xc/scif.h"
 #include "xc/ser.h"
 #include "xc/ssi.h"
+#include "xc/usb.h"
 #include "xc/vfd.h"
 /*
  * Pioneer CDJ-850 MAIN board (Renesas SH7263, SH-2A) -- bring-up.
@@ -377,6 +379,10 @@ static void cdj850_init(MachineState *machine)
     cdj850_panel_peer_init();
     cdj850_ssi_init(sysmem, cpu);
     cdj850_cmt_init(sysmem, cpu);
+    /* On-chip USB host/function module (needs the INTC and port models)
+     * and the DMAC that carries its sector data. */
+    cdj850_usb_init(sysmem, cpu);
+    cdj850_dmac_init(sysmem, cpu);
     /* Audit the silent SH-4 CCN mapping (see the device comment). */
     cdj850_ccnaudit_init(sysmem, cpu);
     /* Panel link + VFD text window (MAIN-side model; panel CPU not
