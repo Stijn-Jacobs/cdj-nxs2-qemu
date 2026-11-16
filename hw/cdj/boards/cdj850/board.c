@@ -5,6 +5,7 @@
 #include "xc/cmt.h"
 #include "xc/intc.h"
 #include "xc/panel_link.h"
+#include "xc/panel_peer.h"
 #include "xc/port.h"
 #include "xc/scif.h"
 #include "xc/ser.h"
@@ -367,6 +368,8 @@ static void cdj850_init(MachineState *machine)
     cdj850_port_init(sysmem, cpu);
     cdj850_ser_init(sysmem, cpu);
     cdj850_scif_init(sysmem, cpu);
+    /* Panel CPU on the SCIF1 link (needs the SCIF, INTC and port models). */
+    cdj850_panel_peer_init();
     cdj850_ssi_init(sysmem, cpu);
     cdj850_cmt_init(sysmem, cpu);
     /* Audit the silent SH-4 CCN mapping (see the device comment). */

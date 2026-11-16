@@ -5,4 +5,7 @@
 #include "cdj_common.h"
 
 void cdj850_port_init(MemoryRegion *sysmem, SuperHCPU *cpu);
+
+/* MAIN_XBUSY (PC14, PCDRL bit 14): MAIN's "link ready" output to the panel. */
+bool cdj850_port_main_xbusy(void);
 #endif

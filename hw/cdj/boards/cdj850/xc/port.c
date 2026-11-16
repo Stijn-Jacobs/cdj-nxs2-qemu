@@ -71,12 +71,29 @@
 #define CDJ850_PBDRL_OFF    0x82
 #define CDJ850_PBPRL_OFF    0x9E
 #define CDJ850_PEPRL_OFF    0x21E
+/*
+ * PC14 = MAIN_XBUSY, MAIN's output to the panel CPU. PCDRL is the 16-bit
+ * register at 0xFFFE3902 (+0x102), PC14 is its bit 14, i.e. bit 6 of the
+ * byte at +0x102 (big-endian). The firmware sets it once, at the end of the
+ * panel-link setup (0x0C0F9FF0..0x0C0FA000), after PCIORL made PC14 an
+ * output (0x0C0B9116).
+ */
+#define CDJ850_PCDRL_OFF    0x102
+#define CDJ850_MAIN_XBUSY   0x40
 
 typedef struct {
     MemoryRegion iomem;
     SuperHCPU *cpu;
     uint8_t reg[CDJ850_PORT_SIZE];
 } Cdj850Port;
+
+static Cdj850Port *cdj850_port;
+
+bool cdj850_port_main_xbusy(void)
+{
+    return cdj850_port &&
+           (cdj850_port->reg[CDJ850_PCDRL_OFF] & CDJ850_MAIN_XBUSY);
+}
 
 static uint16_t cdj850_port_pb_pins(void)
 {
@@ -213,6 +230,7 @@ void cdj850_port_init(MemoryRegion *sysmem, SuperHCPU *cpu)
     Cdj850Port *s = g_new0(Cdj850Port, 1);
 
     s->cpu = cpu;
+    cdj850_port = s;
     vmstate_register_any(NULL, &vmstate_cdj850_port, s);
     memory_region_init_io(&s->iomem, NULL, &cdj850_port_ops, s,
                           "cdj850.port", CDJ850_PORT_SIZE);

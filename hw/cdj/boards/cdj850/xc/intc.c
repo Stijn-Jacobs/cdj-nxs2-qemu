@@ -307,16 +307,17 @@ void cdj850_intc_init(MemoryRegion *sysmem, SuperHCPU *cpu)
     const char *idle = getenv("CDJ850_IRQ_IDLE");
 
     /*
-     * Idle pin levels, bit n = IRQn. DSPDREQ (IRQ7) idles high: R513 10 k
-     * pull-up, low pulse per transaction (service manual 10.14 waveform
-     * 5). SRVSBSY (IRQ1) and PNL_XBUSY (IRQ5) are taken as idle-high
-     * because the firmware enables each at a nonzero priority while the
-     * pin is still in low-level mode, which on hardware would interrupt
-     * at once if the line rested low. SPDLFG (IRQ2) and ZERO (IRQ4) have
-     * no such evidence and no peer model: they keep the low level the
-     * firmware saw before this model existed. CDJ850_IRQ_IDLE overrides.
+     * Idle pin levels, bit n = IRQn; 0x80 = only DSPDREQ (IRQ7) idles high:
+     * R513 10 k pull-up, low pulse per transaction (service manual 10.14
+     * waveform 5). PNL_XBUSY (IRQ5) idles low and is driven by the panel
+     * peer, xc/panel_peer.c. SRVSBSY (IRQ1), SPDLFG (IRQ2) and ZERO (IRQ4)
+     * have no peer model and read low. An earlier inference that IRQ1 and
+     * IRQ5 idle high is withdrawn: the firmware arms those pins at a nonzero
+     * priority inside an interrupt-locked section, while the pin is still
+     * in low-level mode, so the brief low-level window proves nothing about
+     * the resting level. CDJ850_IRQ_IDLE overrides.
      */
-    s->pins = idle ? strtoul(idle, NULL, 0) : 0xA2;
+    s->pins = idle ? strtoul(idle, NULL, 0) : 0x80;
     s->level_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, intc_level_settle, s);
     cdj850_intc = s;
     vmstate_register_any(NULL, &vmstate_cdj850_intc, s);
