@@ -14,6 +14,10 @@ void vfd_text(char *line0, unsigned n0, char *line1, unsigned n1);
 /* Fed by panel_link.c for every MAIN->panel byte (FL frame capture). */
 void vfd_note_tx(uint8_t b);
 
+/* Fed by panel_peer.c when MAIN->panel SCIF1 frames decode 3 display lines. */
+void vfd_note_panel_text(uint8_t mode, const char *l0, const char *l1,
+                         const char *l2);
+
 /* Panel display frame format (Task VFD-1; full evidence trail with builder
  * PCs in notes/cdj850-bringup.md).
  *

@@ -127,6 +127,7 @@ Environment knobs added by these commits (all read once at start-up):
 | CDJ850_LOADER_SW=`0xNNNN` | 0x0600 | Overrides PFDRH bits 8-10 (INSIDE, LPS1, LPS2); default LPS1/LPS2 high, INSIDE low. |
 | CDJ850_PANEL=0 | enabled | `0` disables the emulated panel peer (xc/panel_peer.c). |
 | CDJ850_PANEL_PERIOD_MS=`n` | 10 | Idle gap between panel transactions; 0 or unparsable gives the default. The real rate is unknown. |
+| CDJ850_PANEL_SCRIPT=`list` | unset | Comma-separated scripted SCIF1 panel events (`<ms>:<btn>[:<hold_ms>]`, `<ms>:+<btn>`, `<ms>:-<btn>`, `<ms>:rot+/-N`). |
 | CDJ850_LOADER=`0` | model on | Disables the loader mechanism model; LPS1/LPS2 read the constant 0x0600. |
 
 ## Task 1 baseline (2026-10-12)
@@ -1160,3 +1161,46 @@ scripts in /tmp only (uncommitted: reused `/tmp/8k-run.py`, new
   no key-code guessing/fuzzing/other pins/DSP combos (bound honored).
 - Suite: `test_sh2a_smoke + test_firmware_cdj850 + test_cdj850_vfd +
   test_cdj850_panel_seq` 28 passed.
+
+## SCIF1 panel input, multi-frame display & USB browse/load (2026-11-17)
+
+- **SCIF1 RX input framing (`hw/cdj/boards/cdj850/xc/panel_peer.c`):**
+  - Frame 1 (`tx/rx` index 0, type `0x01`): bytes `[1..2]` version (`01 00`),
+    bytes `[3..4]` signed/wrapping 16-bit big-endian browse rotary encoder
+    counter, bytes `[5..6]` jog counter, bytes `[13..14]` button word 0
+    (`enter`/`push` = `0x0100`, `jog_touch`/`fwd`/`move`), byte `15` 8-bit
+    end-around-carry checksum (`sum8ec` over bytes `0..14`).
+  - Frame 2 (index 1, type `0x02`): bytes `[1..8]` button words `1..4`
+    (verified against MAIN test-mode tables `0x0C194EA4` / `0x0C194FD8`,
+    including word 3 `usb` = `0x0002`, `disc`/`cd` = `0x0004`, `link`/`pc`
+    = `0x0001`; word 4 `browse` = `0x0100`, `back` = `0x1000`), byte `12`
+    `sum8ec` over bytes `0..11`.
+  - Frames `>= 2`: panel sends zero padding while clocking remaining TX
+    frames from MAIN until MAIN's `TXI1` ISR drops `TIE`.
+  - `CDJ850_PANEL_SCRIPT` injects button press/release and `rot+/-N` events
+    against emulated `cdj850_vms()`.
+- **SCIF1 TX display framing & fixes (`hw/cdj/boards/cdj850/xc/panel_peer.c`, `xc/vfd.c`):**
+  - Disassembly of `0x0C065ED0..0x0C06622C` (`0x0C066046` / `0x0C0660D4`)
+    and live TX dumps (`0x0C9D07D0`, row structs at `0x0C9D0B18 + row*0x105`)
+    showed that MAIN's `TXI1` ISR (`0x0C0FA13C`) streams `0x80` (header:
+    `[1]` seq, `[2]` mode) + `0x81..0xAE` (14-byte payload chunks) + trailing
+    `0x60`/`0x70..` frames inside a single `PNL_XBUSY` transaction as long as
+    `TIE` remains set.
+  - Fixes applied in `xc/panel_peer.c`:
+    1. Raised per-transaction clocking limit from `PANEL_NFRAMES` (`3`) to
+       `PANEL_TX_MAX` (`64`), preventing multi-frame display bursts (`0x82+`)
+       from being truncated.
+    2. Reset reassembly when `0x81` (`sub == 1`) arrives while
+       `disp_next_sub != 1` so retries cannot splice onto stale chunks.
+    3. Matched row tags by `(tag & 0x03) == (row + 1)` rather than exact
+       `0x11/0x12/0x13` (browse/track screens use `0x25/0x02/0x03` with row 0
+       highlighted and `0x01/0x26/0x03` when rotated to row 1), and tracked
+       `disp_tag` changes in change-only logging and `vfd_note_panel_text()`.
+- **Live E2E USB verification (`tests/test_cdj850_usb.py`):**
+  - `test_live_usb_source_select_browse_and_load` boots `flash_cdj850.bin`
+    (`snapshot=on`, `CDJ850_DSP_BOOT_HLE=1`) with a disposable FAT16 USB image
+    containing `ALPHA.wav`, `BETA.wav`, and `GAMMA.wav`, and verifies the
+    SCIF1 panel log progression under `20000:usb:200,24000:enter:200,26000:rot+1,28000:enter:200`:
+    `[.FOLDER.] | [] | []` -> `tag=25/02/03` `[ALPHA.wav] | [BETA.wav] | [GAMMA.wav]`
+    -> `tag=01/26/03` `[ALPHA.wav] | [BETA.wav] | [GAMMA.wav]` ->
+    `mode=0x0a` `[BETA.wav] | [] | []`.
