@@ -555,6 +555,7 @@ static bool panel_try_decode_display(void)
     panel.disp_next_sub = 0;
     panel.disp_hdr_pending = false;
     panel.disp_hdr_wait = 0;
+    vfd_note_panel_tags(panel.disp_tag);
     vfd_note_panel_text(panel.disp_mode, panel.disp_line[0],
                         panel.disp_line[1], panel.disp_line[2]);
 

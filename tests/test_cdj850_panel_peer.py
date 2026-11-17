@@ -87,6 +87,7 @@ STUBS = {
     "vfd.h": (
         "#ifndef STUB_VFD_H\n#define STUB_VFD_H\n"
         "#include <stdint.h>\n"
+        "void vfd_note_panel_tags(const uint8_t tags[3]);\n"
         "void vfd_note_panel_text(uint8_t mode, const char *l0, const char *l1, const char *l2);\n"
         "#endif\n"
     ),
@@ -107,6 +108,8 @@ uint64_t stub_vms_ns = 0;
 static uint8_t vfd_last_mode = 0xff;
 static char vfd_last[3][256];
 static unsigned vfd_calls = 0;
+
+void vfd_note_panel_tags(const uint8_t tags[3]) { (void)tags; }
 
 void vfd_note_panel_text(uint8_t mode, const char *l0, const char *l1,
                          const char *l2)
