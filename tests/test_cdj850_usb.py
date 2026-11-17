@@ -255,13 +255,18 @@ def test_pcm_wav_fixture_is_audible():
     assert max(samples) > 10000 and min(samples) < -10000
 
 
-AUDIO_PLAY_STATE = 0x0C7F6627
+# MAIN player state for the USB deck (0x0CE6D25D + source index 2). After a
+# load it is 3 = playing (auto-play), 5 = paused/braking, 4 = paused in CDJ
+# mode; the audio command and audio-task state follow (1/3 play, 3/4 pause).
+PLAYER_STATE = 0x0CE6D25F
+SPEED = 0x0CE6C940          # speed sent to the DSP, 0x080000 = 1.0x
+READ_INDEX = 0x0C7F645C     # sector index the IRQ7 feeder reads next
 
 
-def _qmp_read_byte(qmp, addr):
-    """Read one guest-physical byte through HMP `xp` over QMP."""
+def _qmp_read(qmp, addr, unit="b"):
+    """Read one guest-physical byte/halfword/word through HMP `xp` over QMP."""
     cmd = {"execute": "human-monitor-command",
-           "arguments": {"command-line": f"xp /1bx {addr:#x}"}}
+           "arguments": {"command-line": f"xp /1{unit}x {addr:#x}"}}
     qmp.write(json.dumps(cmd).encode() + b"\n")
     while True:
         r = json.loads(qmp.readline())
@@ -361,19 +366,25 @@ def test_live_usb_source_select_browse_load_and_play(tmp_path):
 
     qmp_s, qmp_c = socket.socketpair()
     env = os.environ.copy()
-    env.pop("CDJ850_DSP_BOOT_HLE", None)
-    # VINYL jog mode is the factory default and defers PLAY until a jog
-    # condition the model does not provide yet. Switching to CDJ mode
-    # first makes PLAY send audio command (3, 1) straight away.
+    for k in ("CDJ850_DSP_BOOT_HLE", "CDJ850_PF16_HIGH", "CDJ850_DSP_PLAY_PF"):
+        env.pop(k, None)
+    # Run under -icount: virtual time is MAIN's instruction count, so the
+    # scripted presses land at the same point in the firmware every run.
+    # Without it the virtual clock follows the host and MAIN mounts the stick
+    # anywhere between ~3 s and ~27 s, racing a fixed `usb` press (the old
+    # flake). Under icount the stick is mounted at 2.9 s.
+    # The deck plays a track as soon as it is loaded. In VINYL mode (the
+    # factory default) PLAY then brakes to a stop and PLAY again restarts.
     env["CDJ850_PANEL_SCRIPT"] = (
-        "20000:usb:200,24000:enter:200,26000:rot+1,28000:enter:200,"
-        "38000:vinyl:200,42000:play:200"
+        "6000:usb:200,9000:enter:200,11000:rot+1,13000:enter:200,"
+        "19000:play:200,24000:play:200"
     )
 
     p = subprocess.Popen(
         [
             binary, "-M", "cdj850",
             "-display", "none", "-monitor", "none", "-serial", "none",
+            "-icount", "shift=2,sleep=off",
             "-drive", f"if=pflash,format=raw,file={flash},snapshot=on",
             "-drive", f"if=none,id=usbstk,format=raw,file={usb_img},snapshot=on",
             "-device", "usb-storage,drive=usbstk,port=1",
@@ -388,6 +399,8 @@ def test_live_usb_source_select_browse_load_and_play(tmp_path):
     qmp_c.close()
     qmp = qmp_s.makefile("rwb", buffering=0)
     display_lines = []
+    names = ["browse root", "file list", "cursor moved", "BETA.wav loaded",
+             "playing after load", "PLAY braked to a stop", "PLAY restarted"]
     try:
         assert "QMP" in json.loads(qmp.readline())
         qmp.write(b'{"execute":"qmp_capabilities"}\n')
@@ -395,10 +408,11 @@ def test_live_usb_source_select_browse_load_and_play(tmp_path):
 
         sel = selectors.DefaultSelector()
         sel.register(p.stderr, selectors.EVENT_READ)
-        deadline = time.monotonic() + 90.0
+        deadline = time.monotonic() + 180.0
         buf = ""
-        milestones = [False] * 5
-        play_pressed = False  # only counts once the track is cued
+        milestones = [False] * len(names)
+        presses = 0
+        first_index = None
         eof = False
         while time.monotonic() < deadline and not all(milestones) and not eof:
             for key, _ in sel.select(timeout=0.3):
@@ -412,8 +426,8 @@ def test_live_usb_source_select_browse_load_and_play(tmp_path):
                     if "cdj850-panel:" not in ln:
                         continue
                     display_lines.append(ln)
-                    if milestones[3] and "input press play" in ln:
-                        play_pressed = True
+                    if "input press play" in ln:
+                        presses += 1
                     if not milestones[0] and "[.FOLDER.] | [] | []" in ln:
                         milestones[0] = True
                     elif (milestones[0] and not milestones[1] and
@@ -427,13 +441,23 @@ def test_live_usb_source_select_browse_load_and_play(tmp_path):
                     elif (milestones[2] and not milestones[3] and
                           "mode=0x0a" in ln and "[BETA.wav] | [] | []" in ln):
                         milestones[3] = True
-            # Play reached the audio task: its play-state byte (status
-            # struct 0x0C7F6620 + 7, set by FUN_0C009310) becomes 4, the
-            # USB play state handled by FUN_0C0F6E6C.
-            if play_pressed and not milestones[4]:
-                milestones[4] = _qmp_read_byte(qmp, AUDIO_PLAY_STATE) == 4
-        assert all(milestones), (
-            f"Missing USB browse/load/play milestones {milestones}; display log:\n" +
+            if not milestones[3]:
+                continue
+            state = _qmp_read(qmp, PLAYER_STATE)
+            if presses == 0 and not milestones[4] and state == 3:
+                index = _qmp_read(qmp, READ_INDEX, "h")
+                if first_index is None:
+                    first_index = index
+                elif index > first_index + 4:
+                    milestones[4] = True      # the read index advances
+            elif presses == 1 and milestones[4] and not milestones[5]:
+                milestones[5] = state == 5 and _qmp_read(qmp, SPEED, "w") == 0
+            elif presses >= 2 and milestones[5] and not milestones[6]:
+                milestones[6] = (state == 3 and
+                                 _qmp_read(qmp, SPEED, "w") == 0x080000)
+        missing = [n for n, ok in zip(names, milestones) if not ok]
+        assert not missing, (
+            f"Missing milestones {missing}; display log:\n" +
             "\n".join(display_lines)
         )
     finally:

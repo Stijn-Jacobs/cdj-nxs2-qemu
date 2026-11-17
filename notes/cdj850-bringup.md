@@ -1797,3 +1797,70 @@ Not addressed:
   load hit "NO DISC" in 3 of ~14 real-time runs (MAIN misses the 20 s `usb`
   press under host load). Both predate these changes.
 
+### Player states re-read: auto-play after load, PLAY pauses; VINYL works (2026-11-17)
+
+Traced with gdbstub reads of MAIN RAM once a second (USB deck, script
+`20000:usb,24000:enter,26000:rot+1,28000:enter` plus the presses below).
+**This corrects the state labels used in the entries above** (Task "Audio
+path: why MAIN never starts SSI DMA", "Follow-up trace", the MAIN play-path
+audit and the live test).
+
+- Player state 0x0CE6D25F (0x0CE6D25D + source index 2): 0x0A USB browse,
+  2 loading, **3 playing**, **5 paused/braking** (PLAY pressed while
+  playing), 4 paused (CDJ-mode pause/CUE paths). Audio command (0x0CE6CA80):
+  **1 = play**, **3 = pause**. Audio-task state 0x0C7F6627: 3 playing,
+  4 paused (CDJ mode).
+- **The deck plays a track as soon as it is loaded.** Load completion
+  (0x0C0EAE2A..0x0C0EAE7A) picks state 5 if PLAY was pressed during the load
+  (0x0CE6D0F1), 4 if 0x0CE6D0ED, otherwise 3, and sends command (1, 1); the
+  audio task starts the stream (`FUN_0C005B14`, PF16 high) once 75 sectors
+  are buffered. The read index advances (2 -> 0xF2 over 14 s), the track
+  plays to its end and continue mode loads the next file. This is firmware
+  behaviour, not an emulator fault. (The load start, `FUN_0C0EA8AE` /
+  `FUN_0C0E9E68`, sets sub-state 2 in CDJ mode or untouched VINYL; that is
+  the "start at pitch speed with HOLD" path.)
+- **VINYL mode (factory default) behaves correctly**, which closes the
+  "VINYL release" question: there was no deferred play, the first PLAY press
+  after a load is a *pause*. Measured (`34000:play,40000:play`): PLAY at 34 s
+  sets 0x0CE6D0F1 = 1, 0x0CE6D0F2 = 1 (brake), sub-state 4; speed
+  0x0CE6C940 -> 0, the DSP-reported speed decays 0xC5ECD8 -> 0xC00000 and the
+  read index freezes (silent stop). PLAY at 40 s releases: the reported speed
+  ramps 0xC3F400 -> 0xC80000 (1.0x) and the index advances again.
+- HOLD (0x0CE6C938 bit 15) stays set after a load because the emulated pitch
+  ADC never changes (0x0CE6C932 == 0x0CE6C930); with the DSP fixed it does not
+  matter: HOLD only makes the DSP apply the speed at once.
+- **CDJ mode pause still sounds (open).** With `vinyl` pressed first, PLAY
+  gives state 5 / audio state 4 / command 3, but the speed stays 0x080000,
+  PF16 stays high and the 6-byte DSP command is identical to playback
+  (`e28000 080000`); MAIN rocks the read index around the pause point
+  (0x42..0x4E) and the DSP plays that window at full level
+  (`CDJ850_DSP_DEBUG` TX peak 0x2EDF00 throughout the pause). Every MAIN port
+  data register is unchanged between play and pause, and MAIN sends no panel
+  status frames while paused. In the pause handler `FUN_0C0F6E6C` the stream
+  stops (`FUN_0C005BB6`, 0x0C0F6F20) only when 0x0CE6D0FB == 1, which is
+  never set here. The service manual has hardware mutes (MAIN_XMUTE and
+  PNL_XMUTE on CN2005, AMUTE on CMPX, "released at normal playback"); the
+  panel CPU, which is not emulated, probably mutes on pause. Not resolved.
+- The DAC routine `FUN_0C016020` only switches between full level
+  (0x10FF/0x11FF) and an attenuation (0x10E7/0x11E7) on bit 3 of 0x0CE6CA2F.
+- `0x0C1C1460`/`0x0C7F6674` gate the feeder's saved-pointer path: that is the
+  loop machinery (`FUN_0C015BD4` builds a four-segment loop, `FUN_0C015B18`
+  clears it), not a cue hold. The per-sector table at 0x0C750C3C holds
+  `[sector, 0, track number, -1]`; 0x0C7F6484 is the track at the read point
+  and 0x0CE5A9E0 the track count.
+
+**Live test flake fixed.** The USB stick mount (display flashes "0 DISC")
+landed anywhere from 2.9 s to 26.7 s of virtual time across 33 runs today,
+tracking host load (the virtual clock follows the host, so MAIN gets fewer
+instructions per virtual second when the host is busy); the two "NO DISC"
+failures were the two mounts after the fixed 20 s `usb` press. Under
+`-icount shift=2,sleep=off` the mount is at 2875 ms every time.
+`test_live_usb_source_select_browse_load_and_play` now runs under icount
+with presses at 6/9/11/13 s and checks the corrected behaviour: loaded ->
+playing (state 3, read index advancing) -> PLAY brakes to a stop (state 5,
+speed 0) -> PLAY restarts (state 3, speed 0x080000). 8/8 passes (5 serial,
+3 in parallel), ~24 s each.
+
+`CDJ850_DSP_DEBUG` status lines now print every 500 ms of virtual time and
+carry the virtual time (ticks no longer have a fixed length).
+

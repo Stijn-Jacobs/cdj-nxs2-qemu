@@ -153,6 +153,7 @@ typedef struct {
     uint32_t audio_tick;
     int64_t audio_last_ns;      /* virtual time frames were counted up to */
     uint64_t audio_frac;        /* frame fraction, in ns * 44100 units */
+    int64_t debug_next_ns;      /* next CDJ850_DSP_DEBUG status line */
     int16_t left_sample;
     bool have_left;
     bool tfs_slot;
@@ -2073,11 +2074,13 @@ static void dsp_audio_tick(void *opaque)
                         "VBA=%06x", d->x_io[IO_OFF(0xFFFFFF)],
                         d->x_io[IO_OFF(0xFFFFFE)], d->sr, d->omr, d->vba);
         }
-        if ((d->audio_tick % 1000) == 0 && getenv("CDJ850_DSP_DEBUG")) {
-            info_report("cdj850-dsp: tick=%u P:%06x TCR=0x%06x RCR=0x%06x "
+        if (now >= d->debug_next_ns && getenv("CDJ850_DSP_DEBUG")) {
+            /* Every 500 ms of virtual time (ticks are clock-based now). */
+            d->debug_next_ns = now + 500000000LL;
+            info_report("cdj850-dsp: %" PRId64 " ms tick=%u P:%06x TCR=0x%06x RCR=0x%06x "
                         "Y0=0x%06x Y20=0x%06x Y22=0x%06x X0C=0x%06x X0D=0x%06x "
                         "X1E=0x%06x X1F=0x%06x X38=0x%06x PF10=%u",
-                        d->audio_tick, d->pc, d->x_io[XIO_ESAI_TCR],
+                        now / 1000000, d->audio_tick, d->pc, d->x_io[XIO_ESAI_TCR],
                         d->x_io[XIO_ESAI_RCR], d->y[0], d->y[0x20], d->y[0x22],
                         d->x[0x0c], d->x[0x0d], d->x[0x1e], d->x[0x1f],
                         d->x[0x38], (io_read_y(d, 0xFFFFF5) >> 10) & 1);
