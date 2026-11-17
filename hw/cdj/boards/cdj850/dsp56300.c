@@ -336,15 +336,14 @@ static uint32_t io_read_y(Dsp56300 *d, uint32_t addr)
         return 0;
     }
     if (off == YIO_PDRF) {
-        /* Service manual 10.2/10.4: MAIN PF13 -> PLAY -> DSP PF10.
+        /* Service manual 10.2/10.4: MAIN PF16 (PFDRH bit 0) -> PLAY -> DSP PF10.
          * PF0..9 are outputs (PRRF = 0x3ff); PF10 is the PLAY input.
          */
-        /* EXPERIMENT (temporary): CDJ850_DSP_PLAY_PF selects the MAIN pin. */
         const char *e = getenv("CDJ850_DSP_PLAY_PF");
-        unsigned pf = e ? (unsigned)atoi(e) : 13;
+        bool play = e ? ((cdj850_port_pfdrl() & (1u << (unsigned)atoi(e))) != 0)
+                      : ((cdj850_port_pfdrh() & 1u) != 0);
 
-        return (d->y_io[off] & ~(1u << 10)) |
-               ((cdj850_port_pfdrl() & (1u << pf)) ? 1u << 10 : 0);
+        return (d->y_io[off] & ~(1u << 10)) | (play ? 1u << 10 : 0);
     }
     return d->y_io[off];
 }
@@ -1939,10 +1938,12 @@ static void dsp_audio_tick(void *opaque)
         }
         if ((d->audio_tick % 500) == 0 && getenv("CDJ850_DSP_DEBUG")) {
             info_report("cdj850-dsp: tick=%u P:%06x TCR=0x%06x RCR=0x%06x "
-                        "Y0=0x%06x Y20=0x%06x X1=0x%06x X2=0x%06x",
+                        "Y0=0x%06x Y20=0x%06x Y22=0x%06x X0C=0x%06x X0D=0x%06x "
+                        "X1E=0x%06x X1F=0x%06x X38=0x%06x PF10=%u",
                         d->audio_tick, d->pc, d->x_io[XIO_ESAI_TCR],
-                        d->x_io[XIO_ESAI_RCR], d->y[0], d->y[0x20],
-                        d->x[1], d->x[2]);
+                        d->x_io[XIO_ESAI_RCR], d->y[0], d->y[0x20], d->y[0x22],
+                        d->x[0x0c], d->x[0x0d], d->x[0x1e], d->x[0x1f],
+                        d->x[0x38], (io_read_y(d, 0xFFFFF5) >> 10) & 1);
             info_report("cdj850-dsp: ESAI RX=%" PRIu64 " TX0=%" PRIu64
                         " nonzero=%" PRIu64 " peak=0x%06x",
                         d->esai_rx_words, d->esai_tx_words, d->esai_tx_nonzero,

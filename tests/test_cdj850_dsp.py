@@ -39,7 +39,8 @@ static void cdj_host_audio_put(CdjHostAudio *a, int16_t l, int16_t r) { audio_fr
 HARNESS = r"""
 #include "DSP_SOURCE"
 static bool pin7;
-static uint16_t main_pfdrl;
+static uint16_t main_pfdrh, main_pfdrl;
+uint16_t cdj850_port_pfdrh(void) { return main_pfdrh; }
 uint16_t cdj850_port_pfdrl(void) { return main_pfdrl; }
 void cdj850_intc_set_pin(unsigned irq, bool level) { pin7 = level; }
 bool cdj850_intc_get_pin(unsigned irq) { return pin7; }
@@ -116,9 +117,9 @@ int main(int argc, char **argv)
     d->p[0] = 0x019191; d->p[1] = 4;
     step_one(d);
     assert(d->pc == 4 && (d->sr & SR_C));
-    /* Main's PLAY GPIO is wired to DSP PF10, rather than strapped high. */
+    /* Main's PLAY GPIO (PF16 = PFDRH bit 0) is wired to DSP PF10. */
     assert(!(io_read_y(d, 0xfffff5) & 0x400));
-    main_pfdrl = 1u << 13;
+    main_pfdrh = 1u;
     assert(io_read_y(d, 0xfffff5) & 0x400);
     /* A dual write takes ALU source values before the arithmetic operation. */
     d->r[0] = 100; d->r[4] = 200; d->x0 = 0x123; d->y0 = 0x456;
