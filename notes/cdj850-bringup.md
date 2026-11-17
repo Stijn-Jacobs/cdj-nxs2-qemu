@@ -1456,3 +1456,53 @@ PLAY input (real driver still unknown; see PF8/PF16 above).
   are in the DSP's SHI command handler (main loop P:0x11E…0x1EE, reply
   writer P:0xCA1/P:0xEC3) and possibly its PF10 input, which is still
   wired by the PF8 experiment.
+
+### DSP SHI command handler & reply writer (2026-11-17)
+
+Decoded from `dsp_seg4_app.bin` (`DSP56300:LE:24` in pyghidra; note that
+8-bit ALU immediates `#<xx` load bits 23:16, i.e. `xx << 16`):
+
+- **Framing (`P:0x11E`–`0x156`):** polls HCSR (`X:$FFFF91`) bit 17
+  (`HRNE`) and reads HRX (`X:$FFFF94`).
+  - Word 0 (`bit 23 == 1`): saved to `X:<0x25` (with bit 23 kept set as
+    pending flag). If `PF10 == 0` (`Y:$FFFFF5` bit 10), `Y:<0x20` bit 16
+    is set, and `(word0 & 0x0C) == 0x0C`, jumps to `P:0xE3C` (re-init /
+    ESAI RX enable path). Otherwise returns to `P:0x1EE` to wait for
+    Word 1.
+  - Word 1 (`bit 23 == 0`): requires `X:<0x25` bit 23 set (clears it),
+    logs `(cmd0, speed)` to circular buffer `Y:(r3)+` (`r3 = X:$E7`,
+    `m3 = 0x7FF`), and validates speed: for `speed < 0x400000`, `|speed| >
+    0x100000` (2.0×) clears `cmd0` bit 21; for `speed >= 0x400000`,
+    `(cmd0 & 0x300) == 0x300` clears `cmd0` bit 21 and `speed` bit 22,
+    else only `0x400000` or `0x400A00..0x500000` are accepted (others
+    jump to `P:0x1EC`).
+- **Word 0 bits (`X:<0x25`, `Y:<0x22` = previous Word 0):**
+  - Bit 21 (`0x200000`): `0` (`0xC2xxxx`) sets `Y:<0x20` bit 20 and
+    `X:<0x0C` bit 21 (skips `FUN_P_000366`); `1` (`0xE2xxxx`) clears
+    `Y:<0x20` bit 20 so `P:0x1F2` calls `FUN_P_000366` (resets `X:<0x26`
+    and `Y:$104`/`Y:$54` if `X:<0x0C` bit 21 was set).
+  - Bit 15 (`0x008000`): **HOLD** (`P:0x1A0`, `P:0x1D4`, `P:0x1E0`).
+  - Bits 11, 9, 8 (`0x000B00`): mode bits; changes set `X:<0x0C` bit 19
+    (`P:0x16D`). When `(cmd0 & 0x300) == 0x300` and `X:<0x0D` bit 8 == 0,
+    `P:0x176`–`0x194` derives speed from `cmd0 & 0xFF`.
+  - Bit 10 (`0x000400`): **reverse/direction** (`P:0x195`–`0x196` negates
+    speed; mirrored into reply bit 21 at `P:0xC89`–`0xC8C`).
+- **Speed & HOLD state (`P:0x197`–`0x1EB`):** `X:<0x1E` is the target
+  speed and `X:<0x1F` (`:X:<0x20`) is the active speed. On the normal
+  path (`Word 1` bit 22 == 0, `X:<0x0D` bits 8 and 23 == 0):
+  - `new_speed == old X:<0x1E`: HOLD=1 writes `X:<0x1F = new_speed`
+    (`P:0x1E2`); HOLD=0 skips `P:0x1E2` and only updates `Y:<0x1C`.
+  - `new_speed != old X:<0x1E`: updates `X:<0x1E = new_speed`; HOLD=1
+    (with `X:<0x0D` bit 13 == 0 or `|new_speed| == 0x080000`) writes
+    `X:<0x1F = new_speed`, while HOLD=0 leaves `X:<0x1F` to be ramped by
+    `FUN_P_000731` (`P:0x736`–`0x760`).
+- **Reply writer (`FUN_P_000c44`, `P:0xC44`–`0xCBA`):** when `HTDE`
+  (`X:$FFFF91` bit 15) is set (`P:0xC95`), writes `HTX` (`X:$FFFF93`).
+  `P:0xC80`–`0xC8E` builds `Y:<0x1E = 0xC00000 | max(|X:<0x1F|, |Y:<0x2 >>
+  2|)` (`0x800000` if `X:<0x0D` bit 23 is set; `| 0x200000` if `Y:<0x22`
+  bit 10 is set). Thus the `0xC80000` → `0xC4B7E7` reply decay directly
+  reflects `X:<0x1F` decaying.
+- **Main loop gates (`P:0x1EE`–`0x1FB`):** calls `0x1FC` (DSPDREQ,
+  gated on `PF10 == 1`), `0x2B9` (ESAI RX ring), `0x366` (if `Y:<0x20`
+  bit 20 == 0), `0x731` (consumption/speed ramp, gated on `X:<0x0C` bit 2
+  == 0 and `X:<0x0C` bit 3 == 1), `0x498`/`0xB24`, and `0xC44` (reply).
