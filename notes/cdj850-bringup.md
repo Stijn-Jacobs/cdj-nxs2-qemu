@@ -122,7 +122,12 @@ Environment knobs added by these commits (all read once at start-up):
 |---|---|---|
 | CDJ850_IRQ_PULSE=`n@ms[,n@ms...]` | unset | Diagnostic: invert IRQn pin for 1 ms at virtual time `ms`. Invents an event; nothing may depend on it. |
 | CDJ850_IRQ_IDLE=`0xNN` | 0xC0 | Idle level of IRQ0-7 pins, bit n = IRQn (default: IRQ7/DSPDREQ and IRQ6/USB_CDETFLG high; 0x80 = the old level, which reads as a USB over-current). |
-| CDJ850_DSP_BOOT_HLE=1 | off | Toggle DSPDREQ after each DSP SHI segment (idle high: 0,1,0,1). Stand-in for the DSP program. |
+| ~~CDJ850_DSP_BOOT_HLE=1~~ | removed | Obsolete (2026-11-17): the DSP56300 core (dsp56300.c) runs the uploaded program, which drives DSPDREQ itself. Formerly: toggle DSPDREQ after each DSP SHI segment (idle high: 0,1,0,1). Stand-in for the DSP program. |
+| CDJ850_DSP_DEBUG=1 | off | DSP core diagnostics: DSPDREQ edges, SHI RX transitions, SHI TX (first 40), unimplemented ops, ESAI RX/TX counters and TX peak per 500 ms, ESAI vectors/registers once at tick 3000. |
+| CDJ850_DSP_IPS=`n` | 64 | DSP instructions per ESAI slot (88.2 kHz). Higher values starve MAIN (the virtual clock follows host time). |
+| CDJ_DSP_AUDIO=1 | off | Open the DSP's ESAI TX0 as a host audio voice (`cdj850-dsp-esai0`); needs `-audio driver=…`. |
+| CDJ850_PF16_HIGH=1 | off | EXPERIMENT: PFPRH bit 0 (PF16) reads high. Needed, with the next one, for MAIN's DSP-paced IRQ7 audio feeder to run. Real driver of PF16 unknown. |
+| CDJ850_DSP_PLAY_PF=`n` | 13 | EXPERIMENT: MAIN PFDRL bit that drives DSP PF10 (the request gate). The firmware never drives PF13; 8 (driven by FUN_0C006294 when PF16 is high) makes the DSP request audio. |
 | CDJ850_5MON=0 | 5MON reads 1 | `0` makes PB3 read low (old behaviour). |
 | CDJ850_LOADER_SW=`0xNNNN` | 0x0600 | Overrides PFDRH bits 8-10 (INSIDE, LPS1, LPS2); default LPS1/LPS2 high, INSIDE low. |
 | CDJ850_PANEL=0 | enabled | `0` disables the emulated panel peer (xc/panel_peer.c). |
@@ -1204,3 +1209,250 @@ scripts in /tmp only (uncommitted: reused `/tmp/8k-run.py`, new
     `[.FOLDER.] | [] | []` -> `tag=25/02/03` `[ALPHA.wav] | [BETA.wav] | [GAMMA.wav]`
     -> `tag=01/26/03` `[ALPHA.wav] | [BETA.wav] | [GAMMA.wav]` ->
     `mode=0x0a` `[BETA.wav] | [] | []`.
+
+## Audio path: why MAIN never starts SSI DMA after USB play (2026-11-17)
+
+State at this entry: the DSP56300 core (`dsp56300.c`) boots all four SHI
+segments with no HLE and writes ESAI TX0 continuously, but every word is
+zero. ESAI RX stays 0 because MAIN never arms SSI0/SSI1 DMA. The 16
+CDJ-850 tests pass (USB, panel peer, DSP unit tests, live browse→load→play).
+The `MAIN status 01 00 78 01` milestone shows the play LED/status changed.
+It does not show audio.
+
+Static findings (MAIN, SH-2A, base 0x0C000000; use the analysed project
+`extract/cdj850/ghidra/cdj850.gpr`. An ELF wrapper of main_unpacked.bin
+imports as SuperH4 because the SuperH processor has no ELF opinion):
+
+- Audio task loop 0x0C014FC8. It waits on flag 2, receives on mailbox 2
+  (`prcv_mbx` 0x0C0CB640) and dispatches through FUN_0C01475E. Each tick it
+  calls the CD/PCM state machine FUN_0C01550C only when the audio mode byte
+  0x0C7F66C8 == 2. Otherwise it calls FUN_0C014A54.
+- SSI DMA start (FUN_0C076474: splits 42 interleaved frames into the
+  SSI0/SSI1 buffers, then FUN_0C076288 / FUN_0C0763D8 / FUN_0C075EF6) is
+  reached only from FUN_0C01550C and from the 0x0C0766AA state machine.
+  Both need audio mode 2 and more than 84 words in the PCM ring.
+  Ring: read/write pointers at 0x0C7F6474/0x0C7F6470, buffer
+  0x0C1E8E5C–0x0C74B05C. Fill = FUN_0C01529E.
+- Audio mode 2 is set only by the type-8 handler FUN_0C006494 on command
+  0x0F with flag bit 0. Command senders all go through FUN_0C0D7464(cmd,
+  flag, …) → `snd_mbx(2)`. (0x0F, 1) comes only from FUN_0C0EF112, which
+  is reached from source switch FUN_0C0EF3CA(10) and from 0x0C0EE62E.
+- For any other command, FUN_0C006494 sets audio mode 1, unless byte
+  0x0CE6D25A is non-zero; then it forces mode 0. USB-mode entry
+  FUN_0C0EEFB0 sets 0x0CE6D25A = 1 (and 0x0CE6D252 = 2). Every writer seen
+  stores 1. So in USB mode the ring / SSI state machines above are bypassed.
+
+Runtime (QMP `xp` probes plus `-d exec,nochain` windows, script
+`20000:usb,24000:enter,26000:rot+1,28000:enter,42000:play`):
+
+- Commands to the audio task: cmd 2 (twice) during browse/load, cmd 1 from
+  0x0C0EAD14. Never 0x0F. 0x0C7F66C8 stays 0 the whole run.
+- USB reads of BETA.wav run from about 28.5 s to 30.2 s. Play causes no
+  more reads (the test WAV is only 1 s and has been read in full).
+- Player-side state 0x0CE6D25F: 0x0A at USB entry, 3 after load, 5 after
+  play. The audio task's state byte 0x0C7F6627 (selects the per-state
+  handler in FUN_0C014A54) stays 3 after play. So the play transition
+  reaches the player task but not the audio task. 0x0C7F6620..27 has many
+  writers (FUN_0C009310 and others). That is the next trace.
+- Only about 7 new translation blocks run in the 6 s after play. The
+  firmware stays in the same loops, so play is "accepted" without any new
+  audio-side work.
+
+Open question: where USB-mode PCM leaves MAIN. Either 0x0C7F6627 must reach
+4/5 (FUN_0C014A54's play handlers) and that path feeds SSI, or USB audio
+uses a route other than the CD ring. Separately: `ssu0_16bit_cmd`
+(0x0C07800A, PF7 chip select) is the audio task programming the DAC
+(0x1604/0x10FF/0x11FF at task init), not the DSP. ser.c now forwards to
+the DSP SHI only while PF3 is low, so these bytes no longer reach it.
+
+### Follow-up trace (2026-11-17, same day): play is deferred by VINYL mode
+
+Tools: gdbstub write watchpoints and hardware breakpoints (a small RSP
+client; `-gdb tcp::12345 -S`), QMP `xp` probes, `-d exec,nochain`
+windows. Watchpoints on bytes that wider stores also hit, or several at
+once, slow emulation enough that the panel script drifts. Watch one
+address at a time.
+
+- Player state 0x0CE6D25F: 0x0A at USB entry (0x0C0EF00E), 2 when load
+  starts (0x0C0D8292), 3 when cued (0x0C0EAE7A), 5 on play (0x0C0DEC8E in
+  FUN_0C0DEB50).
+- At play, FUN_0C0DEB50 sends audio command (3, 1) through FUN_0C0D7464
+  only if 0x0CE6D0DE != 1. Otherwise it defers: 0x0CE6D0F1 = 1,
+  0x0CE6D0F2 = 1, countdown 0x0CE6C9CB = 100 (counts down only in state
+  5), sub-state 0x0CE6CA9D = 4.
+- 0x0CE6D0DE is the live VINYL jog-mode flag. At boot it is loaded from
+  bit 7 of settings byte 0x0C9DA23C (getter 0x0C08EFE0; the store sits in
+  the next jsr's delay slot at 0x0C0E8C1A). The factory-defaults loader
+  FUN_0C08F294 sets that bit to 1, and FUN_0C0D6E34 saves a changed live
+  value after 5 s. So VINYL is on by default and play is deferred.
+- The deferred release is in the player tick (0x0C0DDE90…0x0C0DDF2C). It
+  needs 0x0CE6CA9C != 0 (the 6th argument of the last audio command,
+  zeroed by FUN_0C0D7464) and 0x0CE6D0F1 != 1 (set by play itself and
+  never cleared). It never fires. Probably jog-related; not traced further.
+- Workaround with no pokes: press the panel `vinyl` button before play
+  (script `...,38000:vinyl:200,42000:play:200`). Play then sends (3, 1);
+  the audio task goes 0x14 → 4 (FUN_0C009310 called from 0x0C0076A0 and
+  0x0C0F3836) and runs the USB play-state handler FUN_0C0F6E6C (states
+  4/5 of FUN_0C014A54's non-CD branch; state 3 → 0x0C0F65F0, state 0x13
+  (load) → 0x0C0F1318).
+- Even then there are no SSI or DMAC accesses (CDJ850_TRACE). Audio mode
+  0x0C7F66C8 stays 0: the type-8 handler writes 0 at 0x0C006618 because
+  0x0CE6D25A = 1 (set on USB entry, mirrored from 0x0CE6D25B by
+  FUN_0C0E8ECC; cleared only by FUN_0C0EA890 when the player is idle).
+  Poking 0x0CE6D25A/5B = 0 gives mode 1, not 2. The SSI stream start
+  still needs mode 2 = (0x0F, 1) from FUN_0C0EF112 (source 5 or 10). In
+  USB mode that comes from FUN_0C0E843C → FUN_0C0EF046, which is a "leave
+  USB source" teardown. FUN_0C0E843C runs only from the LINK-key handler
+  (0x0C0E65EE; LINK = panel word 3 bit 0 → 0x0CE6CA0C bit 0) and from the
+  0x0C9D1258 selector switch. So source 5 is probably LINK, not USB.
+- The 20 s test track is read completely during load (1197 SCSI reads,
+  none after play). 0x0C1E8E5C–0x0C74B05C (~5.6 MB) looks like a
+  whole-track RAM buffer, not a streaming ring. At play 0x0C7F6470 jumps
+  once from 0x0C1E8E5C to 0x0C7438EC. Where USB-mode PCM leaves MAIN is
+  still unidentified.
+- Test fixtures (fixed): `_make_pcm_wav` used to write 1 s of digital
+  silence. It now writes 10 s of 440 Hz (L) / 660 Hz (R) at about -8.7 dBFS,
+  checked by `test_pcm_wav_fixture_is_audible`. The live USB test presses
+  `vinyl` at 38 s, before play at 42 s. Its play milestone is now the
+  audio task's play-state byte 0x0C7F6627 == 4, read over QMP `xp`, instead
+  of the panel LED status `01 00 78 01`. Without the VINYL press that
+  milestone fails, as it should.
+- PFPRH bit 0 (PF16, 0xFFFE3A9C) is polled about 3000×/s by the audio task.
+  In cued state a high level calls FUN_0C0F032C (cue/start logic). Likely
+  an external fader-start input. The emulator returns 0.
+
+### USB PCM sink found: DSP-paced pull over IRQ7 → SSI DMA (2026-11-17)
+
+- Track audio buffer: USB WAV is decoded into the same sector ring CD
+  uses. It holds 2400 entries of 0x930 bytes (2352 = one CD-DA sector,
+  588 frames) at 0x0C1E8E5C, as big-endian 16-bit stereo.
+  FUN_0C005C44(idx) sets the read pointer 0x0C7F6470 = base + idx × 0x930.
+  FUN_0C005AA8 aligns it to 84-word (42-frame) chunks, the chunk
+  FUN_0C076474 hands to SSI DMA. Fill = write index 0x0C7F645E − play
+  index 0x0C7F645C (0x0C7F6466 in state 4), modulo 0x960. The USB read
+  scheduler in FUN_0C0F6E6C refills while fill < 500.
+- Source buttons: FUN_0C0E827E / 0C0E831A / 0C0E843C are DISC / USB /
+  LINK. Audio mode 2 / (0x0F, 1) / source 5 is LINK streaming. Local
+  playback stays in audio mode 0.
+- Handler table at 0x0C155AB4 ({intno, handler, 7}): 0xD6 → 0x0C075FCA,
+  0xD7 → 0x0C0761C4 (SSI0/1), 0x70 → 0x0C0762F4, 0x74 → 0x0C076444 (DMAC
+  DEI1/DEI2), **0x47 = IRQ7 → 0x0C076624**, 0x44 = IRQ4 → 0x0C0773EE.
+  0x0C076624 is the SSI feeder (its mode ≠ 2 branch also checks PF16).
+  IRQ7 is DSPDREQ, so the DSP pulls audio: each DSPDREQ request makes
+  MAIN copy the next 42-frame chunk to the SSI0/SSI1 DMA buffers.
+- DSP side (segment 4 loads at P:0). The request routine P:0x1FC pulls
+  PE4 (DSPDREQ) low at P:0x228 only if `jclr #10,Y:$FFFFF5` passes, i.e.
+  only if its PF10 input is high. Otherwise it takes P:0x23C and holds
+  DSPDREQ high. After boot DSPDREQ stayed high forever, so IRQ7 never fired.
+- MAIN never writes PF13 (PFDRL values seen: 0x288/0x280/0x208/0x88/0x8),
+  so the core's "MAIN PF13 → DSP PF10" wiring can never be satisfied by
+  this firmware. MAIN does drive PF8 (FUN_0C006294, via the PFDRL shadow
+  0x0CEE34B6): high when the PF16 input (PFPRH bit 0) is high and
+  0xFFFE399E bit 4 is low; low in audio mode 1. With PF16 forced high,
+  PF8 goes high from about 7.9 s and stays high.
+- Experiment (env hooks, defaults unchanged): `CDJ850_PF16_HIGH=1`
+  (port.c) plus `CDJ850_DSP_PLAY_PF=8` (dsp56300.c: DSP PF10 follows
+  MAIN PF8). Result: at 1266 ms the DSP pulls DSPDREQ low (P:0x228), the
+  IRQ7 feeder arms SSI DMA ch1/ch2 (DMARS 0x23/0x27, 45 words each, TE
+  raised), and ESAI RX receives 90 words. Then DSPDREQ returns high
+  (P:0x42F) and never requests again.
+- Open:
+  (1) What really drives MAIN PF16 and DSP PF10 (needs the MAIN/DSP
+      schematic sheet). The firmware's behaviour points at PF8 → DSP PF10
+      with PF16 as an input that is high in normal operation.
+  (2) The DSP has to consume RX at frame rate (ESAI RX interrupts per
+      44.1 kHz frame) to request again. That is the core timing and
+      interrupt work, not MAIN.
+  The track buffer is filled before the first request, so the first burst
+  at 1.2 s carries whatever the ring held at boot.
+
+### ESAI data path fixed; real tone samples reach the DSP output (2026-11-17)
+
+DSP application facts (segment 4 at P:0, read at run time and with pyghidra):
+ESAI vectors $30 → JSR $3BB (RX), $34 → $3BA (RX exception), $38 → $43F
+(TX), $3C → $43E. TCR = 0x527D01 (TE0, TIE). RCR = 0x000903 idle; the
+request routine sets RIE (bit 22) only while a block is being received.
+IPRP = 3 (ESAI at IPL 2).
+
+Block protocol (MAIN FUN_0C076474 → SSI0/SSI1 → ESAI RX0/RX1):
+- Per channel, 45 SSITDR words: [0, header, 42 sample words, 0]. The
+  header is 0xCE5C0000 on SSI0 and 0xCA5A0000 on SSI1. Each sample word
+  packs two 16-bit samples of one channel (SSI0 right, SSI1 left; frame n
+  in bits 15:0, frame n+1 in 31:16). That is 84 frames per block.
+- SSICR = 0x90102 gives DWL = SWL = 16 bits, so each 32-bit write goes
+  out as two serial words, low half first. The DSP sees them as
+  `half << 8`.
+- DSP RX handler: hunting (Y:$20 bit 0) for RX0 = 0xCE5C00 after a 0 word
+  with RX1 = 0xCA5A00 → data mode, DSPDREQ high (ack), LFSR Y:$71 =
+  0xEFFFFF with taps Y:$72 = 0xCE5C00. Each RX interrupt stores one word
+  and steps the LFSR. The block ends when it reaches Y:$70 = 0x413F5B,
+  which is exactly 84 steps; then RIE is cleared. The request routine
+  P:0x1FC asks for a new block when the input fill X:2 − X:1 runs low
+  (and the PF10 input is high).
+
+Emulator fixes:
+- `xc/ssi.c`: with SSICR.DWL = 16 bits, each SSITDR word goes out as two
+  serial words (bits 15:0 first; PDTA = 1 swaps), each pushed as
+  `half << 8`. It used to send one `(val >> 8)` word, so the DSP never
+  matched its headers. vmstate v3 (tx_half).
+- `dsp56300.c`: with RIE set, an RX word stays in the FIFO until the
+  interrupt can be taken (`dsp_esai_irq_ready`: not in REP, IPL 2
+  unmasked). It used to be popped and its interrupt dropped, which lost a
+  word, so the 84-word LFSR count never finished: RIE stayed set and the
+  DSP deadlocked after a few blocks.
+- `dsp56300.c`: the instruction budget per ESAI slot is now
+  `slot_budget` (default 64 ≈ 5.6 MIPS, `$CDJ850_DSP_IPS`), up from 23.
+  256 used so much host time that MAIN missed USB timing and never
+  selected the USB source (the virtual clock follows the host).
+- Debug: `CDJ850_DSP_DEBUG` prints the TX peak per 500 ms and, once at
+  tick 3000, the ESAI vectors and registers.
+
+Result (with the experiment hooks `CDJ850_PF16_HIGH=1`,
+`CDJ850_DSP_PLAY_PF=8`, a 10 s 440/660 Hz track, VINYL off, play at 42 s):
+blocks stream continuously from boot (≈130 requests). During the track
+load (≈29.9–31.2 s) the DSP's TX0 output peaks at 0x2EDF00 = 11999 << 8,
+the fixture's amplitude, over ≈20k non-zero words. In the same window
+DSPDREQ also rises from P:0xEDE (the init path), so MAIN appears to
+re-initialise the DSP during load. Afterwards the DSP stops consuming
+(input fill 0x1F8, RIE clear), consistent with sitting at the cue point,
+and it does not resume at play. A `-audio driver=wav,path=…` capture with
+`CDJ_DSP_AUDIO=1` was silent in that run (that run's timing differed);
+the TX peak counter is the evidence so far.
+
+Open: how MAIN tells the DSP play/pause. Candidates are the SHI command
+word (MAIN TX `c2 80 00 …` before play, `c2 00 00 …` after) and the PF10
+PLAY input (real driver still unknown; see PF8/PF16 above).
+
+### DSP play/pause signalling (2026-11-17)
+
+- MAIN builds the 6-byte SHI command in FUN_0C005D54 (TX buffer
+  0x0C7F671B), sent every few ms by ssu0_dsp_exchange:
+  byte 0 = flags (0x80 always; 0x40 in audio modes 0/2; 0x20 if
+  0x0C7F672A; 0x10/0x0C/0x02/0x01 from track and status bits);
+  bytes 1–2 = u16 at 0x0CE6C938 (bit 15 = HOLD); bytes 3–5 = speed at
+  0x0CE6C940 (0x080000 = 1.0×). In audio mode 2 (LINK) word 1 is a
+  constant 0x8000 and the speed comes from 0x0C7F6764.
+- FUN_0C0D59B8 (player tick) derives HOLD and speed from the sub-state
+  0x0CE6CA9D: 0 → clear HOLD, speed from pitch (only when the pitch value
+  0x0CE6C932 differs from the last 0x0CE6C930, or the force flag
+  0x0CE6D0F5 is 1; set by a pitch-button handler in FUN_0C0D8D78);
+  1 → HOLD clear; 2/0x12 → HOLD unless 4/0x24; 4/0x24 (VINYL start) →
+  HOLD clear, speed ramped from the DSP's reported speed (SHI reply
+  word 2 with bit 0x80, copied to 0x0C0D5C18); 3/0x23/0x33/0x43 → HOLD.
+- SHI RX transitions (now logged under CDJ850_DSP_DEBUG): 0xC20000 +
+  0x080000 at boot, 0xE20000 from 1.2 s, 0xE28000 (HOLD) from track load
+  (≈28.5 s).
+- CDJ mode (VINYL off): play leaves the sub-state at 0, so HOLD is never
+  refreshed (the pitch value is constant in the emulator) and stays at
+  0xE28000. Poking the force flag 0x0CE6D0F5 = 1 after play makes MAIN
+  send 0xE20000, but the DSP still does not resume consuming.
+- VINYL mode (default): play sends 0xE20000 and then a speed ramp
+  (0x033334, then 0x000000). The ramp follows the DSP's own reported
+  speed: 0xC80000 (1.0×) while cued, 0xC4B7E7 from about 37 s with no
+  input event, and MAIN ends at speed 0. Holding `jog_touch` gives speed 0
+  and reply 0xC00000 immediately, so the touch polarity is right.
+- Open: why the DSP's reported platter speed decays from 1.0× while
+  cued, and why HOLD-clear (0xE20000) does not restart consumption. Both
+  are in the DSP's SHI command handler (main loop P:0x11E…0x1EE, reply
+  writer P:0xCA1/P:0xEC3) and possibly its PF10 input, which is still
+  wired by the PF8 experiment.

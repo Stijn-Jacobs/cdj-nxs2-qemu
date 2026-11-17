@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "cdj_common.h"
+#include "../dsp56300.h"
 #include "dsp_shi.h"
-#include "intc.h"
 #include "trace.h"
 
 /*
@@ -28,14 +28,11 @@
  * With the pin stuck at either level the upload never gets past segment
  * 2, which is why only segments 1 and 2 were ever seen on the wire.
  *
- * This file parses the framing, always (it only observes), and logs each
- * segment under CDJ850_TRACE. With CDJ850_DSP_BOOT_HLE=1 (default OFF) it
- * also answers the handshake: DSPDREQ toggles when a segment completes,
- * starting from its pulled-up idle high, which yields the 0,1,0,1 the
- * table expects. That is a stand-in for the DSP code doing it (each stage
- * drives the pin itself); the levels come from MAIN's table, not from
- * executing the uploaded program, and nothing after the bootstrap is
- * answered. A DSP56300 core running the four segments replaces it.
+ * This file observes the framing and logs each segment under CDJ850_TRACE.
+ * All bytes are forwarded to dsp56300.c. The interpreter executes the
+ * uploaded program and drives DSPDREQ through its Port E GPIO model;
+ * there is no bootstrap handshake HLE.
+
  */
 #define DSP_JMP_ABS     0x0AF080
 #define DSP_BOOT_ROM    0xFF0000
@@ -47,35 +44,32 @@ static struct {
     uint32_t count, left, addr;
     uint32_t prev, last;
     unsigned segs;
-    int hle;
-} shi = { .hle = -1 };
+} shi;
 
 static void dsp_shi_segment_done(void)
 {
     bool reenter = shi.prev == DSP_JMP_ABS && shi.last == DSP_BOOT_ROM;
 
     shi.segs++;
-    if (shi.hle < 0) {
-        const char *e = getenv("CDJ850_DSP_BOOT_HLE");
-
-        shi.hle = e && *e == '1';
-    }
-    if (cdj850_trace() || shi.hle) {
+    if (cdj850_trace()) {
         info_report("cdj850: dsp shi segment %u: %u words @P:%06x, %s "
                     "(%" PRIu64 " ms)", shi.segs, shi.count, shi.addr,
                     reenter ? "re-enters bootstrap ROM" : "application",
                     cdj850_vms());
     }
-    if (shi.hle) {
-        cdj850_intc_set_pin(7, !cdj850_intc_get_pin(7));
-    }
     shi.phase = reenter ? SHI_COUNT : SHI_RUNNING;
+}
+
+uint8_t cdj850_dsp_shi_rx(void)
+{
+    return dsp56300_shi_rx();
 }
 
 void cdj850_dsp_shi_tx(uint8_t b)
 {
     uint32_t w;
 
+    dsp56300_shi_tx(b);
     if (shi.phase == SHI_RUNNING) {
         return;
     }

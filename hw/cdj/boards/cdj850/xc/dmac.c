@@ -4,6 +4,7 @@
 #include "cmt.h"
 #include "dmac.h"
 #include "intc.h"
+#include "ssi.h"
 #include "trace.h"
 #include "usb.h"
 
@@ -139,7 +140,7 @@ static void dmac_irq_poll(void *opaque)
     }
 }
 
-/* Is the request this channel waits for active? Only the USB FIFOs. */
+/* Is the request this channel waits for active? */
 static bool dmac_source_active(uint8_t dmars)
 {
     switch (dmars) {
@@ -147,6 +148,10 @@ static bool dmac_source_active(uint8_t dmars)
         return cdj850_usb_dma_request(1);
     case CDJ850_DMARS_USB_DMA1:
         return cdj850_usb_dma_request(2);
+    case CDJ850_DMARS_SSI0_TX:
+        return cdj850_ssi_tx_dma_request(0);
+    case CDJ850_DMARS_SSI1_TX:
+        return cdj850_ssi_tx_dma_request(1);
     default:
         return false;
     }

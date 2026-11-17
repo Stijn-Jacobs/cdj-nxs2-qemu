@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "cdj_common.h"
+#include "../dsp56300.h"
 #include "../dsp56371.h"
 #include "intc.h"
 #include "loader.h"
@@ -75,6 +76,7 @@
  * input (manual Table 30.10 and 30.6.3).
  */
 #define CDJ850_PFDRH_OFF    0x280
+#define CDJ850_PFDRL_OFF    0x282
 #define CDJ850_PBDRL_OFF    0x82
 #define CDJ850_PBPRL_OFF    0x9E
 #define CDJ850_PEPRL_OFF    0x21E
@@ -115,6 +117,12 @@ uint16_t cdj850_port_pbdrl(void)
 {
     return cdj850_port ? (cdj850_port->reg[CDJ850_PBDRL_OFF] << 8) |
                          cdj850_port->reg[CDJ850_PBDRL_OFF + 1] : 0;
+}
+
+uint16_t cdj850_port_pfdrl(void)
+{
+    return cdj850_port ? (cdj850_port->reg[CDJ850_PFDRL_OFF] << 8) |
+                         cdj850_port->reg[CDJ850_PFDRL_OFF + 1] : 0;
 }
 
 static uint16_t cdj850_port_pb_pins(void)
@@ -202,6 +210,10 @@ static uint64_t cdj850_port_read(void *opaque, hwaddr off, unsigned size)
      * SEQ knobs remain compat-only; see dsp56371.c (8m: Port-E stream
      * is servo init, not DSP upload). */
     v = cdj850_dsp_adjust_read(off, size, v, s->cpu->env.pc);
+    /* EXPERIMENT (temporary): force PF16 (PFPRH bit 0) high. */
+    if (getenv("CDJ850_PF16_HIGH") && off <= 0x29D && off + size > 0x29D) {
+        v |= 1ull << ((off + size - 1 - 0x29D) * 8);
+    }
     if (cdj850_trace()) {
         info_report("cdj850: port read +0x%x size %u = 0x%x at pc=0x%08x "
                     "%" PRIu64 " ms", (unsigned)off, size, (unsigned)v,
@@ -221,6 +233,9 @@ static void cdj850_port_write(void *opaque, hwaddr off, uint64_t val,
     }
     /* Snoop for the DSP bootstrap tracker + upload record. */
     cdj850_dsp_snoop_write(off, val, size, s->cpu->env.pc, cdj850_vms());
+    if (off <= CDJ850_PFDRL_OFF + 1 && off + size > CDJ850_PFDRL_OFF) {
+        dsp56300_shi_cs(!(cdj850_port_pfdrl() & (1u << 3)));
+    }
     if (cdj850_trace()) {
         info_report("cdj850: port write +0x%x size %u = 0x%x at pc=0x%08x "
                     "%" PRIu64 " ms", (unsigned)off, size, (unsigned)val,

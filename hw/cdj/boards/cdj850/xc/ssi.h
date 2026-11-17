@@ -5,4 +5,5 @@
 
 /* CDJ-850 SSI0/SSI1 audio serial ports (SH7263 manual Table 18.2). */
 void cdj850_ssi_init(MemoryRegion *sysmem, SuperHCPU *cpu);
+bool cdj850_ssi_tx_dma_request(unsigned ch);
 #endif

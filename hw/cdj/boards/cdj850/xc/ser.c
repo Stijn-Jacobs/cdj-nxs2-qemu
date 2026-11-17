@@ -2,6 +2,7 @@
 #include "cdj_common.h"
 #include "dsp_shi.h"
 #include "panel_link.h"
+#include "port.h"
 #include "ser.h"
 #include "trace.h"
 
@@ -150,19 +151,21 @@ static void cdj850_ser_write(void *opaque, hwaddr off, uint64_t val,
         unsigned byte = (val >> shift) & 0xff;
 
         kick = true;
+        bool dsp_cs = !(cdj850_port_pfdrl() & (1u << 3));
+
         if (s->reg[3] & CDJ850_SER_RE) {
             /* Clocked in alongside the TX byte (master mode): latch
-             * the panel reply now; the driver collects it after TDRE. */
+             * the DSP SHI or panel reply now; the driver collects it after TDRE. */
             if (s->rx_ready) {
                 s->orer = true;
             } else {
-                s->rx_byte = panel_ssu_rx_byte();
+                s->rx_byte = dsp_cs ? cdj850_dsp_shi_rx() : panel_ssu_rx_byte();
                 s->rx_ready = true;
             }
         }
         panel_ssu_tx_byte(byte);
-        /* The DSP bootstrap upload is transmit-only (SSER.RE clear). */
-        if (!(s->reg[3] & CDJ850_SER_RE)) {
+        /* PF3 selects the DSP during bootstrap and full-duplex exchange. */
+        if (dsp_cs) {
             cdj850_dsp_shi_tx(byte);
         }
         if (cdj850_trace()) {

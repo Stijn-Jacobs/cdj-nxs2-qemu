@@ -1,39 +1,36 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "cdj_common.h"
+#include "../dsp56300.h"
+#include "dmac.h"
 #include "ssi.h"
 #include "trace.h"
 
 /*
- * SSI0/SSI1 audio serial ports (NOT a mailbox: SH7263 hardware-manual
- * Table 18.2 names SSICR_0 = 0xFFFFC000, SSISR_0 = 0xFFFFC004,
- * SSITDR_0 = 0xFFFFC008, SSIRDR_0 = 0xFFFFC00C, channel 1 at 0xFFFFC800 —
- * the exact "mailbox" channels; Task 8a §2c):
- * minimal storage stub so the driver-init handshake proceeds.
+ * SH7263 SSI0/SSI1 (manual section 18), connected to DSP ESAI RX0/RX1.
+ * A DMA request is asserted while the enabled transmitter's data register
+ * is empty. A serial word is delivered every stereo slot at 44.1 kHz.
  *
- * Firmware protocol (driver 0x0C075E40/0x0C075EF6/0x0C075F80/0x0C075FCA,
- * entered after the 0xFFFE7000 serial packet; pcs 0x0C075E5C-0x0C07605E):
- * 14 accesses (status read, clear, CR read, write 0/0x90102 = SSICR config
- * incl. DIEN bit24). Firmware arms SSI0 IRQ pri 7 (IPR14 = 0x7 at
- * 0x0C075EE0) and SSI1/3 + ROM-DEC IRQs (IPR15). There is NO post-init SSI
- * status/data/IRQ wait anywhere in the boot (window silent after init;
- * DMAC DAR = SSITDR with DE=0), so no reply event is stubbed here — a
- * stubbed IRQ would be a fabricated event. The streaming hook
- * (SSITDR + DMAC DAR/CHCR to the audio backend) rides with Task 8d.
- *
- * Data words read back the last-written value (RAM-identical); status
- * words additionally report both ready bits set (always-ready: the real
- * peer answers at once on the bench, and a fake busy delay only risks a
- * firmware-side timeout). The driver has dedicated init paths for a
- * bit0-clear data word (0x0C075F34) that also proceed under always-ready.
- *
- * Carved out of the on-chip-hi RAM window (the boot zero-fill
- * 0xFFFFFCA4-0xFFFFFEA3 does not cover it) with a higher-priority
- * overlap, as notes/cdj850-bringup.md provides.
+ * With SSICR.DWL = 16 bits (the MAIN firmware writes SSICR = 0x90102:
+ * DWL = SWL = 001) each 32-bit SSITDR write carries two 16-bit data
+ * words, which go out as two serial words: bits 15:0 first, then 31:16
+ * (PDTA = 1 swaps the order). FUN_0C076474 relies on this: it packs two
+ * frames of one channel per write, and the DSP matches its 0xCE5C/0xCA5A
+ * block headers as 16-bit words left-justified in the 24-bit ESAI word.
+ * Other word lengths keep the 24-bit left-aligned interpretation.
  */
 #define CDJ850_SSI_BASE    0xFFFFC000
 #define CDJ850_SSI_SIZE    0x810
 #define CDJ850_SSI_ST0     0x004
+#define CDJ850_SSI_TDR0    0x008
+#define CDJ850_SSI_CR1     0x800
 #define CDJ850_SSI_ST1     0x804
+#define CDJ850_SSI_TDR1    0x808
+#define CDJ850_SSICR_EN    0x00000001u
+#define CDJ850_SSICR_TRMD  0x00000002u
+#define CDJ850_SSICR_DMEN  0x10000000u
+#define CDJ850_SSICR_PDTA  0x00000200u
+#define CDJ850_SSICR_DWL(cr) (((cr) >> 19) & 7u)
+#define CDJ850_SSI_DWL_16  1u
 /* Status-word ready bits: bit 0 = complete (bld/bf-polled), bit 24. */
 #define CDJ850_SSI_READY   0x01000001u
 
@@ -41,7 +38,74 @@ typedef struct {
     MemoryRegion iomem;
     SuperHCPU *cpu;
     uint8_t reg[CDJ850_SSI_SIZE];
+    QEMUTimer *tx_timer;
+    bool tx_full[2];
+    uint32_t tx_word[2];        /* raw 32-bit SSITDR value */
+    uint8_t tx_half[2];         /* 16-bit mode: halves already shifted out */
+    uint32_t clock_remainder;
 } Cdj850Ssi;
+
+static Cdj850Ssi *cdj850_ssi;
+
+bool cdj850_ssi_tx_dma_request(unsigned ch)
+{
+    uint32_t cr;
+    hwaddr base;
+
+    if (!cdj850_ssi || ch > 1) {
+        return false;
+    }
+    base = ch ? CDJ850_SSI_CR1 : 0;
+    cr = ldl_be_p(&cdj850_ssi->reg[base]);
+    return !cdj850_ssi->tx_full[ch] &&
+           (cr & (CDJ850_SSICR_EN | CDJ850_SSICR_DMEN | CDJ850_SSICR_TRMD)) ==
+           (CDJ850_SSICR_EN | CDJ850_SSICR_DMEN | CDJ850_SSICR_TRMD);
+}
+
+static void cdj850_ssi_schedule(Cdj850Ssi *s)
+{
+    /* Carry the fractional nanoseconds to retain the 88.2 kword/s rate. */
+    uint64_t ns = 1000000000ULL + s->clock_remainder;
+    s->clock_remainder = ns % 88200;
+    timer_mod(s->tx_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + ns / 88200);
+}
+
+static void cdj850_ssi_tx_tick(void *opaque)
+{
+    Cdj850Ssi *s = opaque;
+    bool running = false;
+    unsigned ch;
+
+    for (ch = 0; ch < 2; ch++) {
+        uint32_t cr = ldl_be_p(s->reg + (ch ? CDJ850_SSI_CR1 : 0));
+        if ((cr & (CDJ850_SSICR_EN | CDJ850_SSICR_TRMD)) !=
+                  (CDJ850_SSICR_EN | CDJ850_SSICR_TRMD)) {
+            continue;
+        }
+        running = true;
+        if (s->tx_full[ch]) {
+            uint32_t w = s->tx_word[ch];
+
+            if (CDJ850_SSICR_DWL(cr) == CDJ850_SSI_DWL_16) {
+                bool high = (s->tx_half[ch] == 0) == !!(cr & CDJ850_SSICR_PDTA);
+                uint32_t half = high ? w >> 16 : w & 0xFFFFu;
+
+                dsp56300_esai_rx_push(ch, half << 8);
+                if (++s->tx_half[ch] == 2) {
+                    s->tx_half[ch] = 0;
+                    s->tx_full[ch] = false;
+                }
+            } else {
+                dsp56300_esai_rx_push(ch, (w >> 8) & 0xFFFFFFu);
+                s->tx_full[ch] = false;
+            }
+        }
+        cdj850_dmac_request(ch ? CDJ850_DMARS_SSI1_TX : CDJ850_DMARS_SSI0_TX);
+    }
+    if (running) {
+        cdj850_ssi_schedule(s);
+    }
+}
 
 static uint64_t cdj850_ssi_read(void *opaque, hwaddr off, unsigned size)
 {
@@ -94,6 +158,23 @@ static void cdj850_ssi_write(void *opaque, hwaddr off, uint64_t val,
             s->reg[a] = val >> (8 * i);
         }
     }
+    if ((off == CDJ850_SSI_TDR0 || off == CDJ850_SSI_TDR1) && size == 4) {
+        unsigned ch = off == CDJ850_SSI_TDR1;
+        s->tx_word[ch] = (uint32_t)val;
+        s->tx_half[ch] = 0;
+        s->tx_full[ch] = true;
+    }
+    if ((ldl_be_p(s->reg) | ldl_be_p(s->reg + CDJ850_SSI_CR1)) & CDJ850_SSICR_EN) {
+        if (!timer_pending(s->tx_timer)) {
+            cdj850_ssi_schedule(s);
+        }
+    }
+    if (cdj850_ssi_tx_dma_request(0)) {
+        cdj850_dmac_request(CDJ850_DMARS_SSI0_TX);
+    }
+    if (cdj850_ssi_tx_dma_request(1)) {
+        cdj850_dmac_request(CDJ850_DMARS_SSI1_TX);
+    }
     if (cdj850_trace()) {
         info_report("cdj850: ssi write +0x%x size %u = 0x%x at pc=0x%08x "
                     "%" PRIu64 " ms", (unsigned)off, size, (unsigned)val,
@@ -110,10 +191,15 @@ static const MemoryRegionOps cdj850_ssi_ops = {
 
 static const VMStateDescription vmstate_cdj850_ssi = {
     .name = "cdj850-ssi",
-    .version_id = 1,
-    .minimum_version_id = 1,
+    .version_id = 3,
+    .minimum_version_id = 3,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT8_ARRAY(reg, Cdj850Ssi, CDJ850_SSI_SIZE),
+        VMSTATE_TIMER_PTR(tx_timer, Cdj850Ssi),
+        VMSTATE_BOOL_ARRAY(tx_full, Cdj850Ssi, 2),
+        VMSTATE_UINT32_ARRAY(tx_word, Cdj850Ssi, 2),
+        VMSTATE_UINT8_ARRAY(tx_half, Cdj850Ssi, 2),
+        VMSTATE_UINT32(clock_remainder, Cdj850Ssi),
         VMSTATE_END_OF_LIST()
     }
 };
@@ -123,6 +209,8 @@ void cdj850_ssi_init(MemoryRegion *sysmem, SuperHCPU *cpu)
     Cdj850Ssi *s = g_new0(Cdj850Ssi, 1);
 
     s->cpu = cpu;
+    s->tx_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, cdj850_ssi_tx_tick, s);
+    cdj850_ssi = s;
     vmstate_register_any(NULL, &vmstate_cdj850_ssi, s);
     memory_region_init_io(&s->iomem, NULL, &cdj850_ssi_ops, s,
                           "cdj850.ssi", CDJ850_SSI_SIZE);

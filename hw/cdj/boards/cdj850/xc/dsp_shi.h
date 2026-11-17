@@ -6,4 +6,6 @@
 
 /* One byte MAIN clocked out on SSU0 (the DSP's SHI, SPI slave). */
 void cdj850_dsp_shi_tx(uint8_t b);
+/* One byte MAIN clocked in from the DSP's SHI on SSU0. */
+uint8_t cdj850_dsp_shi_rx(void);
 #endif
