@@ -1506,3 +1506,47 @@ Decoded from `dsp_seg4_app.bin` (`DSP56300:LE:24` in pyghidra; note that
   gated on `PF10 == 1`), `0x2B9` (ESAI RX ring), `0x366` (if `Y:<0x20`
   bit 20 == 0), `0x731` (consumption/speed ramp, gated on `X:<0x0C` bit 2
   == 0 and `X:<0x0C` bit 3 == 1), `0x498`/`0xB24`, and `0xC44` (reply).
+
+### FUN_0C0D59B8: VINYL ramp-down and CDJ HOLD=1 on Play (2026-11-17)
+
+Traced in `/main_unpacked.bin` across `FUN_0c0d59b8` (speed/HOLD builder),
+`FUN_0c0deb50` (Play/Pause button handler), `FUN_0c0dd978` (player tick),
+`FUN_0c0d7464` (audio command sender), and `FUN_0c0d8d78` (mode buttons):
+
+- **VINYL mode ramps speed down to 0 on Play (`*0x0CE6D0F2 == 1`):**
+  - In `FUN_0c0d59b8`, when `0x0CE6CA9D` (`PTR_DAT_0c0d5c24`) is `4` or
+    `0x24`, it clears `HOLD` (`0x0CE6C938 &= 0x7FFF`) and branches on
+    `*0x0CE6D0F2` (`*PTR_DAT_0c0d5c50`): `*0x0CE6D0F2 == 1` (`0x0C0D5AFE`–
+    `0x0C0D5B98`) subtracts `FUN_0c0d5fba(...)` from `0x0CE6C940`
+    (`0x0C0D5B7E: sub r0, r1`), ramping speed down to `0` (and leaves
+    `0x0CE6CA9D` / `0x0CE6D0F2` unchanged once `0x0CE6C93C & 0x1FFFFF ==
+    0`), whereas `*0x0CE6D0F2 == 0` (`0x0C0D5B9A`–`0x0C0D5CF8`) ramps up to
+    `FUN_0c0d5fec(*(short *)0x0CE6CA50)` and then clears `0x0CE6CA9D = 0`.
+  - When Play (`0x2000`) is pressed from cued (`0x0CE6D25F == 3`) in VINYL
+    mode (`0x0CE6D0DE == 1`), `FUN_0c0deb50` (`0x0C0DEC80`–`0x0C0DED28`)
+    sets `0x0CE6D25F = 5`, `0x0CE6D0F1 = 1` (`0x0C0DEC98`), `0x0CE6D0F2 = 1`
+    (`0x0C0DECB4`), `0x0CE6C9CB = 100`, and `0x0CE6CA9D = 4` (`0x0C0DED28`),
+    skipping `FUN_0c0d7464(3, 1)`. (On Pause `5 -> 4` at `0x0C0DEF18`–
+    `0x0C0DEF58`, `FUN_0c0deb50` sets `0x0CE6D0F1 = 0`, `0x0CE6D0F2 = 0`,
+    `0x0CE6CA9D = 4`.)
+  - `FUN_0c0dd978` (`0x0C0DDEC8`–`0x0C0DDF2C`) only clears `0x0CE6D0F2 = 0`
+    and switches `0x0CE6CA9D = 0x24` when `*0x0CE6D0F1 != 1` (`0x0C0DDEE2`),
+    which is blocked by `0x0C0DEC98` setting `0x0CE6D0F1 = 1`. Thus
+    `FUN_0c0d59b8` keeps taking the `*0x0CE6D0F2 == 1` ramp-down path to
+    `0`.
+- **CDJ mode leaves `HOLD=1` (`0xE28000`) on Play unless `0x0CE6D0F5` is
+  poked:**
+  - When Play is pressed in CDJ mode (`0x0CE6D0DE == 0`), `FUN_0c0deb50`
+    (`0x0C0DED34`–`0x0C0DED56`) sets `0x0CE6CA9D = 2` (since it was
+    non-zero while cued) and calls `FUN_0c0d7464(3, 1)`, which at
+    `0x0C0D7728` also forces `0x0CE6CA9D = 2` if non-zero.
+  - On the first tick of `FUN_0c0d59b8` (`0x0CE6CA9D == 2`), the `2`/`0x12`
+    branch sets `HOLD=1` (`0x0CE6C938 |= 0x8000`, `0xE28000`) and clears
+    `0x0CE6CA9D = 0`.
+  - On subsequent ticks (`0x0CE6CA9D == 0`), `FUN_0c0d59b8` only clears
+    `HOLD` (`0x0CE6C938 &= 0x7FFF`) inside `if (*(short *)0x0CE6C930 !=
+    *(short *)0x0CE6C932 || *0x0CE6D0F5 == 1)`. Because pitch
+    `0x0CE6C932` is constant in the emulator (`== 0x0CE6C930`) and
+    `0x0CE6D0F5` is `0` (normally set by the `0x100`/MT button handler in
+    `FUN_0c0d8d78` at `0x0C0D8E4E`), `0x0CE6C938` stays `0x8000`
+    (`0xE28000`) until `0x0CE6D0F5` is poked to `1`.
