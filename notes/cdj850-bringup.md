@@ -1550,3 +1550,67 @@ Traced in `/main_unpacked.bin` across `FUN_0c0d59b8` (speed/HOLD builder),
     `0x0CE6D0F5` is `0` (normally set by the `0x100`/MT button handler in
     `FUN_0c0d8d78` at `0x0C0D8E4E`), `0x0CE6C938` stays `0x8000`
     (`0xE28000`) until `0x0CE6D0F5` is poked to `1`.
+
+### DSP consumption rings, PF10 polarity & `dsp56300.c` decode bugs (2026-11-17)
+
+Traced in `/dsp_seg4_app.bin` (`dsp_seg3_stage3.bin` init constants) and
+verified against live QEMU (`CDJ850_DSP_DEBUG=1`):
+
+- **DSP three-ring audio pipeline (`dsp_seg3_stage3.bin` `P:0x000..0x05D`):**
+  1. ESAI RX ring (`Y:0x15000..0x157FF`, size `0x800`): written by ESAI RX
+     ISR `P:0x3BB..0x43D` (`X:<0x02`, 168 sample words per 84-frame block,
+     clears `Y:<0x20` bit 16 and `RCR.RIE` at block end `P:0x3E7..0x3E8`),
+     read by `FUN_P_0002b9` (`X:<0x01`). Fill `Y:<0x00> = (X:<0x02> - X:<0x01>) mod 0x800`.
+  2. Main sample ring (`X:0x10000..0x11FFF`, size `0x2000`): written by
+     `FUN_P_0002b9` (`X:<0x03>`), consumed by `FUN_P_000731` (`X:<0x04>`,
+     advancing by `2 * ((|X:<0x1F>| * 16 + X:<0x21>) >> 24)` words per call at
+     `P:0x798..0x7AA`). Fill `X:<0x38> = (X:<0x03> - X:<0x04>) mod 0x2000`.
+  3. ESAI TX ring (`Y:0xE80..0xEBF`, size `0x40`): written by `FUN_P_000731`
+     tail `P:0x895..0x897` (`X:<0x06>`), drained by ESAI TX ISR `P:0x43E..0x454`
+     (`X:<0x00>`).
+- **`P:0x1FC` (`DSPDREQ`) & `P:0x731` gating:**
+  - `P:0x1FC` only requests a new block (`RCR.RIE = 1`, `PE4` low) when
+    `PF10 == 1` and `Y:<0x00> <= y0` (`0x161` at `1.0x`, `0xDA` at `0x04B7E7`,
+    `0x03` at `0`). Once `P:0x731` stops consuming `X:0x10000`, `0x2B9` stops
+    draining `Y:0x15000`, `Y:<0x00>` stays above `y0`, and `DSPDREQ` stops.
+  - `P:0x731` requires `Y:<0x20>` bit 16 == `0` (`P:0x1F0`), `X:<0x0C>` bit 2
+    == `0` (`P:0x1F4`, TX ring `out_fill < 0x20`), `X:<0x0C>` bit 3 == `1`
+    (`P:0x731`, sample ring ready), `Y:<0x20>` bit 17 == `0` (unmuted), and
+    `X:<0x1F> != 0`.
+  - `HOLD=0` (`0xE20000`) never writes `X:<0x1F>` directly (`P:0x1E2` requires
+    `HOLD == 1`); it only sets `X:<0x1E>` and relies on `P:0x731` (`P:0x768`)
+    to ramp `X:<0x1F>` toward `X:<0x1E>`.
+- **`PF10` (`Y:$FFFFF5` bit 10) polarity (`11` accesses in `dsp_seg4_app.bin`):**
+  - `PF10 == 1` enables `DSPDREQ` (`P:0x218`, `P:0x237`, `P:0xE45`) and `0x498`
+    (`P:0x49B`), and prevents silence/fade from arming `X:<0x0C>` bit 16
+    (`P:0x878`, `P:0x899`).
+  - `PF10 == 0` blocks `DSPDREQ`, arms `X:<0x0C>` bit 16 on silence/fade, and
+    puts the DSP into `Y:<0x20>` bit 16 standby (`P:0x242..0x244`). Re-init
+    `P:0xE3C` (`P:0x128`) only triggers if `PF10 == 0`, `Y:<0x20>` bit 16 == `1`,
+    and `(word0 & 0x0C) == 0x0C`.
+- **Live QEMU diagnostic (`CDJ850_DSP_DEBUG=1`, without `CDJ850_PF16_HIGH`):**
+  - MAIN itself drives `PFDRH` bit 0 = `1` (`PFDRH=0x0401`, `PFIORH=0x0001`,
+    `PFPRH=0x0401`, so `PF10=1`) during track load (~29.15 s).
+  - ESAI RX stops during track load/cue at varying block counts (e.g. `720`
+    words / 4 blocks, `1440` words / 8 blocks, `3330` words / 18.5 blocks)
+    with `X:<0x0C>` bit 2 set (`0x01000c` / `0x00000c`) and `X:<0x0D>` in
+    `0x006000`/`0x026000`.
+  - Poking `0x0CE6D0F5 = 1` clears `0x0CE6C938` (`0x8000 -> 0x0000`) and
+    switches SHI to `0xe2 0x00 0x00 0x08 0x00 0x00` (`Y:<0x22> = 0x620000`),
+    but DSP consumption does not resume.
+- **Emulator audit — critical `dsp56300.c` decode bugs in hot audio/SHI paths:**
+  1. `0x0A`/`0x0B` long-displacement `MOVE` (`0x0B71xx` / `0x0B72xx` with
+     `bit 7=1, bit 5=0` in `P:045c`, `P:0b68`, `P:0bb4`, `P:0dd2`, `P:0de5`,
+     `P:0dea` — called from `P:0498`, `P:0b24`, `P:0dd0`) is misdecoded at
+     `dsp56300.c:1668-1742` as `JSCLR`/`JSSET`, jumping to `P:0002` (reset
+     vector) / `P:0003` / `P:0009` and triggering `P:0ec3`/`P:0ede` resets.
+  2. `Tcc` (`dsp56300.c:1743-1762`) tests bit 15 (`0x8000`) instead of bit 11
+     (`0x0800`) for `S2, D2`, breaking `TCS X1, A/B` (`P:02d5`, `P:081f`,
+     `P:0820`), `TCS X0, A` (`P:0c88`), and `Tcc S2, D2` (`P:063d`, `P:069b`,
+     `P:06a1`, `P:06ab`).
+  3. `0x0A`/`0x0B` `<ea>` bit-ops (`mid` in `0x40..0x7F`, `dsp56300.c:1696`)
+     use `mid & 0x3F` instead of `eval_ea`, breaking 13 instructions (`P:037d..0382`,
+     `P:047c..0481`, `P:0bd1`, `P:0c5f..0c65`).
+  4. `ROL A` (`0x37`, `P:044c: 0x202a37` in ESAI TX ISR `P:043f`) is omitted
+     from `exec_alu` (`dsp56300.c:858-959`) and silently skipped.
+
