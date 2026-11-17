@@ -124,7 +124,7 @@ Environment knobs added by these commits (all read once at start-up):
 | CDJ850_IRQ_IDLE=`0xNN` | 0xC0 | Idle level of IRQ0-7 pins, bit n = IRQn (default: IRQ7/DSPDREQ and IRQ6/USB_CDETFLG high; 0x80 = the old level, which reads as a USB over-current). |
 | ~~CDJ850_DSP_BOOT_HLE=1~~ | removed | Obsolete (2026-11-17): the DSP56300 core (dsp56300.c) runs the uploaded program, which drives DSPDREQ itself. Formerly: toggle DSPDREQ after each DSP SHI segment (idle high: 0,1,0,1). Stand-in for the DSP program. |
 | CDJ850_DSP_DEBUG=1 | off | DSP core diagnostics: DSPDREQ edges, SHI RX transitions, SHI TX (first 40), unimplemented ops, ESAI RX/TX counters and TX peak per 500 ms, ESAI vectors/registers once at tick 3000. |
-| CDJ850_DSP_IPS=`n` | 64 | DSP instructions per ESAI slot (88.2 kHz). Higher values starve MAIN (the virtual clock follows host time). |
+| CDJ850_DSP_IPS=`n` | 64 | DSP instructions per ESAI slot (88.2 kHz). Real-time audio needs about 750 (~66 MIPS); 64 runs the DSP at ~8 % speed. Without `-icount` the host cannot sustain that yet (interpreter ~46 MIPS); with `-icount shift=2,sleep=off` use 2048 to check audio exactly. |
 | CDJ_DSP_AUDIO=1 | off | Open the DSP's ESAI TX0 as a host audio voice (`cdj850-dsp-esai0`); needs `-audio driver=…`. |
 | CDJ850_PF16_HIGH=1 | off | OBSOLETE (2026-11-17): PF16 is a MAIN output (PFIORH = 0x0001) that MAIN drives itself; PFPRH now reads it back from PFDRH (e47bad7). Forcing it high only hides the real level. |
 | CDJ850_DSP_PLAY_PF=`n` | unset = MAIN PF16 | Overrides the DSP PF10 (PLAY) source with MAIN PFDRL bit `n`. Default since e47bad7 is MAIN PF16 (PFDRH bit 0), per service manual 10.2/10.4. Leave unset. |
@@ -1727,3 +1727,73 @@ Live run (CDJ mode, `38000:vinyl`, `42000:play`, no experiment knobs,
 - Flake: with `CDJ850_DSP_DEBUG=1` plus WAV capture, or during a full
   test-file run, MAIN sometimes misses the 20 s `usb` press and stays on
   "NO DISC". The live test alone passed 3/3.
+
+### Audio path debugged: clean 440/660 Hz tone from the DSP (2026-11-17)
+
+After 9d62f5b the DSP output had the fixture's level but no tone. The debug
+used temporary taps (raw ESAI RX/TX words, SSITDR/SSICR writes, presented
+interrupt vectors and IRQ7 priority writes, all with virtual timestamps);
+the taps are removed. Five causes, in the order they were found:
+
+1. **SSI slots paced by a timer chain** (`xc/ssi.c`). Each serial word went
+   SSI tick (11 us) -> DMAC timer (10 us) -> SSITDR -> next tick. QEMU
+   services timers only between TCG slices (~1 ms here), so a word took
+   ~1.6 ms and a 45-word block ~70 ms. MAIN's DEI1/DEI2 handlers
+   (0x0C0762F4/0x0C076444) ran late, and DEI2 is what re-enables IRQ7
+   (DSPDREQ) after the feeder masks it (IPR02 low nibble, 0x0C076640): the
+   DSP got ~5 blocks/s. Fix: the tick shifts every slot elapsed on the
+   virtual clock (88.2 kHz, remainder carried) and refills SSITDR with
+   `cdj850_dmac_serve()` synchronously. vmstate v4.
+2. **MPY/MPYR/MAC/MACR S,#n,D undecoded** (0x0100C0 family). P:07EC
+   `0x0108E0` MPY Y0,#8,A builds the index for P:07F7 `R4 = Y:(R4+N4)`
+   and P:07FC `JMP (R4)`. Decoded as BSET, A stayed stale, R4 = 0 and the
+   DSP jumped to its reset vector on every pass (P:07FC -> P:0000 -> P:0100
+   -> P:0EBB..0EDE, stack growing by one each time). Also missing and now
+   decoded: MPYsu/MACsu (0x0126/0x0127, P:077C `0x0127A6`), DMAC
+   (0x0124/0x0125, P:077D `0x0124A3`) and LUA (`0000 0100 010M MRRR 0001
+   dddd`, P:0634 `0x045B14`, P:0704 `0x044A13`; it was decoded as MOVEP).
+   Found by sweeping every non-parallel instruction shape in Ghidra's full
+   disassembly of segment 4 (2134 instructions) against the decoder; the
+   rest match.
+3. **Re-presenting a lost interrupt waited for the pump timer**
+   (`xc/cmt.c`, `target/sh4`). IRQ7 (level 7) lost to the CMT tick (level
+   8, ~450/s); after the CPU took CMT, IRQ7 was presented again only on the
+   next 10 us pump timer, i.e. the next slice, then often lost again: ~5 ms
+   per block. Fix: a per-CPU hook `env->sh2a_irq_taken`, called by the
+   SH-2A acceptance path in `superh_cpu_do_interrupt` right after it clears
+   the request and masks SR.IMASK; the board presents the next pending
+   vector at once, so it is taken on the handler's RTE. Patches regenerated
+   (`target_sh4_cpu.h.patch`, `target_sh4_helper.c.patch`; verify.sh
+   clean). After this every DSP request was answered (requests = blocks).
+4. **DSP audio tick quantisation** (`dsp56300.c`). The tick ran 44/45
+   frames per 1 ms. One 84-frame block request is in flight at a time, MAIN
+   can only answer between bursts and a block is 90 serial words (> 88
+   slots per tick), so each block took exactly two ticks: 500 blocks/s =
+   42000 frames/s, the DSP underran (0.95x pitch, ~2100 discontinuities/s).
+   Late ticks also lost frames (~31k frames per virtual second early on).
+   Fix: frames are counted from the virtual clock (44100/s, remainder
+   carried) and the tick is 0.5 ms.
+5. **DSP compute budget.** At the default `CDJ850_DSP_IPS=64` the DSP asks
+   for only ~45 blocks/s (8 % of real time); 256 gave 170. Real time needs
+   ~750 per slot. Without icount the host cannot sustain that yet (1024 got
+   worse: each tick then costs more than its 0.5-1 ms).
+
+Verification (`-icount shift=2,sleep=off`, `CDJ850_DSP_IPS=2048`, script
+`...,38000:vinyl:200,42000:play:200`, raw ESAI TX words): MAIN feeds exactly
+525 blocks/s; the DSP output is 440 Hz L / 660 Hz R at the fixture level
+(11999) with zero discontinuities for the whole of BETA.wav. After the 10 s
+track ends, MAIN loops its last 13 sectors (a jump every 7644 frames =
+13 x 588) until GAMMA.wav loads: firmware end-of-track behaviour.
+
+Not addressed:
+- Real-time playback (no icount) needs a faster DSP core. The interpreter
+  does ~46 M instructions/s in a tight loop on the Intel dev Mac, against
+  ~66 M needed, and the audio tick runs under the BQL that MAIN's vCPU
+  needs. A predecoded-instruction cache is the obvious next step.
+- With icount, the host audio sink (`cdj_host_audio.c`) still underruns
+  in the first seconds and bends its ASRC to -4 %, so a WAV capture is
+  slightly flat at first; the raw ESAI tap is the reference.
+- After load the deck plays BETA.wav before the scripted Play press, and the
+  load hit "NO DISC" in 3 of ~14 real-time runs (MAIN misses the 20 s `usb`
+  press under host load). Both predate these changes.
+

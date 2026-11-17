@@ -238,6 +238,44 @@ int main(int argc, char **argv)
     d->pc = 0; step_one(d);
     assert(((d->b >> 24) & DSP_MASK24) == 0x800000 && !(d->sr & SR_C) &&
            (d->sr & SR_N));
+
+    /* MPY/MAC S,#n,D (0000 0001 000s ssss 11QQ dkxx): multiply by 2^-n.
+     * P:07ec 0x0108e0 = MPY Y0,#8,A feeds the JMP (R4) table at P:07fc. */
+    d->y0 = 0x620000; d->a = pack_acc24(0x7fffff);
+    d->pc = 0; d->p[0] = 0x0108e0;
+    step_one(d);
+    assert(d->a == (pack_acc24(0x620000) >> 8) && d->pc == 1);
+    d->y0 = 0xe20000;
+    d->pc = 0; step_one(d);
+    assert(d->a == ((uint64_t)(sext56(pack_acc24(0xe20000)) >> 8) & DSP_MASK56));
+    /* P:065e 0x0101da = MAC X0,#1,B */
+    d->x0 = 0x400000; d->b = pack_acc24(0x100000);
+    d->pc = 0; d->p[0] = 0x0101da;
+    step_one(d);
+    assert(d->b == pack_acc24(0x300000));
+
+    /* P:077c 0x0127a6 = MPYSU X1,Y0,B: X1 signed, Y0 unsigned, so
+     * 0.5 * $800000 is +0.5 (signed it would be -0.5). */
+    d->x1 = 0x400000; d->y0 = 0x800000; d->b = 0;
+    d->pc = 0; d->p[0] = 0x0127a6;
+    step_one(d);
+    assert(d->b == pack_acc24(0x400000));
+    /* P:077d 0x0124a3 = DMACSS Y1,Y0,B: B = (B >> 24) + Y1*Y0. */
+    d->y1 = 0x400000; d->y0 = 0x400000; d->b = pack_acc24(0x000001);
+    d->pc = 0; d->p[0] = 0x0124a3;
+    step_one(d);
+    assert(d->b == (pack_acc24(0x200000) | 1));
+
+    /* LUA (0000 0100 010M MRRR 0001 dddd) computes the updated address only.
+     * P:0634 0x045b14 = LUA (R3)+,R4; P:0704 0x044a13 = LUA (R2)+N2,R3. */
+    d->r[3] = 0x100; d->r[4] = 0;
+    d->pc = 0; d->p[0] = 0x045b14;
+    step_one(d);
+    assert(d->r[4] == 0x101 && d->r[3] == 0x100);
+    d->r[2] = 0x10; d->n[2] = 5;
+    d->pc = 0; d->p[0] = 0x044a13;
+    step_one(d);
+    assert(d->r[3] == 0x15 && d->r[2] == 0x10);
     free(d);
     return 0;
 }

@@ -42,7 +42,9 @@ typedef struct {
     bool tx_full[2];
     uint32_t tx_word[2];        /* raw 32-bit SSITDR value */
     uint8_t tx_half[2];         /* 16-bit mode: halves already shifted out */
-    uint32_t clock_remainder;
+    uint32_t clock_remainder;   /* fraction of a slot, in ns * 88200 units */
+    int64_t last_ns;            /* virtual time the slots were counted up to */
+    bool in_tick;
 } Cdj850Ssi;
 
 static Cdj850Ssi *cdj850_ssi;
@@ -62,22 +64,29 @@ bool cdj850_ssi_tx_dma_request(unsigned ch)
            (CDJ850_SSICR_EN | CDJ850_SSICR_DMEN | CDJ850_SSICR_TRMD);
 }
 
-static void cdj850_ssi_schedule(Cdj850Ssi *s)
-{
-    /* Carry the fractional nanoseconds to retain the 88.2 kword/s rate. */
-    uint64_t ns = 1000000000ULL + s->clock_remainder;
-    s->clock_remainder = ns % 88200;
-    timer_mod(s->tx_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + ns / 88200);
-}
+/*
+ * Serial slots are counted from the virtual clock, not one timer per slot.
+ * QEMU only services timers between TCG execution slices (about 1 ms on a
+ * busy MAIN), so a per-slot timer chain (SSI tick -> DMAC timer -> SSITDR
+ * -> next tick) moved one word per slice: a 45-word audio block took ~70 ms
+ * instead of ~1 ms, MAIN's DEI2 handler (which re-enables IRQ7/DSPDREQ) ran
+ * late, and the DSP was fed ~5 blocks/s instead of 525. Each tick now
+ * shifts every slot that has elapsed and refills SSITDR from the DMAC
+ * synchronously, so a block completes on time in virtual time.
+ */
+#define CDJ850_SSI_RATE      88200u      /* serial words per second */
+#define CDJ850_SSI_TICK_NS   250000      /* nominal tick; work is clock-based */
+#define CDJ850_SSI_MAX_SLOTS 8192u       /* catch-up cap after a long stall */
 
-static void cdj850_ssi_tx_tick(void *opaque)
+static bool cdj850_ssi_slot(Cdj850Ssi *s)
 {
-    Cdj850Ssi *s = opaque;
     bool running = false;
     unsigned ch;
 
     for (ch = 0; ch < 2; ch++) {
         uint32_t cr = ldl_be_p(s->reg + (ch ? CDJ850_SSI_CR1 : 0));
+        uint8_t dmars = ch ? CDJ850_DMARS_SSI1_TX : CDJ850_DMARS_SSI0_TX;
+
         if ((cr & (CDJ850_SSICR_EN | CDJ850_SSICR_TRMD)) !=
                   (CDJ850_SSICR_EN | CDJ850_SSICR_TRMD)) {
             continue;
@@ -100,11 +109,53 @@ static void cdj850_ssi_tx_tick(void *opaque)
                 s->tx_full[ch] = false;
             }
         }
-        cdj850_dmac_request(ch ? CDJ850_DMARS_SSI1_TX : CDJ850_DMARS_SSI0_TX);
+        if (cdj850_ssi_tx_dma_request(ch)) {
+            cdj850_dmac_serve(dmars);
+        }
+    }
+    return running;
+}
+
+static void cdj850_ssi_tx_tick(void *opaque)
+{
+    Cdj850Ssi *s = opaque;
+    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    uint64_t acc, slots, i;
+    bool running = true;
+
+    acc = (uint64_t)(now > s->last_ns ? now - s->last_ns : 0) * CDJ850_SSI_RATE +
+          s->clock_remainder;
+    slots = acc / 1000000000ULL;
+    s->clock_remainder = acc % 1000000000ULL;
+    s->last_ns = now;
+    if (slots > CDJ850_SSI_MAX_SLOTS) {
+        slots = CDJ850_SSI_MAX_SLOTS;
+    }
+    s->in_tick = true;
+    for (i = 0; i < slots && running; i++) {
+        running = cdj850_ssi_slot(s);
+    }
+    s->in_tick = false;
+    if (!slots) {
+        running = (ldl_be_p(s->reg) | ldl_be_p(s->reg + CDJ850_SSI_CR1)) &
+                  CDJ850_SSICR_EN;
     }
     if (running) {
-        cdj850_ssi_schedule(s);
+        timer_mod(s->tx_timer, now + CDJ850_SSI_TICK_NS);
     }
+}
+
+/* (Re)start slot counting from now, when the transmitter was idle. */
+static void cdj850_ssi_schedule(Cdj850Ssi *s)
+{
+    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+
+    if (s->in_tick || timer_pending(s->tx_timer)) {
+        return;
+    }
+    s->last_ns = now;
+    s->clock_remainder = 0;
+    timer_mod(s->tx_timer, now + 1000000000LL / CDJ850_SSI_RATE);
 }
 
 static uint64_t cdj850_ssi_read(void *opaque, hwaddr off, unsigned size)
@@ -165,9 +216,7 @@ static void cdj850_ssi_write(void *opaque, hwaddr off, uint64_t val,
         s->tx_full[ch] = true;
     }
     if ((ldl_be_p(s->reg) | ldl_be_p(s->reg + CDJ850_SSI_CR1)) & CDJ850_SSICR_EN) {
-        if (!timer_pending(s->tx_timer)) {
-            cdj850_ssi_schedule(s);
-        }
+        cdj850_ssi_schedule(s);
     }
     if (cdj850_ssi_tx_dma_request(0)) {
         cdj850_dmac_request(CDJ850_DMARS_SSI0_TX);
@@ -191,8 +240,8 @@ static const MemoryRegionOps cdj850_ssi_ops = {
 
 static const VMStateDescription vmstate_cdj850_ssi = {
     .name = "cdj850-ssi",
-    .version_id = 3,
-    .minimum_version_id = 3,
+    .version_id = 4,
+    .minimum_version_id = 4,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT8_ARRAY(reg, Cdj850Ssi, CDJ850_SSI_SIZE),
         VMSTATE_TIMER_PTR(tx_timer, Cdj850Ssi),
@@ -200,6 +249,7 @@ static const VMStateDescription vmstate_cdj850_ssi = {
         VMSTATE_UINT32_ARRAY(tx_word, Cdj850Ssi, 2),
         VMSTATE_UINT8_ARRAY(tx_half, Cdj850Ssi, 2),
         VMSTATE_UINT32(clock_remainder, Cdj850Ssi),
+        VMSTATE_INT64(last_ns, Cdj850Ssi),
         VMSTATE_END_OF_LIST()
     }
 };

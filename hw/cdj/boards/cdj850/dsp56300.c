@@ -151,6 +151,8 @@ typedef struct {
     CdjHostAudio *audio_sink;
     QEMUTimer *audio_timer;
     uint32_t audio_tick;
+    int64_t audio_last_ns;      /* virtual time frames were counted up to */
+    uint64_t audio_frac;        /* frame fraction, in ns * 44100 units */
     int16_t left_sample;
     bool have_left;
     bool tfs_slot;
@@ -1437,6 +1439,22 @@ static bool step_one(Dsp56300 *d)
             stack_push(d, pc + 2, d->sr);
         }
         next_pc = (pc + sext24(ext)) & DSP_MASK24;
+    } else if ((op & 0xFFE0F0u) == 0x044010u) {
+        /* LUA <ea>,D (FM: 0000 0100 010M MRRR 0001 dddd): the address Rn
+         * would hold after the update, without touching Rn or memory.
+         * MM: 00 (Rn)-Nn, 01 (Rn)+Nn, 10 (Rn)-, 11 (Rn)+; dddd: 0RRR Rn,
+         * 1NNN Nn. P:0634 0x045b14 = LUA (R3)+,R4. */
+        unsigned rn = (op >> 8) & 7;
+        int32_t delta;
+
+        switch ((op >> 11) & 3) {
+        case 0: delta = -sext24(d->n[rn]); break;
+        case 1: delta = sext24(d->n[rn]); break;
+        case 2: delta = -1; break;
+        default: delta = 1; break;
+        }
+        uint32_t ea = agu_add(d, rn, delta);
+        if (op & 8) { d->n[op & 7] = ea; } else { d->r[op & 7] = ea; }
     } else if ((op & 0xFFC000u) == 0x044000u ||
                (op & 0xFFC000u) == 0x04C000u) {
         unsigned reg = (op >> 8) & 0x3Fu;
@@ -1629,6 +1647,51 @@ static bool step_one(Dsp56300 *d)
         } else if (used_ext) {
             next_pc = pc + 2;
         }
+    } else if ((op & 0xFFE0C0u) == 0x0100C0u) {
+        /* MPY/MPYR/MAC/MACR (+-)S,#n,D (FM: 0000 0001 000s ssss 11QQ dkxx):
+         * S * 2^-n. QQ: 00 Y1, 01 X0, 10 Y0, 11 X1; xx: MPY, MPYR, MAC, MACR.
+         * P:07ec 0x0108e0 = MPY Y0,#8,A builds the P:07fc JMP (R4) index. */
+        static const uint8_t qq_reg[4] = { 0x07, 0x04, 0x06, 0x05 };
+        unsigned n = (op >> 8) & 0x1Fu;
+        uint64_t *dst = (op & 8) ? &d->b : &d->a;
+        int64_t prod = sext56(pack_acc24(read_reg6(d, qq_reg[(op >> 4) & 3]))) >> n;
+        int64_t res = ((op & 2) ? sext56(*dst) : 0) + ((op & 4) ? -prod : prod);
+
+        if (op & 1) {
+            uint64_t r = (uint64_t)res;
+            if ((r & 0xFFFFFFULL) > 0x800000ULL ||
+                ((r & 0xFFFFFFULL) == 0x800000ULL && (r & 0x1000000ULL))) {
+                res += 0x1000000LL;
+            }
+            res &= ~0xFFFFFFLL;
+        }
+        *dst = (uint64_t)res & DSP_MASK56;
+        set_ccr56(d, *dst, false, false);
+    } else if ((op & 0xFFFC80u) == 0x012480u) {
+        /* DMAC (0x0124/0x0125), MAC su/uu (0x0126), MPY su/uu (0x0127):
+         * 0000 0001 0010 01xx 1sdk QQQQ. Integer product shifted left once
+         * (fractional), an unsigned operand taken as a positive fraction.
+         * P:077c 0x0127a6 = MPYSU X1,Y0,B; P:077d 0x0124a3 = DMACSS Y1,Y0,B. */
+        static const uint8_t qqqq[16][2] = {
+            { 4, 4 }, { 6, 6 }, { 5, 4 }, { 7, 6 }, { 4, 7 }, { 6, 4 },
+            { 5, 6 }, { 7, 5 }, { 5, 5 }, { 7, 7 }, { 4, 5 }, { 6, 7 },
+            { 7, 4 }, { 4, 6 }, { 6, 5 }, { 5, 7 },
+        };
+        unsigned kind = (op >> 8) & 3;          /* 0/1 DMAC, 2 MAC, 3 MPY */
+        bool s_bit = op & 0x40u;                /* su (0) / uu (1) */
+        bool s1_unsigned = kind <= 1 ? (op & 0x100u) && s_bit : s_bit;
+        bool s2_unsigned = kind <= 1 ? (op & 0x100u) || s_bit : true;
+        uint32_t v1 = read_reg6(d, qqqq[op & 15][0]);
+        uint32_t v2 = read_reg6(d, qqqq[op & 15][1]);
+        int64_t m1 = s1_unsigned ? (int64_t)v1 : sext24(v1);
+        int64_t m2 = s2_unsigned ? (int64_t)v2 : sext24(v2);
+        int64_t prod = m1 * m2 * 2;
+        uint64_t *dst = (op & 0x20u) ? &d->b : &d->a;
+        int64_t acc = kind == 3 ? 0 :
+                      kind == 2 ? sext56(*dst) : sext56(*dst) >> 24;
+
+        *dst = (uint64_t)(acc + ((op & 0x10u) ? -prod : prod)) & DSP_MASK56;
+        set_ccr56(d, *dst, false, false);
     } else if ((op & 0xFEF880u) == 0x0A7080u) {
         /* MOVE X/Y:(Rn+xxxx) long displacement (FM: 0000 101S 0111 0RRR
          * 1WDD DDDD, displacement in the extension word). It shares the
@@ -1908,16 +1971,37 @@ static void dsp_fire_irq(Dsp56300 *d, uint32_t vec)
     }
 }
 
+/*
+ * The serial slots run in bursts, one tick at a time. Two things matter:
+ * - Frames are counted from the virtual clock, so a late tick catches up
+ *   instead of losing audio time (a fixed 44/45 frames per tick produced
+ *   only ~31k frames per virtual second whenever ticks ran late).
+ * - The tick is short. The DSP holds one 84-frame block request in flight:
+ *   MAIN can only answer between bursts, and a block is 90 serial words.
+ *   With 1 ms bursts (88 slots) a block always spanned two bursts, so the
+ *   DSP got exactly 500 blocks/s = 42000 frames/s and underran; 0.5 ms
+ *   bursts complete a request in about 1.5 ms, inside the 1.9 ms a block
+ *   lasts.
+ */
+#define DSP_AUDIO_RATE     44100u
+#define DSP_AUDIO_TICK_NS  500000
+#define DSP_AUDIO_MAX      4410u        /* catch-up cap after a stall */
+
 static void dsp_audio_tick(void *opaque)
 {
     Dsp56300 *d = opaque;
-    unsigned frames = 44;
+    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    uint64_t acc = (uint64_t)(now > d->audio_last_ns ? now - d->audio_last_ns : 0) *
+                   DSP_AUDIO_RATE + d->audio_frac;
+    unsigned frames = acc / 1000000000ULL;
     unsigned i;
 
-    d->audio_tick++;
-    if ((d->audio_tick % 10) == 0) {
-        frames = 45;
+    d->audio_frac = acc % 1000000000ULL;
+    d->audio_last_ns = now;
+    if (frames > DSP_AUDIO_MAX) {
+        frames = DSP_AUDIO_MAX;
     }
+    d->audio_tick++;
 
     if (d->boot_state == BOOT_RUN && !d->halted) {
         for (i = 0; i < frames * 2; i++) {
@@ -1974,7 +2058,7 @@ static void dsp_audio_tick(void *opaque)
             }
         }
         /* Main instructions are interleaved with the serial slots above. */
-        if (d->audio_tick == 3000 && getenv("CDJ850_DSP_DEBUG")) {
+        if (d->audio_tick == 6000 && getenv("CDJ850_DSP_DEBUG")) {
             unsigned k;
 
             for (k = 0x30; k < 0x40; k += 2) {
@@ -1989,7 +2073,7 @@ static void dsp_audio_tick(void *opaque)
                         "VBA=%06x", d->x_io[IO_OFF(0xFFFFFF)],
                         d->x_io[IO_OFF(0xFFFFFE)], d->sr, d->omr, d->vba);
         }
-        if ((d->audio_tick % 500) == 0 && getenv("CDJ850_DSP_DEBUG")) {
+        if ((d->audio_tick % 1000) == 0 && getenv("CDJ850_DSP_DEBUG")) {
             info_report("cdj850-dsp: tick=%u P:%06x TCR=0x%06x RCR=0x%06x "
                         "Y0=0x%06x Y20=0x%06x Y22=0x%06x X0C=0x%06x X0D=0x%06x "
                         "X1E=0x%06x X1F=0x%06x X38=0x%06x PF10=%u",
@@ -2005,7 +2089,7 @@ static void dsp_audio_tick(void *opaque)
         }
     }
 
-    timer_mod(d->audio_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 1000000);
+    timer_mod(d->audio_timer, now + DSP_AUDIO_TICK_NS);
 }
 
 void dsp56300_shi_tx(uint8_t byte)
@@ -2152,6 +2236,7 @@ void dsp56300_init(void)
     }
     d->audio_sink = cdj_host_audio_open(&audio_cfg);
     d->audio_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, dsp_audio_tick, d);
-    timer_mod(d->audio_timer, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + 1000000);
+    d->audio_last_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    timer_mod(d->audio_timer, d->audio_last_ns + DSP_AUDIO_TICK_NS);
     dsp = d;
 }
