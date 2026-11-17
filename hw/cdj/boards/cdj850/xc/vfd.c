@@ -44,6 +44,7 @@ static struct {
     QemuConsole *con;
     char line[2][VFD_COLS + 1];
     bool dirty;
+    bool has_panel_text;
     bool unknown_logged[256];
     bool synced;
     uint8_t frame[VFD_FRAME_LEN];
@@ -140,6 +141,7 @@ void vfd_init(void)
     if (vfd.con) {
         return;
     }
+    vfd.has_panel_text = false;
     snprintf(vfd.line[0], sizeof(vfd.line[0]), "CDJ-850 PANEL LINK -- BOOT");
     snprintf(vfd.line[1], sizeof(vfd.line[1]), "FL: waiting for frames");
     vfd.dirty = true;
@@ -158,6 +160,31 @@ void vfd_text(char *line0, unsigned n0, char *line1, unsigned n1)
     if (line1 && n1) {
         snprintf(line1, n1, "%s", vfd.line[1]);
     }
+}
+
+void vfd_note_panel_text(uint8_t mode, const char *l0, const char *l1,
+                         const char *l2)
+{
+    const char *s0 = (l0 && l0[0]) ? l0 : "";
+    const char *s1 = (l1 && l1[0]) ? l1 : "";
+    const char *s2 = (l2 && l2[0]) ? l2 : "";
+
+    vfd.has_panel_text = true;
+    if (!s0[0] && s1[0] && !s2[0]) {
+        snprintf(vfd.line[0], sizeof(vfd.line[0]), "%.*s", VFD_COLS, s1);
+        snprintf(vfd.line[1], sizeof(vfd.line[1]), "SCIF1 mode 0x%02x", mode);
+    } else {
+        snprintf(vfd.line[0], sizeof(vfd.line[0]), "%.*s", VFD_COLS,
+                 s0[0] ? s0 : (s1[0] ? s1 : "-"));
+        if (s1[0] && s2[0]) {
+            snprintf(vfd.line[1], sizeof(vfd.line[1]), "%.*s | %.*s",
+                     18, s1, 18, s2);
+        } else {
+            snprintf(vfd.line[1], sizeof(vfd.line[1]), "%.*s", VFD_COLS,
+                     s1[0] ? s1 : s2);
+        }
+    }
+    vfd.dirty = true;
 }
 
 void vfd_note_tx(uint8_t b)
@@ -182,10 +209,12 @@ void vfd_note_tx(uint8_t b)
     vfd.frame[vfd.nframe++] = b;
     if (vfd.nframe == VFD_FRAME_LEN) {
         vfd.frames++;
-        snprintf(vfd.line[1], sizeof(vfd.line[1]),
-                 "TX %02X %02X %02X %02X %02X %02X #%lu",
-                 vfd.frame[0], vfd.frame[1], vfd.frame[2],
-                 vfd.frame[3], vfd.frame[4], vfd.frame[5], vfd.frames);
-        vfd.dirty = true;
+        if (!vfd.has_panel_text) {
+            snprintf(vfd.line[1], sizeof(vfd.line[1]),
+                     "TX %02X %02X %02X %02X %02X %02X #%lu",
+                     vfd.frame[0], vfd.frame[1], vfd.frame[2],
+                     vfd.frame[3], vfd.frame[4], vfd.frame[5], vfd.frames);
+            vfd.dirty = true;
+        }
     }
 }

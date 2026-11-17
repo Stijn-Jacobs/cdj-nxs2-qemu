@@ -107,18 +107,40 @@ static int hexval(int c)
     return -1;
 }
 
-/* Feed one hex segment (spaces ignored), then print both lines. */
-static void run_segment(const char *hex)
+/* Feed one hex segment (spaces ignored) or PANEL:mode:l0:l1:l2, then print both lines. */
+static void run_segment(const char *arg)
 {
-    for (const char *p = hex; *p; ) {
-        while (*p == ' ' || *p == '\t') p++;
-        if (!*p) break;
-        int hi = hexval(*p++);
-        while (*p == ' ' || *p == '\t') p++;
-        if (!*p) { fprintf(stderr, "odd hex\n"); exit(2); }
-        int lo = hexval(*p++);
-        if (hi < 0 || lo < 0) { fprintf(stderr, "bad hex\n"); exit(2); }
-        vfd_note_tx((unsigned char)((hi << 4) | lo));
+    if (strncmp(arg, "PANEL:", 6) == 0) {
+        const char *p = arg + 6;
+        unsigned mode = (unsigned)strtoul(p, (char **)&p, 16);
+        char b0[64] = "", b1[64] = "", b2[64] = "";
+        if (*p == ':') p++;
+        const char *c1 = strchr(p, ':');
+        size_t n0 = c1 ? (size_t)(c1 - p) : strlen(p);
+        if (n0 >= sizeof b0) n0 = sizeof b0 - 1;
+        memcpy(b0, p, n0);
+        if (c1) {
+            p = c1 + 1;
+            const char *c2 = strchr(p, ':');
+            size_t n1 = c2 ? (size_t)(c2 - p) : strlen(p);
+            if (n1 >= sizeof b1) n1 = sizeof b1 - 1;
+            memcpy(b1, p, n1);
+            if (c2) {
+                snprintf(b2, sizeof b2, "%s", c2 + 1);
+            }
+        }
+        vfd_note_panel_text((uint8_t)mode, b0, b1, b2);
+    } else {
+        for (const char *p = arg; *p; ) {
+            while (*p == ' ' || *p == '\t') p++;
+            if (!*p) break;
+            int hi = hexval(*p++);
+            while (*p == ' ' || *p == '\t') p++;
+            if (!*p) { fprintf(stderr, "odd hex\n"); exit(2); }
+            int lo = hexval(*p++);
+            if (hi < 0 || lo < 0) { fprintf(stderr, "bad hex\n"); exit(2); }
+            vfd_note_tx((unsigned char)((hi << 4) | lo));
+        }
     }
     char l0[64], l1[64];
     vfd_text(l0, sizeof l0, l1, sizeof l1);
@@ -235,4 +257,17 @@ def test_no_question_glyphs_any_byte(vfd_exe):
     stream = " ".join("%02X" % b for b in range(256))
     out, err = vfd_exe(stream)
     assert "?" not in out
+    assert err == ""
+
+
+def test_panel_text_modes(vfd_exe):
+    out, err = vfd_exe(
+        "PANEL:01::FOLDER:",
+        "PANEL:01:ALPHA.wav:BETA.wav:GAMMA.wav",
+    )
+    lines = out.splitlines()
+    assert lines[0] == "L0:[FOLDER]"
+    assert lines[1] == "L1:[SCIF1 mode 0x01]"
+    assert lines[2] == "L0:[ALPHA.wav]"
+    assert lines[3] == "L1:[BETA.wav | GAMMA.wav]"
     assert err == ""

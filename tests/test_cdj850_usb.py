@@ -7,16 +7,26 @@ interrupt checks run a ROM that enables interrupts and parks on a branch.
 import json
 import os
 import select
+import selectors
 import socket
 import struct
 import subprocess
 import time
+from pathlib import Path
 
 import pytest
 
 
 USB = 0xFFFC1C00
 DMA = 0xFFFE1000
+
+
+def _cdj850_binary():
+    binary = os.environ.get("GUI_QEMU", os.path.expanduser(
+        "~/qemu-build-eb/qemu-system-sh4eb"))
+    if not os.path.isfile(binary):
+        pytest.skip("qemu-system-sh4eb is not built")
+    return binary
 
 
 class Deck:
@@ -51,10 +61,7 @@ class Deck:
 
 @pytest.fixture
 def deck(tmp_path):
-    binary = os.environ.get("GUI_QEMU", os.path.expanduser(
-        "~/qemu-build-eb/qemu-system-sh4eb"))
-    if not os.path.isfile(binary):
-        pytest.skip("qemu-system-sh4eb is not built")
+    binary = _cdj850_binary()
     # VBR = SDRAM; SR.IMASK = 0; park. Only synthetic instructions/data.
     flash = bytearray(4 * 1024 * 1024)
     struct.pack_into(">II", flash, 0, 0x100, 0xFFF90000)
@@ -179,3 +186,177 @@ def test_dma_longword_addressing_and_reserved_storage(deck):
     assert deck.read(DMA + 0x80, 4) == 0xA5A55A5A
     deck.write(DMA + 0x8C, 0x00080002, 4)
     assert deck.read(DMA + 0x8C, 4) == 0x00080002
+
+
+def _make_pcm_wav(seconds=1, rate=44100):
+    data_size = seconds * rate * 4
+    hdr = struct.pack(
+        "<4sI4s4sIHHIIHH4sI",
+        b"RIFF", 36 + data_size, b"WAVE",
+        b"fmt ", 16, 1, 2, rate, rate * 4, 4, 16,
+        b"data", data_size,
+    )
+    return hdr + (b"\x00" * data_size)
+
+
+def _fat16_lfn_entry(name, short_name_11, order=0x41):
+    csum = 0
+    for b in short_name_11:
+        csum = (((csum & 1) << 7) + (csum >> 1) + b) & 0xFF
+    u16 = [ord(ch) for ch in name] + [0]
+    u16.extend([0xFFFF] * (13 - len(u16)))
+    return struct.pack(
+        "<B10sBBB12sH4s",
+        order,
+        b"".join(struct.pack("<H", c) for c in u16[:5]),
+        0x0F, 0, csum,
+        b"".join(struct.pack("<H", c) for c in u16[5:11]),
+        0,
+        b"".join(struct.pack("<H", c) for c in u16[11:13]),
+    )
+
+
+def _build_fat16_usb_image(img_path, track_names):
+    bps, spc, res, fats, roots, spf = 512, 4, 1, 2, 512, 64
+    part_lba, part_secs, total_secs = 63, 65473, 65536
+    cluster_bytes = bps * spc
+    data_lba = part_lba + res + fats * spf + (roots * 32) // bps
+
+    img = bytearray(total_secs * bps)
+    # MBR partition entry 1 (FAT16B, type 0x06)
+    struct.pack_into("<B3sB3sII", img, 446, 0x80, b"\x01\x01\x00", 0x06,
+                     b"\xfe\xff\xff", part_lba, part_secs)
+    struct.pack_into("<H", img, 510, 0xAA55)
+
+    # FAT16 VBR
+    vbr_off = part_lba * bps
+    struct.pack_into("<3s8sHBHBHHBHHHII", img, vbr_off,
+                     b"\xeb\x3c\x90", b"MSDOS5.0", bps, spc, res, fats, roots,
+                     part_secs, 0xF8, spf, 63, 255, part_lba, 0)
+    struct.pack_into("<BBBI11s8s", img, vbr_off + 36,
+                     0x80, 0, 0x29, 0x12345678, b"CDJ        ", b"FAT16   ")
+    struct.pack_into("<H", img, vbr_off + 510, 0xAA55)
+
+    fat = [0] * (spf * bps // 2)
+    fat[0] = 0xFFF8
+    fat[1] = 0xFFFF
+
+    root_off = (part_lba + res + fats * spf) * bps
+    # Root entry 0: volume label
+    struct.pack_into("<11sB10sHHHI", img, root_off,
+                     b"CDJ        ", 0x08, b"\x00" * 10, 0, 0, 0, 0)
+    ent_off = root_off + 32
+    next_clus = 2
+    wav_blob = _make_pcm_wav()
+
+    for name in track_names:
+        stem, ext = name.rsplit(".", 1)
+        assert len(name) <= 12 and len(stem) <= 8 and len(ext) <= 3
+        short11 = f"{stem.upper():<8}{ext.upper():<3}".encode("ascii")
+        nclus = (len(wav_blob) + cluster_bytes - 1) // cluster_bytes
+        first_clus = next_clus
+        for c in range(first_clus, first_clus + nclus):
+            fat[c] = 0xFFFF if c == first_clus + nclus - 1 else c + 1
+        data_off = (data_lba + (first_clus - 2) * spc) * bps
+        img[data_off:data_off + len(wav_blob)] = wav_blob
+        next_clus += nclus
+
+        lfn = _fat16_lfn_entry(name, short11)
+        img[ent_off:ent_off + 32] = lfn
+        ent_off += 32
+        struct.pack_into("<11sB10sHHHI", img, ent_off,
+                         short11, 0x20, b"\x00" * 10, 0, 0, first_clus, len(wav_blob))
+        ent_off += 32
+
+    fat_bytes = struct.pack(f"<{len(fat)}H", *fat)
+    for fi in range(fats):
+        foff = (part_lba + res + fi * spf) * bps
+        img[foff:foff + len(fat_bytes)] = fat_bytes
+
+    img_path.write_bytes(img)
+
+
+def test_live_usb_source_select_browse_and_load(tmp_path):
+    binary = _cdj850_binary()
+    flash = Path(__file__).resolve().parent.parent / "extract" / "cdj850" / "flash_cdj850.bin"
+    if not flash.is_file():
+        pytest.skip("extract/cdj850/flash_cdj850.bin is not present")
+    if os.name == "nt":
+        pytest.skip("QMP socket descriptor inheritance requires POSIX")
+
+    usb_img = tmp_path / "usb.img"
+    _build_fat16_usb_image(usb_img, ["ALPHA.wav", "BETA.wav", "GAMMA.wav"])
+
+    qmp_s, qmp_c = socket.socketpair()
+    env = os.environ.copy()
+    env["CDJ850_DSP_BOOT_HLE"] = "1"
+    env["CDJ850_PANEL_SCRIPT"] = (
+        "20000:usb:200,24000:enter:200,26000:rot+1,28000:enter:200"
+    )
+
+    p = subprocess.Popen(
+        [
+            binary, "-M", "cdj850",
+            "-display", "none", "-monitor", "none", "-serial", "none",
+            "-drive", f"if=pflash,format=raw,file={flash},snapshot=on",
+            "-drive", f"if=none,id=usbstk,format=raw,file={usb_img},snapshot=on",
+            "-device", "usb-storage,drive=usbstk,port=1",
+            "-chardev", f"socket,id=qmp,fd={qmp_c.fileno()}",
+            "-mon", "chardev=qmp,mode=control",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        pass_fds=(qmp_c.fileno(),),
+        env=env,
+    )
+    qmp_c.close()
+    qmp = qmp_s.makefile("rwb", buffering=0)
+    display_lines = []
+    try:
+        assert "QMP" in json.loads(qmp.readline())
+        qmp.write(b'{"execute":"qmp_capabilities"}\n')
+        assert "return" in json.loads(qmp.readline())
+
+        sel = selectors.DefaultSelector()
+        sel.register(p.stderr, selectors.EVENT_READ)
+        deadline = time.monotonic() + 60.0
+        buf = ""
+        milestones = [False, False, False, False]
+        eof = False
+        while time.monotonic() < deadline and not all(milestones) and not eof:
+            for key, _ in sel.select(timeout=0.3):
+                chunk = os.read(key.fileobj.fileno(), 4096).decode(errors="replace")
+                if not chunk:
+                    eof = True
+                    break
+                buf += chunk
+                while "\n" in buf:
+                    ln, buf = buf.split("\n", 1)
+                    if "cdj850-panel: display " not in ln:
+                        continue
+                    display_lines.append(ln)
+                    if not milestones[0] and "[.FOLDER.] | [] | []" in ln:
+                        milestones[0] = True
+                    elif (milestones[0] and not milestones[1] and
+                          "tag=25/02/03" in ln and
+                          "[ALPHA.wav] | [BETA.wav] | [GAMMA.wav]" in ln):
+                        milestones[1] = True
+                    elif (milestones[1] and not milestones[2] and
+                          "tag=01/26/03" in ln and
+                          "[ALPHA.wav] | [BETA.wav] | [GAMMA.wav]" in ln):
+                        milestones[2] = True
+                    elif (milestones[2] and not milestones[3] and
+                          "mode=0x0a" in ln and "[BETA.wav] | [] | []" in ln):
+                        milestones[3] = True
+        assert all(milestones), (
+            f"Missing USB browse/load milestones {milestones}; display log:\n" +
+            "\n".join(display_lines)
+        )
+    finally:
+        try:
+            qmp.write(b'{"execute":"quit"}\n')
+            p.wait(timeout=5)
+        except Exception:
+            p.kill()
+            p.wait(timeout=5)
+        qmp_s.close()
