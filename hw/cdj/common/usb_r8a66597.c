@@ -69,6 +69,12 @@ struct CdjUsbState {
      * takes it one packet at a time (cdj_usb_dcp_fetch()). */
     unsigned dcp_left;
     bool dcp_per_packet;
+    /* Property "pipe-ep0", default off: a pipe with a transfer type set may
+     * address endpoint 0. The SH7263 host driver (CDJ-850) sends the
+     * control-read status stage, a zero-length OUT to EP0, through a pipe
+     * configured EPNUM = 0, DIR = transmit. Off, EPNUM = 0 means the pipe
+     * was never configured (the SH7724/SH7763 boards' behaviour). */
+    bool pipe_ep0;
 
     uint16_t reg[CDJ_USB_SIZE / 2];
 };
@@ -403,11 +409,23 @@ static void cdj_usb_pipe_run(CdjUsbState *s, unsigned pipe)
     bool ended = false;              /* the transfer reached a defined end */
     int n;
 
-    if (!epnum) {
+    if (!epnum && !(s->pipe_ep0 && (cfg & 0xC000))) {
         return;                      /* pipe never configured */
     }
     if (!maxp || maxp > sizeof(s->buf[0].data)) {
         maxp = 64;
+    }
+
+    if (out && !epnum && !s->buf[pipe].len) {
+        /* pipe-ep0: a zero-length OUT to endpoint 0 (control status stage)
+         * goes to the device, which ends the control transfer on it. */
+        n = cdj_usb_xfer(s, USB_TOKEN_OUT, 0, addr, NULL, 0);
+        if (cdj_usb_debug()) {
+            info_report("usb: pipe %u OUT ep0 addr %u, zero-length -> %d",
+                        pipe, addr, n);
+        }
+        s->reg[(n < 0 ? CDJ_USB_NRDYSTS : CDJ_USB_BEMPSTS) / 2] |= 1u << pipe;
+        return;
     }
 
     if (out) {
@@ -836,10 +854,18 @@ static const VMStateDescription vmstate_cdj_usb = {
     }
 };
 
+static const Property cdj_usb_props[] = {
+    DEFINE_PROP_BOOL("pipe-ep0", CdjUsbState, pipe_ep0, false),
+    /* Same field cdj_usb_init() sets; a property for a board that creates
+     * the device itself. */
+    DEFINE_PROP_BOOL("dcp-per-packet", CdjUsbState, dcp_per_packet, false),
+};
+
 static void cdj_usb_class_init(ObjectClass *klass, const void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(klass);
 
+    device_class_set_props(dc, cdj_usb_props);
     dc->realize = cdj_usb_realize;
     dc->vmsd = &vmstate_cdj_usb;
     dc->desc = "USB host module (R8A66597)";

@@ -101,6 +101,7 @@ show the firmware interface, not a claim of feature parity.
 | **CDJ-2000NXS** | 🧪 Experimental | Loads and plays from USB in real time with the DSP module setup builds. PLAY, CUE, tempo and jog work. Two decks link. |
 | **CDJ-900** | 🧪 Experimental | Loads and plays from USB; its display shows the overview, playhead and time. |
 | **CDJ-2000** | 🧪 Experimental | Loads and plays from USB in real time with the DSP module setup builds. PLAY, CUE, tempo and jog work. Two decks link. |
+| **CDJ-850** | 🧪 Experimental (bring-up) | Boots the real firmware into RTOS init (panel serial, DSP bootstrap); parks at a task barrier waiting on DSP56371 reply bytes — no USB, display content, or sound yet. |
 
 <!-- feature-matrix:start -->
 <details>
@@ -108,37 +109,37 @@ show the firmware interface, not a claim of feature parity.
 
 ✅ works, measured &nbsp; ⚠️ partly, see the note &nbsp; ❌ does not work &nbsp; ➖ the player does not have it &nbsp; · not tested yet
 
-| | CDJ-2000NXS2 | XDJ-1000MK2 | XDJ-700 | XDJ-1000 | CDJ-900NXS | CDJ-2000NXS | CDJ-900 | CDJ-2000 |
-|---|---|---|---|---|---|---|---|---|
+| | CDJ-2000NXS2 | XDJ-1000MK2 | XDJ-700 | XDJ-1000 | CDJ-900NXS | CDJ-2000NXS | CDJ-900 | CDJ-2000 | CDJ-850 |
+|---|---|---|---|---|---|---|---|---|---|
 | **Media** | | | | | | | | |
-| USB | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| USB | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
 | **Playback** | | | | | | | | |
-| Sound | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
-| Real time with the setup DSP module | ✅ | ✅ | ⚠️<sup>1</sup> | ✅ | ⚠️<sup>2</sup> | ✅ | · | ✅ |
+| Sound | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | ❌ |
+| Real time with the setup DSP module | ✅ | ✅ | ⚠️<sup>1</sup> | ✅ | ⚠️<sup>2</sup> | ✅ | · | ✅ | · |
 | **Display** | | | | | | | | |
-| Waveform / overview | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Tempo and BPM readout | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Waveform / overview | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Tempo and BPM readout | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
 | **Transport** | | | | | | | | |
-| PLAY / pause | ✅ | ✅ | ⚠️<sup>3</sup> | ✅ | ⚠️<sup>3</sup> | ✅ | ✅ | ✅ |
-| CUE | ✅ | ✅ | · | ✅ | · | ✅ | · | ✅ |
+| PLAY / pause | ✅ | ✅ | ⚠️<sup>3</sup> | ✅ | ⚠️<sup>3</sup> | ✅ | ✅ | ✅ | ❌ |
+| CUE | ✅ | ✅ | · | ✅ | · | ✅ | · | ✅ | ❌ |
 | **Tempo** | | | | | | | | |
-| Tempo fader | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ |
-| MASTER TEMPO | ⚠️<sup>4</sup> | ⚠️<sup>5</sup> | ⚠️<sup>5</sup> | ⚠️<sup>5</sup> | ⚠️<sup>5</sup> | · | · | · |
+| Tempo fader | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | · |
+| MASTER TEMPO | ⚠️<sup>4</sup> | ⚠️<sup>5</sup> | ⚠️<sup>5</sup> | ⚠️<sup>5</sup> | ⚠️<sup>5</sup> | · | · | · | · |
 | **Jog** | | | | | | | | |
-| Pitch bend | ✅ | · | · | ✅ | · | ✅ | · | ✅ |
-| Vinyl / scratch | ⚠️<sup>6</sup> | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ |
-| Needle search | ✅ | · | · | · | ➖ | · | ➖ | · |
+| Pitch bend | ✅ | · | · | ✅ | · | ✅ | · | ✅ | · |
+| Vinyl / scratch | ⚠️<sup>6</sup> | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | · |
+| Needle search | ✅ | · | · | · | ➖ | · | ➖ | · | ➖ |
 | **Performance** | | | | | | | | |
-| Hot cues | ✅ | · | · | · | ➖ | · | ➖ | · |
-| Loops | ⚠️<sup>7</sup> | · | · | · | · | · | · | · |
-| Beat jump | · | · | · | · | ➖ | ➖ | ➖ | ➖ |
-| Slip | ⚠️<sup>8</sup> | · | · | · | · | · | · | ➖ |
+| Hot cues | ✅ | · | · | · | ➖ | · | ➖ | · | ➖ |
+| Loops | ⚠️<sup>7</sup> | · | · | · | · | · | · | · | · |
+| Beat jump | · | · | · | · | ➖ | ➖ | ➖ | ➖ | ➖ |
+| Slip | ⚠️<sup>8</sup> | · | · | · | · | · | · | ➖ | ➖ |
 | **Interface** | | | | | | | | |
-| Touch screen | ✅ | ✅ | ✅ | ✅ | ➖ | ➖ | ➖ | ➖ |
+| Touch screen | ✅ | ✅ | ✅ | ✅ | ➖ | ➖ | ➖ | ➖ | ➖ |
 | **Pro DJ Link** | | | | | | | | |
-| Link with other players | ✅ | ✅ | · | · | · | ✅ | · | ✅ |
+| Link with other players | ✅ | ✅ | · | · | · | ✅ | · | ✅ | ➖<sup>9</sup> |
 
-Firmware: CDJ-2000NXS2 1.87, XDJ-1000MK2 1.45, XDJ-700 1.15, XDJ-1000 1.13, CDJ-900NXS 1.31, CDJ-2000NXS 1.44, CDJ-900 4.32, CDJ-2000 4.33.
+Firmware: CDJ-2000NXS2 1.87, XDJ-1000MK2 1.45, XDJ-700 1.15, XDJ-1000 1.13, CDJ-900NXS 1.31, CDJ-2000NXS 1.44, CDJ-900 4.32, CDJ-2000 4.33, CDJ-850 1.13.
 
 1. Real time in rate, but an MP3 underruns about every 6 s; a WAV plays clean.
 2. Real time until MASTER TEMPO is switched on; no run of its own yet.
@@ -148,6 +149,7 @@ Firmware: CDJ-2000NXS2 1.87, XDJ-1000MK2 1.45, XDJ-700 1.15, XDJ-1000 1.13, CDJ-
 6. VINYL scratching not tested yet.
 7. Loops engage in only some runs.
 8. The slipped playback is not checked yet.
+9. The CDJ-850 has no Ethernet port.
 
 </details>
 <!-- feature-matrix:end -->

@@ -12,6 +12,7 @@ of their own. The default is `cdj2000nxs2`.
 | `xdj1000.conf` | XDJ-1000 | v1.13, `XDJ1000.UPD` | experimental |
 | `cdj900nxs.conf` | CDJ-900NXS | v1.31, `C900NXS.UPD` | experimental |
 | `cdj2000nxs.conf` | CDJ-2000NXS | v1.44, `C2KNXS.UPD` | experimental |
+| `cdj850.conf` | CDJ-850 | v1.13, `C850MAIN.UPD` | bring-up |
 | `cdj900.conf` | CDJ-900 | v4.32, four `C900*.UPD` files | experimental |
 | `cdj2000.conf` | CDJ-2000 | v4.33, four `C2K*.UPD` files | experimental |
 
@@ -20,7 +21,10 @@ The table lists the default first, then the others newest first by `MODEL_RELEAS
 The CDJ-2000 and the CDJ-2000NXS are one platform (an older SH-4A MAIN with
 its peripherals at `0xFFxxxxxx`, a C672x-class DSP), so both boot the
 `cdj2000nxs` machine. The NXS2 is a different platform (SH7724 MAIN, C6655
-DSP, SH7269 GUI processor).
+DSP, SH7269 GUI processor). The CDJ-850 is a third platform (SH7263 SH-2A
+MAIN, DSP56371 audio DSP, text VFDs driven by the panel CPU instead of a GUI
+processor), booting the `cdj850` machine; it is earlier bring-up than the
+rest (see the status table in `README.md`).
 
 ## Variables
 

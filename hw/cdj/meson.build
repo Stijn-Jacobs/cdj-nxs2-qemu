@@ -38,4 +38,5 @@ if not cdj_web
   subdir('boards/cdj2000')
   subdir('boards/cdj900')
   subdir('boards/xdj1000')
+  subdir('boards/cdj850')
 endif

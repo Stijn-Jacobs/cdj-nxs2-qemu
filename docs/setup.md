@@ -89,6 +89,7 @@ update file as `--firmware`:
 | `cdj2000nxs` | `C2KNXS.UPD` | 1.44 |
 | `cdj900` | `C900GUI.UPD`, `C900DRIV.UPD`, `C900MAIN.UPD`, `C900PANL.UPD` | 4.32 |
 | `cdj2000` | `C2KGUI.UPD`, `C2KDRIV.UPD`, `C2KMAIN.UPD`, `C2KPANL.UPD` | 4.33 |
+| `cdj850` | `C850MAIN.UPD` | 1.13 |
 
 ```sh
 ./setup.sh --model cdj2000 --firmware path/to/C2KGUI.UPD   # the other three files beside it

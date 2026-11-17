@@ -47,7 +47,10 @@ def test_dry_run_music_takes_the_rekordbox_path(tmp_path, capsys):
     assert "baken" not in out
 
 
-def test_dry_run_tracks_takes_the_baken_path(tmp_path, capsys):
+def test_dry_run_tracks_takes_the_baken_path(tmp_path, capsys, monkeypatch):
+    # Exercise the download preview independently of a developer's installed
+    # project-local or PATH baken binary.
+    monkeypatch.setattr("launcher.baken.find", lambda _lay: None)
     music = tmp_path / "music"
     music.mkdir()
     s = _setup(tmp_path, tracks=str(music))

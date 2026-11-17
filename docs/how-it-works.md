@@ -136,6 +136,7 @@ so it takes as long as `decks2`; after that a deck takes a minute and a half.
 | `hw/cdj/boards/nxs2/` | the CDJ-2000NXS2: its MAIN board, one file per device, and the display board (`sh7269gui.c`); `diag/` holds the diagnostic hooks, `standin/` historical models that are off by default |
 | `hw/cdj/boards/cdj2000/` | the CDJ-2000 and CDJ-2000NXS: MAIN board (Renesas SH7763), Blackfin display and C6727 / C6747 DSP models, experimental |
 | `hw/cdj/boards/cdj900/` and `hw/cdj/m16c/` | the CDJ-900: the CDJ-2000's MAIN board with its M16C display micro (core, SoC and the display model), experimental |
+| `hw/cdj/boards/cdj850/` | the CDJ-850: SH7263 (SH-2A) MAIN board with panel serial, VFD text display, SSI audio and a DSP56371 model, bring-up |
 | `hw/cdj/boards/xdj1000/` | the XDJ-700, XDJ-1000 and CDJ-900NXS: their SH7724 MAIN board with its LCD controller and graphics blocks, experimental |
 | `mods/` | the [mods](mods.md), one folder each, and the tools that patch them into the display and MAIN firmware |
 | `models/` | one profile per player, read by the firmware and launch scripts (see `models/README.md`) |
