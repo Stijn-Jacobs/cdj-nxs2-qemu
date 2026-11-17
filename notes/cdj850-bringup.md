@@ -1829,7 +1829,8 @@ audit and the live test).
 - HOLD (0x0CE6C938 bit 15) stays set after a load because the emulated pitch
   ADC never changes (0x0CE6C932 == 0x0CE6C930); with the DSP fixed it does not
   matter: HOLD only makes the DSP apply the speed at once.
-- **CDJ mode pause still sounds (open).** With `vinyl` pressed first, PLAY
+- **CDJ mode pause keeps sounding: expected behaviour (confirmed by the
+  owner 2026-11-18), not an emulation bug.** With `vinyl` pressed first, PLAY
   gives state 5 / audio state 4 / command 3, but the speed stays 0x080000,
   PF16 stays high and the 6-byte DSP command is identical to playback
   (`e28000 080000`); MAIN rocks the read index around the pause point
@@ -1838,9 +1839,10 @@ audit and the live test).
   data register is unchanged between play and pause, and MAIN sends no panel
   status frames while paused. In the pause handler `FUN_0C0F6E6C` the stream
   stops (`FUN_0C005BB6`, 0x0C0F6F20) only when 0x0CE6D0FB == 1, which is
-  never set here. The service manual has hardware mutes (MAIN_XMUTE and
-  PNL_XMUTE on CN2005, AMUTE on CMPX, "released at normal playback"); the
-  panel CPU, which is not emulated, probably mutes on pause. Not resolved.
+  never set here. The rocking window around the pause point is the real
+  unit's CDJ-mode pause sound, so no panel/hardware mute needs emulating
+  for it. (Earlier guess, now dropped: MAIN_XMUTE/PNL_XMUTE on CN2005 muting
+  the pause.)
 - The DAC routine `FUN_0C016020` only switches between full level
   (0x10FF/0x11FF) and an attenuation (0x10E7/0x11E7) on bit 3 of 0x0CE6CA2F.
 - `0x0C1C1460`/`0x0C7F6674` gate the feeder's saved-pointer path: that is the
