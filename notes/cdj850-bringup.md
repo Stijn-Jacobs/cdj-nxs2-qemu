@@ -126,8 +126,8 @@ Environment knobs added by these commits (all read once at start-up):
 | CDJ850_DSP_DEBUG=1 | off | DSP core diagnostics: DSPDREQ edges, SHI RX transitions, SHI TX (first 40), unimplemented ops, ESAI RX/TX counters and TX peak per 500 ms, ESAI vectors/registers once at tick 3000. |
 | CDJ850_DSP_IPS=`n` | 64 | DSP instructions per ESAI slot (88.2 kHz). Higher values starve MAIN (the virtual clock follows host time). |
 | CDJ_DSP_AUDIO=1 | off | Open the DSP's ESAI TX0 as a host audio voice (`cdj850-dsp-esai0`); needs `-audio driver=…`. |
-| CDJ850_PF16_HIGH=1 | off | EXPERIMENT: PFPRH bit 0 (PF16) reads high. Needed, with the next one, for MAIN's DSP-paced IRQ7 audio feeder to run. Real driver of PF16 unknown. |
-| CDJ850_DSP_PLAY_PF=`n` | 13 | EXPERIMENT: MAIN PFDRL bit that drives DSP PF10 (the request gate). The firmware never drives PF13; 8 (driven by FUN_0C006294 when PF16 is high) makes the DSP request audio. |
+| CDJ850_PF16_HIGH=1 | off | OBSOLETE (2026-11-17): PF16 is a MAIN output (PFIORH = 0x0001) that MAIN drives itself; PFPRH now reads it back from PFDRH (e47bad7). Forcing it high only hides the real level. |
+| CDJ850_DSP_PLAY_PF=`n` | unset = MAIN PF16 | Overrides the DSP PF10 (PLAY) source with MAIN PFDRL bit `n`. Default since e47bad7 is MAIN PF16 (PFDRH bit 0), per service manual 10.2/10.4. Leave unset. |
 | CDJ850_5MON=0 | 5MON reads 1 | `0` makes PB3 read low (old behaviour). |
 | CDJ850_LOADER_SW=`0xNNNN` | 0x0600 | Overrides PFDRH bits 8-10 (INSIDE, LPS1, LPS2); default LPS1/LPS2 high, INSIDE low. |
 | CDJ850_PANEL=0 | enabled | `0` disables the emulated panel peer (xc/panel_peer.c). |
@@ -1613,4 +1613,84 @@ verified against live QEMU (`CDJ850_DSP_DEBUG=1`):
      `P:047c..0481`, `P:0bd1`, `P:0c5f..0c65`).
   4. `ROL A` (`0x37`, `P:044c: 0x202a37` in ESAI TX ISR `P:043f`) is omitted
      from `exec_alu` (`dsp56300.c:858-959`) and silently skipped.
+
+### MAIN play-path audit: VINYL release, CDJ HOLD, PF16 (2026-11-17)
+
+Static trace in `/main_unpacked.bin` (base 0x0C000000), started by an
+Antigravity session (its notes: `~/.gemini/antigravity/brain/3ae13e34-…/scratch/`)
+and finished here. No emulator code changed. Several conclusions in the
+three entries above are corrected here.
+
+**PF16 (answered).**
+- PF16 is a MAIN **output**. `0x0C0B91CA` writes PFIORH = 0x0001 (shadow
+  0x0CEE348E); boot.bin never touches PFIORH. Reads of PFPRH bit 0 are MAIN
+  reading back its own pin, not an external input (not fader start).
+- `FUN_0C005B14` = "start DSP stream": if PF16 is low, it clears PF8 (unless
+  audio mode 2), clears a stale IRQ7 (DSPDREQ) flag in 0xFFFE0806 bit 7, sets
+  the low nibble of 0xFFFE081A to 7 (IRQ7 priority), then PFDRH |= 1.
+  `FUN_0C005BB6` = "stop": 0x0C7F6678 = 1, PFDRH &= ~1. Both have dozens of
+  callers in the CD and USB audio-task state handlers. The USB play handler
+  `FUN_0C0F6E6C` calls the start routine at 0x0C0F6F86.
+- Net "PLAY" (service manual 10.2/10.4) carries MAIN PF16 to DSP PF10, the
+  gate of the DSP's DSPDREQ request routine `P:0x1FC`. e47bad7 already models
+  this (port.c PFPRH readback, dsp56300.c `YIO_PDRF`). So
+  `CDJ850_PF16_HIGH` and `CDJ850_DSP_PLAY_PF=8` are obsolete (table updated).
+  The PFPRH checks in `FUN_0C0DD978` (with 0x0CE6CA80 = last audio command,
+  0x0CE6CA81 = its second argument) are "stream not running" gates.
+
+**CDJ mode HOLD (answered; not a MAIN blocker).**
+- HOLD (0x0CE6C938 bit 15, SHI word 0 bit 15) means "set the speed now,
+  without a ramp", not "pause". DSP `P:0x1E2` writes X:<0x1F> (active speed)
+  directly only with HOLD = 1; with HOLD = 0, `FUN_P_000731` ramps it.
+- CDJ Play: sub-state 0x0CE6CA9D = 2. `FUN_0C0D59B8` then sets
+  C940 = 1.0x + pitch with HOLD = 1 (instant start) and drops to sub-state 0.
+  In sub-state 0, HOLD clears only on a pitch change (0x0CE6C932 ≠ 0x0CE6C930,
+  from pitch ADC `FUN_0C0D1F14(9, 0)` in `FUN_0C0E49CC`) or a
+  Master Tempo/Tempo Range press (0x0CE6D0F5, `FUN_0C0D8D78` at 0x0C0D8E4E),
+  so pitch changes glide. HOLD staying 1 after Play is intended.
+- Therefore "CDJ mode Play with HOLD = 1 (0xE28000, speed 0x080000) and the
+  DSP does not consume" is a DSP fault, not a missing MAIN input. Check it
+  again after the `dsp56300.c` decode fixes. Also check whether the DSP's speed
+  reply reads 0 while cued: cued is sub-state 3, which makes `FUN_0C0D59B8`
+  send speed 0 with HOLD, so the 0xC80000 (1.0x) reply seen earlier is
+  suspect.
+- Correction: `FUN_0C0D7464` forces sub-state 2 only for commands 2, 4
+  and 0x0E, not command 3 (play). The entry above said otherwise.
+  0x0CE6CA9C is that function's 6th argument.
+
+**VINYL release (narrowed; still open).**
+- Flags:
+  - 0x0CE6D0F1 is a **play-intent latch**. Play sets it (from cue in both
+    modes; `FUN_0C0DE75E` toggles it during load).
+  - 0x0CE6D0F2 is the **brake/held flag**.
+  - In sub-state 4/0x24 of `FUN_0C0D59B8`, D0F2 = 1 lowers speed by
+    `(0x0CE6C954 << 19) / table[0x0CE6C950]` (the brake curve, setting
+    0x0CE6C950). D0F2 = 0 raises it toward `FUN_0C0D5FEC(pitch 0x0CE6CA50)`
+    (the start curve).
+  - 0x0CE6D0E0 is Master Tempo (speed bit 22). With MT on, the brake branch
+    adopts the DSP's reported speed instead.
+  - 0x0CE6D0F3 is jog touch (`FUN_0C0ED0B4`/`FUN_0C0ED10C`, panel byte 0x0C
+    bit 0x20).
+- VINYL Play from cue (0x0C0DEC98…0x0C0DED28): D0F1 = 1, D0F2 = 1,
+  countdown 0x0CE6C9CB = 100, sub-state 3 (if 0x0CE6D0FB ≠ 0 or
+  `FUN_0C008546(play index)` returns 0) or 4. So the unit enters
+  brake/hold at speed 0.
+- Every path found that leaves that posture is blocked while D0F1 = 1:
+  - the release in `FUN_0C0DD978` (needs D0F1 ≠ 1 to set sub-state 0x24 and
+    D0F2 = 0);
+  - `FUN_0C0ED10C` touch release (needs D0F1 = 0 unless state > 9);
+  - `FUN_0C0D7464` (clears D0F2 only for commands 2/4/0x0E and with
+    D0F1 = 0).
+- Every D0F1 = 0 writer checked is pause, cue, eject or load reset
+  (`FUN_0C0DEB50` 5→3/4, `FUN_0C0DC996`, `FUN_0C0EB704`, `FUN_0C0E4BBE`,
+  `FUN_0C0DE680`).
+- The only motion path in that posture is jog movement within the 100-tick
+  window while the DSP reports a non-zero speed, giving 0x0CE6D0E6 = 1
+  (`FUN_0C0DD492`). That is scratch mode: speed follows the jog
+  (`FUN_0C0DD978` second half, sub-state 1).
+- Conclusion: no MAIN-internal VINYL start from cue was found with MT off.
+  Next step is dynamic: once the DSP decode bugs are fixed, run VINYL Play
+  with gdbstub write watchpoints on 0x0CE6D0F1, then 0x0CE6D0F2 (one at a
+  time), and see whether a correct DSP speed reply changes the path. Until
+  then, CDJ mode (press `vinyl` once) is the test path.
 
