@@ -11,9 +11,9 @@ between two chrome rings.
 
 The face is a static body plus small sprites for whatever changes: a key's
 lit and pressed looks, the jog at a few rotation phases, the jog's centre
-display, the rotary selector and the tempo slider's cap. The view
-(deck_view.py) stacks them on the face and redraws a sprite only when its
-state changes.
+display, the light in its outer ring, the rotary selector and the tempo
+slider's cap. The view (deck_view.py) stacks them on the face and redraws a
+sprite only when its state changes.
 """
 
 import hashlib
@@ -439,8 +439,8 @@ class Art:
         p.rrect((843, 504, 958, 554), 4, fill=(16, 16, 17), outline=(70, 72, 76),
                 width=1)
 
-    def _jog_surround(self, p):
-        cx, cy, r = L.JOG
+    def _jog_surround(self, p, jog=L.JOG):
+        cx, cy, r = jog
         p.circle(cx, cy, r + 10, fill=(10, 10, 11), outline=(80, 82, 88), width=1)
         for a0, a1, head in ((120, 148, 120), (32, 60, 60)):
             p.d.arc(p.c(cx, cy, r + 24), a0, a1, fill=PRINT, width=p.w(1.2))
@@ -832,11 +832,11 @@ class Art:
         r = L.JOG_DISPLAY - 2
         return (cx - r, cy - r, cx + r, cy + r)
 
-    def centre_sprite(self, ring, live):
-        """The jog's centre display without its pointer: the tick disc and the
-        ring light. The pointer is drawn over it (centre_pointer), so following
-        it costs a canvas move, not an image."""
-        return self._centre_base(ring, live)
+    def centre_sprite(self, live):
+        """The jog's centre display without its pointer: the tick disc. The
+        pointer is drawn over it (centre_pointer), so following it costs a
+        canvas move, not an image."""
+        return self._centre_base(live)
 
     def centre_pointer(self, step):
         """The pointer at `step` turns, in canvas pixels: the black gap it
@@ -864,18 +864,14 @@ class Art:
     CENTRE_R = (35, 60)                  # the tick band's inner and outer radius
     CENTRE_GAP = 24                      # degrees of ticks the pointer clears
 
-    def _centre_base(self, ring, live):
-        k = ("centre-base", ring, live)
+    def _centre_base(self, live):
+        k = ("centre-base", live)
         if k in self._sprites:
             return self._sprites[k]
         cx, cy, _ = L.JOG
         p = Painter(self.centre_box(), self.scale)
         p.circle(cx, cy, L.JOG_DISPLAY - 2, fill=(0, 0, 0))
         r_in, r_out = self.CENTRE_R
-        if ring:
-            p.glow((cx - r_out, cy - r_out, cx + r_out, cy + r_out),
-                   lambda d, c: d.ellipse(p.c(cx, cy, r_out + 4), outline=c,
-                                          width=p.w(3)), (200, 225, 255), 3, 0.7)
         tick = (228, 230, 236) if live else (70, 72, 76)
         n = self.CENTRE_TICKS
         for i in range(n):
@@ -891,6 +887,33 @@ class Art:
                    ellipse=True)
         p.circle(cx, cy, 18, outline=(30, 40, 60), width=1)
         self._sprites[k] = (p.finish(), p.px)
+        return self._sprites[k]
+
+    # -- the jog ring light -----------------------------------------------------
+
+    RING_WHITE = (226, 236, 255)
+    RING_RED = (255, 36, 24)
+
+    def ring_box(self):
+        cx, cy, r = L.JOG
+        return (cx - r - 12, cy - r - 12, cx + r + 12, cy + r + 12)
+
+    def ring_sprite(self, white, red):
+        """The light in the jog's outer ring, drawn over the platter: white and
+        red each at a level 0-3, as MAIN sends them (JOGILM_W / JOGILM_R)."""
+        k = ("ring", white, red)
+        if k not in self._sprites:
+            cx, cy, r = L.JOG
+            p = Painter(self.ring_box(), self.scale)
+            for color, level in ((self.RING_WHITE, white), (self.RING_RED, red)):
+                if level:
+                    strength = level / 3
+                    p.glow(self.ring_box(),
+                           lambda d, c: d.ellipse(p.c(cx, cy, r + 4), outline=c,
+                                                  width=p.w(18)), color, 5, strength)
+                    p.circle(cx, cy, r - 2, outline=color + (round(255 * strength),),
+                             width=8)
+            self._sprites[k] = (p.finish(), p.px)
         return self._sprites[k]
 
     # -- the rotary selector and the tempo slider --------------------------------
@@ -1033,9 +1056,13 @@ class ScaledArt(Art):
         return self._fit(f"jog-{phase}", self.jog_box(),
                          lambda: self.ref.jog_sprite(phase)[0])
 
-    def centre_sprite(self, ring, live):
-        return self._fit(f"centre-{int(ring)}{int(live)}", self.centre_box(),
-                         lambda: self.ref.centre_sprite(ring, live)[0])
+    def centre_sprite(self, live):
+        return self._fit(f"centre-{int(live)}", self.centre_box(),
+                         lambda: self.ref.centre_sprite(live)[0])
+
+    def ring_sprite(self, white, red):
+        return self._fit(f"ring-{white}{red}", self.ring_box(),
+                         lambda: self.ref.ring_sprite(white, red)[0])
 
     def select_sprite(self, phase, down):
         phase = int(phase) % self.SELECT_PHASES

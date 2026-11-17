@@ -320,8 +320,8 @@ static void cdj850_init(MachineState *machine)
     }
     /* The reset vectors are the first words of the flash; erased there means
      * an image built without the bootloader, and the CPU would run 0xFFFF. */
-    cpu_physical_memory_read(cdj850_board.flash_phys, reset_word,
-                             sizeof(reset_word));
+    physical_memory_read(cdj850_board.flash_phys, reset_word,
+                         sizeof(reset_word));
     if (reset_word[0] == 0xFF && reset_word[1] == 0xFF) {
         error_report("%s: the NOR flash holds no bootloader; build it with "
                      "scripts/firmware/make_flash_cdj850.py from the prepared "

@@ -86,12 +86,12 @@ static size_t cdj_gui_count;
 static bool *cdj_gui_held;
 
 static void cdj_gui_key_event(DeviceState *dev, QemuConsole *src,
-                              InputEvent *evt)
+                              QemuInputEvent *evt)
 {
     static bool shift, nudge_down[2];
     const char *sock = getenv(CDJ_PANELKEY_ENV);
-    InputKeyEvent *k = evt->u.key.data;
-    int qcode = qemu_input_key_value_to_qcode(k->key);
+    QemuInputKeyEvent *k = &evt->key;
+    int qcode = qemu_input_linux_to_qcode(k->key);
     unsigned i;
 
     if (!sock) {
@@ -174,7 +174,7 @@ static QemuInputHandler cdj_gui_kbd = {
 /* Only here so that the window counts as having an absolute pointer: with
  * none, Cocoa, GTK and SDL grab the host mouse on the first click. */
 static void cdj_gui_pointer_event(DeviceState *dev, QemuConsole *src,
-                                  InputEvent *evt)
+                                  QemuInputEvent *evt)
 {
 }
 
@@ -200,5 +200,5 @@ void cdj_gui_keys_init(const CdjGuiKey *keys, size_t count, const char *board)
     qemu_input_handler_register(NULL, &cdj_gui_kbd);
     info_report("%s: keyboard live -- Space play/pause, C cue, "
                 "Up/Down browse, Enter load, Esc back, - = nudge "
-                "(emulator/README.md lists every key)", board);
+                "(docs/using-the-deck.md lists every key)", board);
 }

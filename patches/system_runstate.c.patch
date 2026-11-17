@@ -1,8 +1,8 @@
 diff --git a/system/runstate.c b/system/runstate.c
-index a0e2a5f..847026d 100644
+index 08acf80..5747ffc 100644
 --- a/system/runstate.c
 +++ b/system/runstate.c
-@@ -617,6 +617,9 @@ void qemu_system_guest_pvshutdown(void)
+@@ -736,6 +736,9 @@ void qemu_system_guest_pvshutdown(void)
  
  void qemu_system_reset_request(ShutdownCause reason)
  {

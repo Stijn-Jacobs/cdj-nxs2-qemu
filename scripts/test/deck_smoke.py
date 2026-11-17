@@ -74,6 +74,7 @@ import configparser
 import datetime
 import json
 import os
+import re
 import shlex
 import socket
 import struct
@@ -330,9 +331,9 @@ def run_deck(d, record, tier2, lock_wait, use_snapshot=False):
     argv = d.argv()
     restoring = bool(d.point) and snapshot.saved(d.point, ("main.vm",))
     if restoring:
-        argv += ["-incoming", "file:%s/main.vm" % d.point.replace("\\", "/")]
+        argv += snapshot.restore_args(d.point)
     elif d.point:
-        argv += ["-global", "migration.store-global-state=off"]
+        argv += snapshot.SAVE_ARGS
     with open(d.log, "wb") as log:
         q = subprocess.Popen(argv, env=env, stdout=log, stderr=subprocess.STDOUT)
     try:
@@ -389,10 +390,9 @@ def point_dir(d):
 
 def migrate_status(d):
     out = monitor(d.port, "info migrate").decode("utf-8", "replace")
-    for line in out.splitlines():
-        if "Migration status:" in line:
-            return line.split(":", 1)[1].strip()
-    return ""
+    # QEMU 10 shortened "Migration status:" to "Status:".
+    m = re.search(r"^(?:Migration s|S)tatus:\s*(\S+)", out, re.M)
+    return m.group(1) if m else ""
 
 
 def save_point(d):

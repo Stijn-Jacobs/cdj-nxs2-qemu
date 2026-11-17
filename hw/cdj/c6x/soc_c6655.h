@@ -85,6 +85,9 @@ uint64_t c6655_soc_next_event_ns(const c6655_soc *s);
  * only feed EDMA3 in between still run inside advance(), they just no longer
  * bound the skip. */
 uint64_t c6655_soc_next_irq_ns(const c6655_soc *s);
+/* EDMA3 completions that found their interrupt still pending: the ISR for the
+ * previous one had not run, so this one raised no interrupt of its own. */
+uint64_t c6655_soc_edma_overruns(const c6655_soc *s);
 /* Diagnostics: advance calls, fast-path returns, event-loop passes,
  * next-event recomputations, McBSP words clocked, catch-up runs. */
 void     c6655_soc_debug_stats(const c6655_soc *s, uint64_t out[6]);

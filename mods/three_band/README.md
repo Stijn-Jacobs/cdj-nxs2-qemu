@@ -6,6 +6,11 @@ data in its `.2EX` analysis file (the `PWV7` detail and `PWV6` overview tags
 rekordbox writes). A track without that data, or whose `PWV7` does not match
 its colour waveform in length, keeps the stock colours.
 
+<img src="../../docs/img/mods/three_band.png" alt="The same track with the stock colours and with three_band, side by side" width="640">
+
+*Left, the stock colours; right, three_band on the same track: low in blue,
+mid in amber, high in white, in the centre waveform and the overview strip.*
+
 | | |
 |---|---|
 | knobs | `CDJ_GUI_WAVE3`, `CDJ_GUI_WAVE3OV`, `CDJ_MAIN_WAVE3DATA`, `CDJ_MAIN_WAVE3DETAIL`, `CDJ_MAIN_WAVE3OVFETCH`, `CDJ_MAIN_WAVE3OVDATA` |
@@ -34,9 +39,6 @@ It is a real code patch: `python mods/patch_update.py C2KNXS2.UPD out.UPD
 three_band` writes all six into a real update. The display patches are verified against display firmware 1.81, the MAIN patches against
 1.87.
 
-**What is verified.** The waveform keeps moving with the MAIN data patches on
-in the emulator. Drawing from the track's real 3-band data has been tested
-offline only, against the byte layouts the firmware uses. It has not run on a
-real deck, and has not been tried on a range of tracks.
+Not tried on a real deck.
 
-Back to the [mods](../../README.md#mods).
+Back to the [mods](../../docs/mods.md).

@@ -138,8 +138,11 @@ static int run_set(c6655_soc *s, unsigned set)
         }
     }
 
-    if (opt & (final ? OPT_TCINTEN : OPT_ITCINTEN))
+    if (opt & (final ? OPT_TCINTEN : OPT_ITCINTEN)) {
+        if (e->ipr & e->ier & e->serviced & 1ull << tcc)
+            e->overruns++;
         e->ipr |= 1ull << tcc;
+    }
     if (opt & (final ? OPT_TCCHEN : OPT_ITCCHEN))
         e->cer |= 1ull << tcc;
     return linked;
@@ -278,7 +281,7 @@ static void events_write(c6655_soc *s, uint32_t a, uint32_t val, uint64_t mask, 
         case 0x40: e->ser &= ~bits; break;
         case 0x58: e->ier &= ~bits; break;
         case 0x60: e->ier |= bits; break;
-        case 0x70: e->ipr &= ~bits; break;
+        case 0x70: e->ipr &= ~bits; e->serviced |= bits; break;
         default: break;                      /* read-only views */
         }
     else

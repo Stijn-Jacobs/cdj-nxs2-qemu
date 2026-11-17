@@ -11,9 +11,14 @@ new medium starts a fresh cache by itself.
 import hashlib
 import os
 
+from . import host
+
 # The points the drivers know how to reach: the settled deck screen, and the
 # first track loaded and playing.
 POINTS = ("idle", "loaded")
+
+# A state that records "paused" comes back paused: the save stops the deck.
+SAVE_ARGS = ["-global", "migration.store-global-state=off"]
 
 
 def root(tmp, files, options=""):
@@ -28,3 +33,8 @@ def root(tmp, files, options=""):
 
 def saved(point_dir, boards=("main.vm", "gui.vm")):
     return all(os.path.isfile(os.path.join(point_dir, n)) for n in boards)
+
+
+def restore_args(point_dir):
+    """QEMU's options that start a one-board deck from its saved point."""
+    return ["-incoming", "file:%s/main.vm" % host.native(point_dir)]

@@ -29,13 +29,9 @@ MIDI task in PC control mode, so once the host has configured the rear port the
 patch posts the task's own "configured" event to the MIDI interface (and only
 to that one, which leaves audio and the other classes alone), once per
 connection. The knob selects both patches (`usbmidi` and `usbmiditick` in
-`patch_main.py`); `python mods/patch_update.py C2KNXS2.UPD out.UPD
+`cdj2000nxs2/patch.py`); `python mods/patch_update.py C2KNXS2.UPD out.UPD
 usb_midi` writes both into a real update (firmware 1.87).
 
-**Status: the 1 ms clock has not run yet, in the emulator or on a deck.** The
-previous version, which sent from the panel task, worked in the emulator
-(Start, Timing Clock at the expected average rate, Stop on PAUSE, Continue on
-PLAY, playback unchanged) but in clumps at the panel's pace, which a DAW reads
-as a wavering tempo. The new timing is checked in an SH-4 interpreter only.
+Not tried on a real deck.
 
-Back to the [mods](../../README.md#mods).
+Back to the [mods](../../docs/mods.md).

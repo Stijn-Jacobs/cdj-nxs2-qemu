@@ -2,9 +2,9 @@
 #include "xdj1000.h"
 #include "cdj_getenv.h"
 #include "qemu/timer.h"
-#include "hw/irq.h"
+#include "hw/core/irq.h"
 #include "qemu/log.h"
-#include "exec/address-spaces.h"
+#include "system/address-spaces.h"
 /*
  * The SH7724 blocks the XDJ's display drivers program around the LCD
  * controller: the ICB control registers at 0xE8000000 with the 128 KiB MERAM

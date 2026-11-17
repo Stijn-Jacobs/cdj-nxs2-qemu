@@ -46,7 +46,7 @@ static void cdj_linkframe_write(uint32_t sar, const char *suffix)
         warn_report("link frame: cannot write %s", name);
         return;
     }
-    cpu_physical_memory_read(A7ADDR(sar), buf, sizeof(buf));
+    physical_memory_read(A7ADDR(sar), buf, sizeof(buf));
     if (fwrite(buf, 1, sizeof(buf), f) != sizeof(buf)) {
         warn_report("link frame: short write to %s", name);
     }
@@ -105,7 +105,7 @@ void cdj_link_frame(unsigned ch, uint32_t sar)
         if (qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL) < cdj_linkframe.at_ms) {
             return;
         }
-        cpu_physical_memory_read(A7ADDR(sar) + 0x18, &c, 1);
+        physical_memory_read(A7ADDR(sar) + 0x18, &c, 1);
         if (c == 1 || !c) {
             return;                      /* the heartbeat, or not a header */
         }
@@ -172,7 +172,7 @@ void cdj_link_census(unsigned ch, uint32_t sar)
         return;
     }
 
-    cpu_physical_memory_read(A7ADDR(sar), d, sizeof(d));
+    physical_memory_read(A7ADDR(sar), d, sizeof(d));
     cdj_linkcensus.frames++;
     /* Header test, as in cdj_linkramp_calibrate(): four equal non-zero bytes
      * below 0x32 at +0x18. */
@@ -207,7 +207,7 @@ void cdj_link_census(unsigned ch, uint32_t sar)
             char hex[3 * sizeof(body) + 1];
             unsigned k;
 
-            cpu_physical_memory_read(A7ADDR(sar) + 0x18, body, sizeof(body));
+            physical_memory_read(A7ADDR(sar) + 0x18, body, sizeof(body));
             for (k = 0; k < sizeof(body); k++) {
                 snprintf(hex + 3 * k, 4, "%02x ", body[k]);
             }
@@ -270,7 +270,7 @@ void cdj_ch4_dump(unsigned ch, uint32_t sar, uint32_t count,
     if (n > sizeof(buf)) {
         n = sizeof(buf);
     }
-    cpu_physical_memory_read(A7ADDR(sar), buf, n);
+    physical_memory_read(A7ADDR(sar), buf, n);
     for (i = 0; i < n; i++) {
         snprintf(line + i * 3, 4, "%02x ", buf[i]);
     }
@@ -320,7 +320,7 @@ void cdj_ch4_patch(unsigned ch, uint32_t sar, uint32_t count,
     if (!n_set || ch != 4 || (uint64_t)count * unit < 16) {
         return;
     }
-    cpu_physical_memory_read(A7ADDR(sar), hdr, 8);
+    physical_memory_read(A7ADDR(sar), hdr, 8);
     if (hdr[0] != 0x33 || hdr[1] != 0x55) {         /* not a framed message */
         return;
     }
@@ -336,7 +336,7 @@ void cdj_ch4_patch(unsigned ch, uint32_t sar, uint32_t count,
         while (off + 8 <= n && off + 8 <= 256) {
             uint8_t pair[8];
 
-            cpu_physical_memory_read(A7ADDR(sar + off), pair, 8);
+            physical_memory_read(A7ADDR(sar + off), pair, 8);
             /* the `00 00 cc aa` trailer ends the list */
             if (pair[0] == 0 && pair[1] == 0
                 && pair[2] == 0xcc && pair[3] == 0xaa) {
@@ -352,7 +352,7 @@ void cdj_ch4_patch(unsigned ch, uint32_t sar, uint32_t count,
                 pair[5] = (set[i].val >> 8) & 0xFF;
                 pair[6] = (set[i].val >> 16) & 0xFF;
                 pair[7] = (set[i].val >> 24) & 0xFF;
-                cpu_physical_memory_write(A7ADDR(sar + off + 4), pair + 4, 4);
+                physical_memory_write(A7ADDR(sar + off + 4), pair + 4, 4);
                 break;
             }
             off += 8;

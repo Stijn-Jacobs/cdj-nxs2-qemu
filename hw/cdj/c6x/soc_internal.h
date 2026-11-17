@@ -174,6 +174,8 @@ typedef struct soc_edma {
     uint8_t  param[32 * EDMA_PARAM_SETS];
     int      depth;                       /* chaining recursion guard */
     uint64_t null_transfers;              /* events on exhausted sets */
+    uint64_t serviced;                    /* IPR bits the program has cleared through ICR */
+    uint64_t overruns;                    /* serviced completions that found their IPR bit set */
 } soc_edma;
 
 void     edma_reset(soc_edma *e);

@@ -42,14 +42,16 @@ MAIN_RING_POS = 4078
 LABEL_SIZE = 32
 
 
-def srecords(body):
+def srecords(body, verify=True):
     """(address, data, raw line) for every S1/S2/S3 line in the section's
-    body (the part after its 32-byte label)."""
+    body (the part after its 32-byte label). With verify off, a record whose
+    checksum is wrong is still yielded: the update was edited by someone who
+    did not fix it, and the re-encode writes right ones."""
     for line in body.split(b'\r\n'):
         if line[:1] != b'S' or line[1:2] not in (b'1', b'2', b'3'):
             continue
         rec = bytes.fromhex(line[2:].decode('ascii'))
-        if sum(rec) & 0xFF != 0xFF:
+        if verify and sum(rec) & 0xFF != 0xFF:
             raise ValueError('bad S-record checksum: %r' % line[:24])
         abytes = int(line[1:2]) + 1
         addr = int.from_bytes(rec[1:1 + abytes], 'big')
@@ -83,19 +85,21 @@ def main_section_from_upd(data):
     return data[off:off + sizes[2]]
 
 
-def decode(section):
+def decode(section, off=MAIN_IMG_OFF, verify=True):
     """(label, declared length, available bytes, image) -- the image is the
-    same flat, 0x08000000-based bytes patch_main.py works on."""
+    same flat, 0x08000000-based bytes patch_main.py works on. `off` is where
+    the model's packed application starts (0x40000 on the SH7724 players
+    other than the NXS2)."""
     label = section[:LABEL_SIZE].rstrip(b'\x00 ').decode('latin1')
     body = section[LABEL_SIZE:]
-    chunks = list(srecords(body))
-    if not any(addr == MAIN_IMG_OFF for addr, _, _ in chunks):
-        raise SystemExit('main_decode: no S-record at 0x%x (the image length field)' % MAIN_IMG_OFF)
-    hi = max(addr + len(data) for addr, data, _ in chunks if addr >= MAIN_IMG_OFF)
-    flat = bytearray([0xFF]) * (hi - MAIN_IMG_OFF)
+    chunks = list(srecords(body, verify))
+    if not any(addr == off for addr, _, _ in chunks):
+        raise SystemExit('main_decode: no S-record at 0x%x (the image length field)' % off)
+    hi = max(addr + len(data) for addr, data, _ in chunks if addr >= off)
+    flat = bytearray([0xFF]) * (hi - off)
     for addr, data, _ in chunks:
-        if addr >= MAIN_IMG_OFF:
-            flat[addr - MAIN_IMG_OFF:addr - MAIN_IMG_OFF + len(data)] = data
+        if addr >= off:
+            flat[addr - off:addr - off + len(data)] = data
     declared, image = decode_image(flat, 0)
     avail = len(flat) - 4
     return label, declared, avail, image

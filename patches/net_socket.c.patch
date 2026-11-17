@@ -1,5 +1,5 @@
 diff --git a/net/socket.c b/net/socket.c
-index 8e3702e..8ee9ce7 100644
+index 1ad03fc..bc484c2 100644
 --- a/net/socket.c
 +++ b/net/socket.c
 @@ -250,7 +250,44 @@ static int net_socket_mcast_create(struct sockaddr_in *mcastaddr,

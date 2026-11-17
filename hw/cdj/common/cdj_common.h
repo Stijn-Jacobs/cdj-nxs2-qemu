@@ -14,25 +14,25 @@
 #include "qemu/notify.h"
 #include "qapi/error.h"
 #include "cpu.h"
-#include "hw/sysbus.h"
-#include "hw/boards.h"
-#include "hw/loader.h"
-#include "hw/qdev-properties.h"
+#include "hw/core/sysbus.h"
+#include "hw/core/boards.h"
+#include "hw/core/loader.h"
+#include "hw/core/qdev-properties.h"
 #include "hw/misc/unimp.h"
 #include "hw/block/flash.h"
-#include "hw/irq.h"
+#include "hw/core/irq.h"
 #include "hw/sh4/sh.h"
 #include "hw/sh4/sh_intc.h"
 #include "hw/timer/tmu012.h"
 #include "chardev/char-fe.h"
 #include "migration/vmstate.h"
 #include "migration/qemu-file-types.h"
-/* QEMU 9.1 still uses the sysemu/ include prefix. */
-#include "sysemu/blockdev.h"
-#include "sysemu/block-backend.h"
-#include "sysemu/reset.h"
-#include "sysemu/sysemu.h"
-#include "exec/address-spaces.h"
+#include "system/blockdev.h"
+#include "system/block-backend.h"
+#include "system/reset.h"
+#include "system/system.h"
+#include "system/address-spaces.h"
+#include "system/physmem.h"
 
 /* Strip the SH-4 segment bits to get the physical address, as sh7750.c does. */
 #define A7ADDR(x) ((x) & 0x1fffffff)
@@ -98,6 +98,12 @@ typedef struct CdjBoardDesc {
     uint32_t sr_seed;
 
     uint32_t periph_hz;         /* TMU input clock, CDJ_PERIPH_HZ overrides */
+    /* FRQCR as the board's clock mode straps leave it; 0 keeps the SH7763
+     * default. */
+    uint32_t frqcr;
+    /* A stick in the port at power-on attaches as soon as the driver first
+     * arms BCHG, rather than 500 ms later like a plug-in. */
+    bool usb_attach_at_boot;
     /* CDJ_DMAC_DEBUG logs the first INTEVT reads in this vector window. */
     uint16_t ccn_trace_lo, ccn_trace_hi;
     /* Board lines printed after the IRQ counts at exit; may be NULL. */
@@ -120,6 +126,10 @@ void cdj_tmu_init(MemoryRegion *sysmem, hwaddr base,
                   qemu_irq ch0, qemu_irq ch1, qemu_irq ch2);
 void cdj_scif(MemoryRegion *sysmem, const char *id,
               hwaddr addr, Chardev *chr);
+/* As cdj_scif(), with the SCIF's RXI and TXI ORed onto one interrupt line
+ * (the SH7724 gives each SCIF a single INTEVT). */
+void cdj_scif_irq(MemoryRegion *sysmem, const char *id,
+                  hwaddr addr, Chardev *chr, qemu_irq irq);
 qemu_irq cdj_count_irq(qemu_irq target, const char *name);
 extern Notifier cdj_irqcount_exit;
 void cdj_irqcount_dump(Notifier *n, void *opaque);
@@ -151,6 +161,9 @@ typedef struct CdjDmacDei {
 void cdj_dmac_init(MemoryRegion *sysmem, const char *name, hwaddr base,
                    hwaddr dreq_base, hwaddr dreq_size, const CdjDmacDei *dei);
 void cdj_dmac_dei_connect(unsigned ch, qemu_irq irq);
+/* Optional fixed FIFO endpoint; returns false until a complete burst is ready. */
+void cdj_dmac_fifo_connect(hwaddr port,
+                          bool (*transfer)(bool, uint8_t *, unsigned));
 void cdj_dmac_dreq(void);
 
 const char *cdj_getenv(const char *name);
@@ -158,6 +171,9 @@ const char *cdj_getenv(const char *name);
 /* Statistics the models print at start and exit are off unless CDJ_REPORT=1. */
 bool cdj_report_enabled(void);
 void cdj_add_exit_report(Notifier *n);
+
+/* The CDJ_MPOKE, CDJ_MCOPY, CDJ_MFILL and CDJ_LOADBIN memory holds. */
+void cdj_mpoke_init(void);
 
 /* Ask the host to run the calling thread on a performance core. */
 void cdj_thread_prefer_fast_core(void);

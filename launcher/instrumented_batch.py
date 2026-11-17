@@ -23,14 +23,14 @@ snapshots per run, so clean /tmp afterwards.
 import os
 import subprocess
 
-from . import chain, host
+from . import chain, host, model, sites
 from .chain import export_default, nonempty
 from .layout import Layout
 
 TAPS = "0x082FBA6E,0x082FBAB6,0x082FBAD8,0x082FBE56,0x082FC216,0x082FFEBC,0x082FFEC0,0x0842B218,0x0842A160"
 
 
-def batch_env(env):
+def batch_env(env, found, m):
     chain.unset(env, "CDJ_MWATCH", "CDJ_FWDUMP", "CDJ_MPOKE", "CDJ_PPOKE_N")
     # DUMP, WATCH and MPOKE pass CDJ_FWDUMP, CDJ_MWATCH and CDJ_MPOKE through;
     # the unset above only drops stale exports.
@@ -39,18 +39,27 @@ def batch_env(env):
             env[var] = env[knob]
     # PPOKEX appends a spec to the load poke (CDJ_PPOKE holds up to four).
     # NOPOKE=1 omits the load poke; W1=0 does not, it forces the branch the
-    # other way.
+    # other way. So does a firmware that has no load poke site.
     ppokex = env.get("PPOKEX", "")
-    if nonempty(env, "NOPOKE", "0") == "1":
+    if nonempty(env, "NOPOKE", "0") == "1" or not found.has("load_poke_pc", "load_poke_addr"):
         env["CDJ_PPOKE"] = ppokex
     else:
-        env["CDJ_PPOKE"] = "0x082f04d8:0x0994CC18:%s:0%s" % (nonempty(env, "W1", "1"),
-                                                             "," + ppokex if ppokex else "")
-    env["CDJ_FWLOG"] = nonempty(env, "LOGPCS", "0x0853410C,0x084933F4")
-    env["CDJ_FWTRACE"] = nonempty(env, "TAPS", TAPS)
+        env["CDJ_PPOKE"] = "0x%08x:0x%08X:%s:0%s" % (found.get("load_poke_pc"), found.get("load_poke_addr"),
+                                                     nonempty(env, "W1", "1"), "," + ppokex if ppokex else "")
+    # The default taps are addresses of the CDJ-2000NXS2 1.87 MAIN; a trace of
+    # another image has to name its own.
+    if found.board_image or env.get("LOGPCS"):
+        env["CDJ_FWLOG"] = nonempty(env, "LOGPCS", "0x0853410C,0x084933F4")
+    else:
+        chain.unset(env, "CDJ_FWLOG")
+    if found.board_image or env.get("TAPS"):
+        env["CDJ_FWTRACE"] = nonempty(env, "TAPS", TAPS)
+    else:
+        chain.unset(env, "CDJ_FWTRACE")
     env["MAIN_MON"] = "1"
-    # SNAP=none takes no snapshots (each memsave holds the machine while it copies).
-    env["RAMSNAP"] = nonempty(env, "SNAP", "0x09947000:0x01713000")
+    # SNAP=none takes no snapshots (each memsave holds the machine while it
+    # copies), and neither does a model whose profile names no region.
+    env["RAMSNAP"] = nonempty(env, "SNAP", m.ram_snapshot or "none")
     if env["RAMSNAP"] == "none":
         env["RAMSNAP"] = ""
     # Defaults only, so a caller's key is the key that gets pressed.
@@ -71,14 +80,15 @@ def main(argv):
     n = argv[1] if len(argv) > 1 else "9"
     lay = Layout()
     env = dict(os.environ)
-    batch_env(env)
+    m = model.load()
+    batch_env(env, sites.find(lay, m), m)
 
     # A checkout may vet the tap list before a batch: $CDJ_ROOT/.cdj/preflight,
     # if present, gets the taps as its argument. Advisory only; PREFLIGHT=0
     # silences it.
     preflight = os.path.join(lay.root, ".cdj", "preflight")
     bash = host.find_bash()
-    if nonempty(env, "PREFLIGHT", "1") == "1" and os.path.isfile(preflight) and bash:
+    if nonempty(env, "PREFLIGHT", "1") == "1" and os.path.isfile(preflight) and bash and env.get("CDJ_FWTRACE"):
         chain.say("--- preflight (prior art for these taps)")
         if subprocess.run([bash, host.posix(preflight), env["CDJ_FWTRACE"]], env=env).returncode:
             chain.say("  (preflight flagged the taps above -- read it before believing this batch)")
@@ -104,7 +114,7 @@ def main(argv):
     chain.say("--- verdicts (ppoke = %s)" % env["CDJ_PPOKE"])
     chain.bash_report("report_load.sh", [prefix, n], env)
     chain.bash_report("report_errors.sh", [prefix, n], env)
-    chain.say("--- taps (fwtrace = %s)" % env["CDJ_FWTRACE"])
+    chain.say("--- taps (fwtrace = %s)" % env.get("CDJ_FWTRACE", ""))
     chain.bash_report("report_taps.sh", [prefix, n], env)
     chain.say("--- ramsnap (region = %s)" % env["RAMSNAP"])
     return chain.bash_report("report_snapshots.sh", [prefix, n], env)

@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """One headless deck, no sound, no Pro DJ Link, that loads a track, plays it and
 stops by itself: the profile and training runs of scripts/build/build_dsp_module.sh.
-The CDJ-2000NXS2 also has MASTER TEMPO and the tempo fader swept (scripts/run/warm_jit.py).
+Every rig player also has MASTER TEMPO and the tempo fader
+swept (scripts/run/warm_jit.py).
 
   usage: bash scripts/run/warm_jit.sh [tag=warm] [--dry-run]
-  env:   PLAY_S=45 (virtual seconds of play after the load; 30 for a
-         one-window model, which has no sweep), plus any rig.sh
+  env:   PLAY_S=45 (virtual seconds of play after the load; 60 for a
+         one-window model, whose play only turns MASTER TEMPO on), plus any rig.sh
          knob: MODULE=none, AUTOJIT=0|1, C66X_JIT_PROFILE, ...
          DSP_TRAIN_MODULE=<m.so>: run with that module (an instrumented build
          collecting its profile-guided counts) instead of none
@@ -26,6 +27,7 @@ from .layout import Layout
 # An idle deck executes about 29 M DSP cycles per virtual second, one that has
 # loaded and plays 39 (the CDJ-2000NXS) to 70 M; a run below this never got
 # past the browse list.
+IDLE_MCYCLES = 29
 MIN_PLAYING_MCYCLES = 35
 
 # One pass of the tempo and MASTER TEMPO sweep (scripts/run/warm_jit.py), seconds.
@@ -100,15 +102,16 @@ def record_deck(lay, m, tag, dry):
     play it for PLAY_S wall seconds and quit, so the profile is written
     (C66X_JIT_PROFILE). The core skips its idle loop as it does in a session.
     Returns 1 unless the deck played."""
-    play_s = nonempty(os.environ, "PLAY_S", "30")
+    play_s = nonempty(os.environ, "PLAY_S", "60")
     log = os.path.join(lay.tmp, "bridge-main-%s1.log" % tag)
     mon = "%s/cdj-deck-%s-%s-mon.sock" % (lay.tmp, m.id, tag)
+    screen = os.path.join(lay.tmp, "bridge-main-%s1.ppm" % tag)
     env = dict(os.environ, MODULE="none", AUDIODEV="none", GUI_DISPLAY="none", CDJ_REPORT="1",
-               MODEL_IDLE_S=m.idle_s, MODEL_LOAD_STEPS=m.load_steps)
+               MODEL_IDLE_S=m.idle_s, MODEL_LOAD_STEPS=m.load_steps, MODEL_PROFILE_STEPS=m.profile_steps)
     _train_module(env)
     argv, env = deck_command(lay, m, env)
     argv += ["-monitor", _monsock(lay).spec(mon)]
-    driver = host.python_argv() + [os.path.join(lay.run, "play_deck.py"), mon, play_s]
+    driver = host.python_argv() + [os.path.join(lay.run, "play_deck.py"), mon, play_s, screen]
     if dry:
         chain.say(" ".join(shlex.quote(a) for a in argv) + " > " + log + " &")
         chain.say(" ".join(shlex.quote(a) for a in driver))
@@ -139,6 +142,9 @@ def record_deck(lay, m, tag, dry):
     rate = (cycles - skipped) / (cycles / hz) / 1e6
     chain.say("deck ran %.0f s of DSP time, %.0f M executed cycles per second" % (cycles / hz, rate))
     if rate < MIN_PLAYING_MCYCLES:
-        chain.say("FAILED the deck never played the track (see %s)" % log)
+        chain.say("FAILED the deck never played the track: an idle deck executes about %d M cycles per second "
+                  "and a playing one %d or more%s (log %s, last screen %s)"
+                  % (IDLE_MCYCLES, MIN_PLAYING_MCYCLES, ", so this one ran below idle" if rate < IDLE_MCYCLES else "",
+                     log, screen))
         return 1
     return 0

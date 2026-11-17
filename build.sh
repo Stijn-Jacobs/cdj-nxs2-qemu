@@ -8,10 +8,13 @@
 # ./setup.sh runs these same phases one by one, with progress and logs.
 #
 #   usage: ./build.sh [phase ...]          (default: all of them, in order)
-#   phases: source   fetch QEMU v9.1.0 into qemu-src/ (skipped if it is there)
+#   phases: source   fetch QEMU v11.1.2 into qemu-src/ (skipped if it is there;
+#                    a tree of another version is moved to qemu-src-<version>)
 #           patches  apply patches/ to it (idempotent: applied ones are skipped)
 #           main     the MAIN QEMU, qemu-system-sh4 with the CDJ-2000NXS2 board
+#                    (applies patches/ first, so a pull's new patches are in)
 #           display  the display-board QEMU, qemu-system-sh4eb with the SH7269
+#                    (likewise)
 #           dsp      the DSP core library, libc66x.so, for the run-time JIT
 #   env:    QEMU_BUILD / QEMU_EB_BUILD   build trees. Windows default
 #                                        /c/qemu-build-mingw[-eb]: they must be on
@@ -33,6 +36,7 @@ HERE="$E/scripts"
 . "$HERE/build/source_stamp.sh"
 CDJ_EMU_DIR="$E"
 SRC="$CDJ_ROOT/qemu-src"
+QEMU_VERSION=11.1.2
 # Regenerating patches/ from the tree is a maintainer step, not a build step.
 export SKIP_PATCH_REGEN=1
 
@@ -43,19 +47,37 @@ on_windows() {
 
 phase_source() {
     if [ -d "$SRC/hw/sh4" ]; then
-        echo "== QEMU source already at $SRC"
-        return
+        local old
+        old="$(cat "$SRC/VERSION")"
+        if [ "$old" = "$QEMU_VERSION" ]; then
+            echo "== QEMU source already at $SRC"
+            return
+        fi
+        # A checkout from before a QEMU rebase takes none of the patches. Kept,
+        # not deleted, in case it holds edits of its own.
+        [ ! -e "$SRC-$old" ] || { echo "$SRC is QEMU $old and $SRC-$old is taken; move one aside" >&2; exit 1; }
+        echo "== $SRC is QEMU $old: moving it to $SRC-$old"
+        mv "$SRC" "$SRC-$old"
     fi
-    echo "== fetching QEMU v9.1.0 into $SRC"
-    git clone --depth 1 --branch v9.1.0 https://gitlab.com/qemu-project/qemu.git "$SRC"
+    echo "== fetching QEMU v$QEMU_VERSION into $SRC"
+    # The patches carry LF line endings; a global core.autocrlf=true would
+    # check the source out with CRLF and every patch would fail to apply.
+    git clone -c core.autocrlf=false --depth 1 --branch "v$QEMU_VERSION" https://gitlab.com/qemu-project/qemu.git "$SRC"
 }
 
 phase_patches() {
+    # The rebuild start.sh offers after a pull runs only main and display, so a
+    # pull that moved QEMU's version is caught here.
+    [ "$(cat "$SRC/VERSION" 2>/dev/null)" = "$QEMU_VERSION" ] || phase_source
     echo "== applying patches/"
     bash "$E/patches/apply.sh" "$SRC"
+    PATCHED=1
 }
 
 phase_main() {
+    # A pull can bring new QEMU patches, and the board sources then need them:
+    # the rebuild start.sh offers after a pull runs only main and display.
+    [ "${PATCHED:-0}" = 1 ] || phase_patches
     if on_windows; then
         echo "== building the MAIN QEMU (Windows, MSYS2)"
         bash "$E/scripts/build/build_windows.sh" main
@@ -68,6 +90,7 @@ phase_main() {
 }
 
 phase_display() {
+    [ "${PATCHED:-0}" = 1 ] || phase_patches
     if on_windows; then
         echo "== building the display-board QEMU (Windows, MSYS2)"
         bash "$E/scripts/build/build_windows.sh" eb
@@ -103,5 +126,5 @@ if [ "$*" = all ]; then
     echo
     echo "done. Next: ./setup.sh --skip-build walks you through the firmware, the"
     echo "USB image and your setup; or by hand: scripts/firmware/prepare_firmware.sh"
-    echo "--install <C2KNXS2.UPD>, a USB image (README.md), then ./start.sh (or just ./setup.sh)"
+    echo "--install <C2KNXS2.UPD>, a USB image (docs/setup.md), then ./start.sh (or just ./setup.sh)"
 fi

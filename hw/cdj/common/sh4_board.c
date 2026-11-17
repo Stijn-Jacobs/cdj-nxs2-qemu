@@ -159,7 +159,7 @@ void cdj_board_load(MachineState *machine)
         /* The reset vector, P2 0xA0000000, is the first word of the flash.
          * Erased there means an image built without the bootloader, and the
          * CPU would run 0xFFFF opcodes. */
-        cpu_physical_memory_read(d->flash_phys, &reset_insn, sizeof(reset_insn));
+        physical_memory_read(d->flash_phys, &reset_insn, sizeof(reset_insn));
         if (reset_insn == 0xFFFF) {
             error_report("%s: the NOR flash holds no bootloader; build it with "
                          "make_flash.py from the firmware update, or pass "
@@ -172,7 +172,7 @@ void cdj_board_load(MachineState *machine)
     } else {
         /* Flat binary, not an ELF. */
         fwsize = load_image_targphys(machine->kernel_filename,
-                                     d->dram_phys, d->dram_size);
+                                     d->dram_phys, d->dram_size, NULL);
         if (fwsize < 0) {
             error_report("%s: cannot load '%s'", d->name,
                          machine->kernel_filename);
@@ -185,10 +185,16 @@ void cdj_board_load(MachineState *machine)
 
     /* Done after the image load so the image cannot overwrite it. The
      * bootloader does not write there either. */
-    if (d->sr_seed_slot) {
+    /* The slot is a global in the firmware, so it moves with the build:
+     * CDJ_SR_SEED_SLOT names where this image keeps it (0 = seed nothing). */
+    const char *slot_env = getenv("CDJ_SR_SEED_SLOT");
+    hwaddr sr_seed_slot = slot_env && *slot_env ? strtoul(slot_env, NULL, 0)
+                                                : d->sr_seed_slot;
+
+    if (sr_seed_slot) {
         uint32_t sr_seed = cpu_to_le32(d->sr_seed);
 
-        cpu_physical_memory_write(d->sr_seed_slot, &sr_seed, sizeof(sr_seed));
+        physical_memory_write(sr_seed_slot, &sr_seed, sizeof(sr_seed));
     }
 }
 

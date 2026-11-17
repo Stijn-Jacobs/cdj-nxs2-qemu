@@ -112,15 +112,16 @@ static void vfd_draw(DisplaySurface *ds)
     }
 }
 
-static void vfd_gfx_update(void *opaque)
+static bool vfd_gfx_update(void *opaque)
 {
     (void)opaque;
     if (!vfd.dirty || !vfd.con) {
-        return;
+        return true;
     }
     vfd.dirty = false;
     vfd_draw(qemu_console_surface(vfd.con));
-    dpy_gfx_update(vfd.con, 0, 0, VFD_W, VFD_H);
+    qemu_console_update(vfd.con, 0, 0, VFD_W, VFD_H);
+    return true;
 }
 
 static void vfd_invalidate(void *opaque)
@@ -142,9 +143,9 @@ void vfd_init(void)
     snprintf(vfd.line[0], sizeof(vfd.line[0]), "CDJ-850 PANEL LINK -- BOOT");
     snprintf(vfd.line[1], sizeof(vfd.line[1]), "FL: waiting for frames");
     vfd.dirty = true;
-    vfd.con = graphic_console_init(NULL, 0, &vfd_ops, NULL);
-    dpy_gfx_replace_surface(vfd.con,
-                            qemu_create_displaysurface(VFD_W, VFD_H));
+    vfd.con = qemu_graphic_console_create(NULL, 0, &vfd_ops, NULL);
+    qemu_console_set_surface(vfd.con,
+                             qemu_create_displaysurface(VFD_W, VFD_H));
     qemu_console_resize(vfd.con, VFD_W, VFD_H);
     vfd.dirty = true;
 }

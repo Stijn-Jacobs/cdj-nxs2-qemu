@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "cdj_host_audio.h"
 #include "cdj_common.h"
-#include "audio/audio.h"
+#include "qemu/audio.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
 #include "qemu/thread.h"
@@ -9,7 +9,7 @@
 
 struct CdjHostAudio {
     CdjHostAudioCfg cfg;
-    QEMUSoundCard card;
+    AudioBackend *be;
     SWVoiceOut *voice;
     QemuMutex lock;
     int16_t *ring;              /* stereo frames */
@@ -30,6 +30,7 @@ struct CdjHostAudio {
     CdjLoopMute *loop;          /* NULL when the board has no pause loop */
     uint32_t held_poll;         /* frames since cfg.held was asked */
     bool held;
+    Notifier exit;
 };
 
 /* 10 ms of frames between two cfg.held() polls. */
@@ -150,7 +151,7 @@ static void audio_cb(void *opaque, int avail)
         }
         if (n) {
             a->frames_out += n / 2;
-            AUD_write(a->voice, (uint8_t *)out, n * 2);
+            audio_be_write(a->be, a->voice, out, n * 2);
             continue;
         }
         if (!silent) {
@@ -159,17 +160,30 @@ static void audio_cb(void *opaque, int avail)
         }
         n = MIN((int)ARRAY_SIZE(out), avail / 4 * 2);
         memset(out, 0, n * sizeof(out[0]));
-        AUD_write(a->voice, (uint8_t *)out, n * 2);
+        audio_be_write(a->be, a->voice, out, n * 2);
         break;
     }
     qemu_mutex_unlock(&a->lock);
+}
+
+/*
+ * An audio backend only finalizes its host voice when the last guest voice on
+ * it closes; audio_cleanup() just drops the backend's parent reference. Left
+ * open, a wav backend never rewrites its header and the file reads as 0
+ * frames.
+ */
+static void cdj_host_audio_exit(Notifier *n, void *data)
+{
+    CdjHostAudio *a = container_of(n, CdjHostAudio, exit);
+
+    audio_be_close_out(a->be, a->voice);
 }
 
 CdjHostAudio *cdj_host_audio_open(const CdjHostAudioCfg *cfg)
 {
     const char *e = getenv(cfg->env);
     struct audsettings as = {
-        .freq = 44100, .nchannels = 2, .fmt = AUDIO_FORMAT_S16, .endianness = 0,
+        .freq = 44100, .nchannels = 2, .fmt = AUDIO_FORMAT_S16,
     };
     unsigned ring_ms = 4000, prefill_ms = 500, maxlat_ms = 0;
     char name[64];
@@ -210,20 +224,22 @@ CdjHostAudio *cdj_host_audio_open(const CdjHostAudioCfg *cfg)
     a->ring = g_new0(int16_t, a->cap * 2);
     a->priming = true;
     qemu_mutex_init(&a->lock);
-    AUD_register_card(cfg->card, &a->card, &err);
-    if (err) {
+    a->be = audio_get_default_audio_be(&err);
+    if (!a->be) {
         warn_report_err(err);
         warn_report("%s audio: no audio backend (-audio pa,... or wav)",
                     cfg->label);
         return NULL;
     }
-    a->voice = AUD_open_out(&a->card, NULL, cfg->voice, a, audio_cb, &as);
+    a->voice = audio_be_open_out(a->be, NULL, cfg->voice, a, audio_cb, &as);
     if (!a->voice) {
         warn_report("%s audio: the backend refused a 44100 Hz stereo voice",
                     cfg->label);
         return NULL;
     }
-    AUD_set_active_out(a->voice, 1);
+    audio_be_set_active_out(a->be, a->voice, true);
+    a->exit.notify = cdj_host_audio_exit;
+    qemu_add_exit_notifier(&a->exit);
     info_report("%s audio: %s -> host voice, ring %u ms, prefill %u ms, "
                 "latency cap %u ms", cfg->label, cfg->source, ring_ms,
                 prefill_ms, maxlat_ms);

@@ -42,6 +42,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libglib2.0-dev
       - name: C66x-only instructions against the manual's worked examples
         run: make -C hw/cdj/c6x -j2 O="$RUNNER_TEMP/c6x" ext-test
+      - name: RAM copy fusion against a scalar pipeline
+        run: make -C hw/cdj/c6x copy-burst-test
       - name: SoC model register sequences
         run: make -C hw/cdj/c6x -f soc.mk -j2 O="$RUNNER_TEMP/c6x-soc" test
 

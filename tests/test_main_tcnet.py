@@ -12,10 +12,15 @@ import struct
 
 import pytest
 
+import modelfw
 import patch_main
 import sigpatch
+from players import cdj2000nxs2 as nxs2
 from test_main_abletonlink import LinkCpu, IP, TICK, TCNT4, DEVICE, CEP, POOL, GETTER, UDP_SND
 from test_main_osc import Sh4, WRAPPER
+from helpers import mod_row, stock_mods
+
+TCNET = modelfw.mod_patch('tcnet', 'cdj2000nxs2')
 
 DJCONT_OFF, STATUS_OFF = 0x40, 0x100
 DSP_STEP, SERIALISER = 0x300, 0x310
@@ -43,7 +48,7 @@ def build_image():
     signatures, the literal each span loads (the DSP-output step and the
     serialiser, both stubbed with rts) and an erased cave."""
     d = bytearray(CAVE[1])
-    for off, site in ((DJCONT_OFF, patch_main.DJCONT_PASS), (STATUS_OFF, patch_main.STATUS_SEND)):
+    for off, site in ((DJCONT_OFF, TCNET.DJCONT_PASS), (STATUS_OFF, nxs2.STATUS_SEND)):
         for k, op in enumerate(site['sig']):
             struct.pack_into('<H', d, off + 2 * k, op)
     struct.pack_into('<I', d, ((DJCONT_OFF + 10) & ~3) + 4 + 0x8F * 4, DSP_STEP)
@@ -59,7 +64,7 @@ def build_image():
 @functools.lru_cache(maxsize=None)
 def patched_image(names):
     profile, data = build_image()
-    return sigpatch.patch(profile, patch_main.blob_path, data, patch_main.MODS, list(names))
+    return sigpatch.patch(profile, patch_main.blob_path, data, stock_mods(patch_main.MODS), list(names))
 
 
 class TcnetCpu(LinkCpu):
@@ -150,13 +155,13 @@ class TcnetCpu(LinkCpu):
         return list(self.sent)
 
     def status_pass(self, player=PLAYER):
-        at = STATUS_OFF + 2 * patch_main.STATUS_SEND['start']
-        end = STATUS_OFF + 2 * patch_main.STATUS_SEND['end']
+        at = STATUS_OFF + 2 * nxs2.STATUS_SEND['start']
+        end = STATUS_OFF + 2 * nxs2.STATUS_SEND['end']
         return self.site(at, end, {11: record(player), 12: MASK})
 
     def djcont_pass(self):
-        at = DJCONT_OFF + 2 * patch_main.DJCONT_PASS['start']
-        end = DJCONT_OFF + 2 * patch_main.DJCONT_PASS['end']
+        at = DJCONT_OFF + 2 * TCNET.DJCONT_PASS['start']
+        end = DJCONT_OFF + 2 * TCNET.DJCONT_PASS['end']
         self.fpscr = 0x00180001
         sent = self.site(at, end, {13: 0x099470CC, 14: MASK})
         assert self.r[6] == 0x00000001 and self.r[5] == 0x00000001
@@ -219,20 +224,17 @@ def only(layer_value, player=PLAYER):
 # -- registration -------------------------------------------------------------------
 
 def test_registered_for_main_as_hooks_on_the_status_call_and_the_djcont_loop():
-    for name, site in (('tcnet', patch_main.STATUS_SEND), ('tcnettime', patch_main.DJCONT_PASS),
-                       ('tcnetdata', patch_main.DJCONT_PASS)):
+    for name, site in (('tcnet', nxs2.STATUS_SEND), ('tcnettime', TCNET.DJCONT_PASS),
+                       ('tcnetdata', TCNET.DJCONT_PASS)):
         mod = patch_main.MODS[name]
         assert mod.target == 'main' and mod.hook and not mod.literal
         assert dict(sig=mod.sig, start=mod.start, end=mod.end) == site
 
 
 def test_the_registry_row_enables_all_three_mods_and_defaults_off():
-    path = os.path.join(os.path.dirname(patch_main.__file__), 'mods.conf')
-    rows = [line.split('|') for line in open(path, encoding='utf-8')
-            if line.strip() and not line.startswith('#')]
-    (row,) = [r for r in rows if r[0] == 'tcnet']
-    assert row[1].split('+') == ['CDJ_MAIN_TCNET', 'CDJ_MAIN_TCNETTIME', 'CDJ_MAIN_TCNETDATA']
-    assert row[2:5] == ['1', '0', 'off']
+    row = mod_row('tcnet')
+    assert row.env.split('+') == ['CDJ_MAIN_TCNET', 'CDJ_MAIN_TCNETTIME', 'CDJ_MAIN_TCNETDATA']
+    assert (row.on, row.off, row.default) == ('1', '0', 'off')
 
 
 REAL_MAIN = os.path.join(os.path.dirname(__file__), '..', '..', 'extract', 'main_unpacked.bin')
@@ -242,7 +244,7 @@ REAL_MAIN = os.path.join(os.path.dirname(__file__), '..', '..', 'extract', 'main
 def test_real_main_has_each_signature_exactly_once_where_the_design_puts_it():
     with open(REAL_MAIN, 'rb') as f:
         data = f.read()
-    img = sigpatch.Image(patch_main.MAIN_PROFILE, data)
+    img = sigpatch.Image(nxs2.MAIN_PROFILE, data)
     for name, span in (('tcnet', 0x084B4540), ('tcnettime', 0x082D872C)):
         mod = patch_main.MODS[name]
         assert img.addr_of(sigpatch.find_sig(img, mod) + 2 * mod.start) == span

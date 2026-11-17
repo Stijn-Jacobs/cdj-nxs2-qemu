@@ -1,0 +1,15 @@
+diff --git a/include/system/cpu-timers.h b/include/system/cpu-timers.h
+index a1abed0..be96bcb 100644
+--- a/include/system/cpu-timers.h
++++ b/include/system/cpu-timers.h
+@@ -40,6 +40,10 @@ void qemu_timer_notify_cb(void *opaque, QEMUClockType type);
+ 
+ /* get/set VIRTUAL clock and VM elapsed ticks via the cpus accel interface */
+ int64_t cpus_get_virtual_clock(void);
++
++/* Optional board clock. Install before starting vCPUs; NULL is the default.
++ * The callback must be thread safe and must not query CLOCK_VIRTUAL. */
++extern int64_t (*board_virtual_clock)(void);
+ void cpus_set_virtual_clock(int64_t new_time);
+ int64_t cpus_get_elapsed_ticks(void);
+ 

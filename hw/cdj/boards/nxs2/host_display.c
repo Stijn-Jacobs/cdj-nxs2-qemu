@@ -94,24 +94,25 @@ static unsigned cdj_pfc_writes(unsigned off)
     return cdj_pfc_singleton ? cdj_pfc_singleton->wr_count[off] : 0;
 }
 
-static void cdj_panel_update(void *opaque)
+static bool cdj_panel_update(void *opaque)
 {
     CdjPanelState *s = opaque;
     DisplaySurface *ds;
     char line[128];
     uint8_t fl[16];
     uint8_t cbuf[80];
+    const char *ram_diag;
     unsigned i;
     int y;
     uint64_t tx;
     bool provisioned, erased;
 
     if (!s->con) {
-        return;
+        return true;
     }
     ds = qemu_console_surface(s->con);
     if (!ds) {
-        return;
+        return true;
     }
 
     cdj_fill(ds, 0, 0, CDJ_PANEL_W, CDJ_PANEL_H, COL_BG);
@@ -128,7 +129,7 @@ static void cdj_panel_update(void *opaque)
         uint8_t id[4];
         bool link_done, id_ok, alive, no_fault;
 
-        cpu_physical_memory_read(0x7FE000, id, 3);
+        physical_memory_read(0x7FE000, id, 3);
         link_done = cdj_scifa4 && cdj_scifa4->txbytes >= 54728;
         id_ok = (id[0] == 'P' && id[1] == 'D' && id[2] == 'J');
         alive = cdj_pfc_writes(0x166) > 50;   /* low: icount runs slowly */
@@ -206,14 +207,14 @@ static void cdj_panel_update(void *opaque)
     cdj_text(ds, 16, y, "NOR FLASH PROVISIONING  (read live from CS0)",
              COL_ACCENT);
     y += 22;
-    cpu_physical_memory_read(0x7FE000, fl, 12);
+    physical_memory_read(0x7FE000, fl, 12);
     provisioned = (fl[0] == 'P' && fl[1] == 'D' && fl[2] == 'J');
     snprintf(line, sizeof(line), "device id  0x7FE000  \"%.12s\"",
              provisioned ? (char *)fl : "(unwritten)");
     cdj_text(ds, 24, y, line, provisioned ? COL_OK : COL_DIM);
     y += 18;
 
-    cpu_physical_memory_read(0x7EFFFC, fl, 4);
+    physical_memory_read(0x7EFFFC, fl, 4);
     snprintf(line, sizeof(line), "block marker 0x7EFFFC \"%c%c%c%c\"",
              fl[0] >= 32 && fl[0] < 127 ? fl[0] : '.',
              fl[1] >= 32 && fl[1] < 127 ? fl[1] : '.',
@@ -222,7 +223,7 @@ static void cdj_panel_update(void *opaque)
     cdj_text(ds, 24, y, line, fl[0] == 'F' ? COL_OK : COL_DIM);
     y += 18;
 
-    cpu_physical_memory_read(0x7F6000, fl, 4);
+    physical_memory_read(0x7F6000, fl, 4);
     erased = (fl[0] == 0xFF && fl[1] == 0xFF);
     snprintf(line, sizeof(line), "settings   0x7F6000  %s",
              erased ? "erased (0xFFFF terminator)" : "record present");
@@ -232,19 +233,25 @@ static void cdj_panel_update(void *opaque)
     cdj_text(ds, 16, y, "FIRMWARE CONSOLE  (RAM buffer 0x0BFBDB60)",
              COL_ACCENT);
     y += 22;
-    cpu_physical_memory_read(0x0BFBDB60, cbuf, sizeof(cbuf) - 1);
-    cbuf[sizeof(cbuf) - 1] = 0;
-    for (i = 0; i < sizeof(cbuf) - 1; i++) {
-        if (cbuf[i] && (cbuf[i] < 0x20 || cbuf[i] >= 0x7F)) {
-            cbuf[i] = '.';
-        }
-    }
-    if (cbuf[0]) {
-        snprintf(line, sizeof(line), "\"%s\"", (char *)cbuf);
-        cdj_text(ds, 24, y, line, COL_TEXT);
+    /* The buffer is the CDJ-2000NXS2 1.87 image's: CDJ_RAM_DIAG=0 on any other. */
+    ram_diag = getenv("CDJ_RAM_DIAG");
+    if (ram_diag && !strcmp(ram_diag, "0")) {
+        cdj_text(ds, 24, y, "(not read: not the CDJ-2000NXS2 1.87 image)", COL_DIM);
     } else {
-        cdj_text(ds, 24, y, "(empty -- firmware emits no log; "
-                 "logging is gated off)", COL_DIM);
+        physical_memory_read(0x0BFBDB60, cbuf, sizeof(cbuf) - 1);
+        cbuf[sizeof(cbuf) - 1] = 0;
+        for (i = 0; i < sizeof(cbuf) - 1; i++) {
+            if (cbuf[i] && (cbuf[i] < 0x20 || cbuf[i] >= 0x7F)) {
+                cbuf[i] = '.';
+            }
+        }
+        if (cbuf[0]) {
+            snprintf(line, sizeof(line), "\"%s\"", (char *)cbuf);
+            cdj_text(ds, 24, y, line, COL_TEXT);
+        } else {
+            cdj_text(ds, 24, y, "(empty -- firmware emits no log; "
+                     "logging is gated off)", COL_DIM);
+        }
     }
 
     /* Redraw counter and spinner, to tell a frozen console from an idle one. */
@@ -267,7 +274,8 @@ static void cdj_panel_update(void *opaque)
              "browse LCD is driven by the GUI CPU (SH7269 / SH-2A) -- "
              "no QEMU target exists", COL_DIM);
 
-    dpy_gfx_update_full(s->con);
+    qemu_console_update_full(s->con);
+    return true;
 }
 
 static void cdj_panel_invalidate(void *opaque)
@@ -294,11 +302,11 @@ void cdj_panel_init(void)
     CdjPanelState *s = g_new0(CdjPanelState, 1);
     DisplaySurface *ds;
 
-    s->con = graphic_console_init(NULL, 0, &cdj_panel_ops, s);
+    s->con = qemu_graphic_console_create(NULL, 0, &cdj_panel_ops, s);
     s->exit.notify = cdj_panel_frames;
     qemu_add_exit_notifier(&s->exit);
     ds = qemu_create_displaysurface(CDJ_PANEL_W, CDJ_PANEL_H);
-    dpy_gfx_replace_surface(s->con, ds);
+    qemu_console_set_surface(s->con, ds);
     qemu_console_resize(s->con, CDJ_PANEL_W, CDJ_PANEL_H);
 }
 

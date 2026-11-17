@@ -159,6 +159,7 @@ def emit_handler(b):
     b.w16(0x2000 | (10 << 8) | (0 << 4) | 2)  # mov.l R0,@R10 (slot[0] = SPC)
     b.w16(0x1000 | (10 << 8) | (1 << 4) | 1)  # mov.l R1,@(1,R10) (slot[1])
     b.w16(0xAFFE)           # bra-self
+    b.w16(0x0009)           # delay slot nop
 
 
 def prologue(b):
@@ -310,6 +311,7 @@ def build_blob():
     rec(0x51454D55)
     rec_reg(0)
     b.w16(0xAFFE)           # bra-self
+    b.w16(0x0009)           # delay slot nop
 
     emit_handler(b)
     return b.bytes(), want
@@ -356,6 +358,7 @@ def build_nott_blob():
     rec(0x51454D55)
     rec_reg(0)
     b.w16(0xAFFE)             # bra-self
+    b.w16(0x0009)             # delay slot nop
 
     emit_handler(b)
     return b.bytes(), want, first_off
@@ -408,6 +411,7 @@ def build_norb_blob():
     rec(0x51454D55)
     rec_reg(0)
     b.w16(0xAFFE)             # bra-self
+    b.w16(0x0009)             # delay slot nop
 
     emit_handler(b)
     return b.bytes(), want
@@ -565,6 +569,7 @@ def build_reject_blob(first, second):
     bad_off = 2 * len(b.words)
     b.w32(first, second)
     b.w16(0xAFFE)         # unreachable: the word above must fault
+    b.w16(0x0009)         # delay slot nop
     emit_handler(b)
     return b.bytes(), bad_off
 

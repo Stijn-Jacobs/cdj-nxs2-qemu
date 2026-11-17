@@ -124,6 +124,7 @@ class FrameFile(FrameSource):
         super().__init__()
         self.path = path
         self.seq = None
+        self.raw = None             # the last frame as the board wrote it: big-endian RGB565
         self.following = False
         self.closed = False
         self.status = f"frames: waiting for {path}"
@@ -145,7 +146,7 @@ class FrameFile(FrameSource):
             try:
                 with open(self.path, "rb", buffering=0) as f:
                     self._follow(f)
-            except (OSError, ValueError) as e:
+            except (OSError, ValueError, struct.error) as e:
                 if self.following or self.status != f"frames: {self.path} ({e})":
                     log.info("frame file %s: %s", self.path, e)
                 self.following = False
@@ -188,8 +189,9 @@ class FrameFile(FrameSource):
             img = Image.frombuffer("RGB", (w, h), px.tobytes(), "raw", "BGR;16", 0, 1)
             with self.lock:
                 self.frame = img
+                self.raw = data[self.HDR:self.HDR + size]
+                self.seq = done
                 self._publish()
-            self.seq = done
             if not self.following:
                 log.info("frame file %s: live, %dx%d", self.path, w, h)
             self.following = True

@@ -39,14 +39,15 @@ def _srecord(addr, data):
     return ('S2' + body.hex().upper() + '%02X' % checksum).encode('ascii')
 
 
-def encode(section, image):
+def encode(section, image, off=MAIN_IMG_OFF):
     """section: the original MAIN section this update carried (its prefix
     S0 header, S-records and S7 terminator are reused verbatim). image: the
-    (possibly patched) flat bytes patch_main.py works on. Returns the new
+    (possibly patched) flat bytes patch_main.py works on. off: where the
+    packed application starts, as for main_decode.decode(). Returns the new
     section, ready to take the original's place in a .UPD."""
     label = section[:LABEL_SIZE]
     body = section[LABEL_SIZE:]
-    prefix = [line for addr, _, line in srecords(body) if addr < MAIN_IMG_OFF]
+    prefix = [line for addr, _, line in srecords(body) if addr < off]
     term = next((line for line in body.split(b'\r\n') if line[:2] == b'S7'), None)
     if term is None:
         raise SystemExit('main_encode: no S7 termination record in the section')
@@ -55,11 +56,11 @@ def encode(section, image):
 
     packed = encode_image(image)
     lines = header + prefix
-    for off in range(0, len(packed), RECORD_LEN):
-        chunk = packed[off:off + RECORD_LEN]
+    for pos in range(0, len(packed), RECORD_LEN):
+        chunk = packed[pos:pos + RECORD_LEN]
         if len(chunk) < RECORD_LEN:
             chunk += b'\xff' * (RECORD_LEN - len(chunk))
-        lines.append(_srecord(MAIN_IMG_OFF + off, chunk))
+        lines.append(_srecord(off + pos, chunk))
     lines.append(term)
 
     body_out = b'\r\n'.join(lines) + b'\r\n'

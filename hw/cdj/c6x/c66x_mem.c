@@ -3,6 +3,9 @@
  * C66x core: memory, the idle-loop checks, instruction fetch.
  */
 #include "c66x_priv.h"
+#ifdef _WIN32
+#include <malloc.h>             /* _aligned_malloc */
+#endif
 
 /* ------------------------------------------------------------------------ */
 /* memory                                                                    */
@@ -10,14 +13,16 @@
 
 void invalidate_code(c66x_core *c, uint32_t a, uint32_t n)
 {
-    /* Every mapping of the same host bytes: L2 is mapped at two addresses. */
-    for (unsigned i = 0; i < c->nram; i++) {
-        ramreg *r = &c->ram[i];
-        if (!r->fpp)
+    /* Every mapping of the same host bytes: L2 is mapped at two addresses.
+     * The mapping holding a comes first, so the common store pays one pass
+     * over the table rather than one per mapping. */
+    for (unsigned j = 0; j < c->nram; j++) {
+        ramreg *w = &c->ram[j];
+        if (a - w->base >= w->size)
             continue;
-        for (unsigned j = 0; j < c->nram; j++) {
-            ramreg *w = &c->ram[j];
-            if (a - w->base >= w->size || w->host != r->host || w->size != r->size)
+        for (unsigned i = 0; i < c->nram; i++) {
+            ramreg *r = &c->ram[i];
+            if (!r->fpp || w->host != r->host || w->size != r->size)
                 continue;
             uint32_t lo = (a - w->base) >> 5;
             uint32_t hi = (uint32_t)(((uint64_t)(a - w->base) + n - 1) >> 5);
@@ -533,6 +538,31 @@ static int fp_reader(void *opaque, uint32_t fp_addr, uint8_t fp[32])
     return 0;
 }
 
+/* Zeroed and on a cache line, which calloc does not promise: the core's
+ * packet cache entries and the instruction records are laid out by line. */
+void *line_alloc(size_t n)
+{
+#ifdef _WIN32
+    void *b = _aligned_malloc(n, 64);
+#else
+    void *b = NULL;
+    if (posix_memalign(&b, 64, n))
+        b = NULL;
+#endif
+    if (b)
+        memset(b, 0, n);
+    return b;
+}
+
+void line_free(void *b)
+{
+#ifdef _WIN32
+    _aligned_free(b);
+#else
+    free(b);
+#endif
+}
+
 c66x_insn *fetch_insn(c66x_core *c, uint32_t a)
 {
     uint8_t *p = ram_ptr(c, a & ~31u, 32);
@@ -546,10 +576,11 @@ c66x_insn *fetch_insn(c66x_core *c, uint32_t a)
     if (!pg) {
         pg = r->fpp[off >> FP_PAGE_SHIFT] = calloc(1u << (FP_PAGE_SHIFT - 5), sizeof(fpblk *));
         r->codepage[off >> FP_PAGE_SHIFT] |= CP_CODE;
+        c->code_pages++;
     }
     fpblk **bp = &pg[(off >> 5) & ((1u << (FP_PAGE_SHIFT - 5)) - 1)];
     if (!*bp)
-        *bp = calloc(1, sizeof(fpblk));
+        *bp = line_alloc(sizeof(fpblk));
     fpblk *b = *bp;
     unsigned slot = (a & 31) >> 1;
     if (!(b->valid & (1u << slot))) {

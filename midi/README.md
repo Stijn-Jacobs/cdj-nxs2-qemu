@@ -76,7 +76,7 @@ is exactly how the next one gets named.
     "left/cue":       {"action": "cue",          "deck": "cdjA"},
     "left/jog":       {"action": "jog",          "deck": "cdjA"},
     "left/tempo":     {"action": "tempo",        "deck": "cdjA"},
-    "left/pad_1":     {"action": "key_0x1a_0x01", "deck": "cdjA"},
+    "left/pad_1":     {"action": "hot_cue_a",    "deck": "cdjA"},
     "left/pad_8":     {"action": "touch_tap",    "deck": "cdjA", "x": 700, "y": 60},
     "left/load":      {"action": "set_focus",    "deck": "cdjA"},
     "right/load":     {"action": "set_focus",    "deck": "cdjB"},
@@ -123,6 +123,17 @@ Without `--controller`, the bridge picks the profile whose `match` word appears
 in a connected MIDI port's name, and falls back to the DJ-202.
 
 ## Running it
+
+Plug the controller in before `./setup.sh`. Setup recognises a controller it
+has a profile for (or offers to learn a new one) and saves your choice, and from
+then on `./start.sh` starts the bridge together with the decks. With two decks
+the controller's left side plays deck 1 and its right side deck 2. The bridge's
+own output is in `logs/bridge.log`. On Windows it runs on a normal Windows
+Python (python.org or the Microsoft Store) with `mido` and `python-rtmidi`
+installed, because MSYS2's Python cannot open MIDI devices; setup finds it and
+prints the one `pip` command it needs if the packages are missing. On macOS the
+packages go into the checkout's `.venv/` (setup prints that command too), and the
+bridge reaches the controller through Core MIDI.
 
 ```
 ./start.sh                                        # decks + relay (+ the bridge, if configured)
@@ -285,7 +296,7 @@ recorded state log through the LED rules offline.
 
 Everything above drives the deck from a controller. The deck also has a USB-B
 port on its back, and the emulated one enumerates as a USB-MIDI device: the
-`usbmidi` mod sends Start / Stop / Continue and Timing Clocks out of it, and
+`usb_midi` mod sends Start / Stop / Continue and Timing Clocks out of it, and
 software can send MIDI in. `scripts/net/usb_midi_port.py` is the computer on
 the other end of that cable. It receives the port's traffic over UDP on
 localhost (27020 for deck 1, 27021 for deck 2) and shows it as a MIDI port:
@@ -299,3 +310,29 @@ carries MIDI back to the deck. To check the port without any MIDI library,
 `--monitor` prints every message with a timestamp and `--count` prints how many
 of each status byte arrived per second (24 `F8` clocks per beat, `FA`/`FB`/`FC`
 on transport changes).
+
+## The deck's own USB HID port (rekordbox mode)
+
+The same USB-B port also carries the deck's HID channel: in **LINK › CONTROL
+MODE › USB MIDI** (the PC / rekordbox source) the firmware speaks the Pioneer
+HID protocol over it -- handshake and all -- to whichever program is on the
+other end of the cable. `scripts/net/usb_hid_port.py` is that program: it
+receives the port's HID reports over the same UDP relay (27020 / 27021) and
+presents them as a HID device with the deck's own report descriptor, so the
+deck reads as a CDJ to the software:
+
+    python3 scripts/net/usb_hid_port.py                 # Linux: makes a /dev/uhid device
+    python3 scripts/net/usb_hid_port.py --monitor       # anywhere: one line per report
+
+The relay is byte-transparent -- the deck's firmware does the handshake, so the
+bridge only has to be the right HID device. `--name` is the product string the
+host matches the model on (default `CDJ-2000NXS2`); set it to whatever model the
+running firmware is. `--monitor` shows the handshake packets (announce, host
+challenge, deck reply, host reply, ack) as they happen, which is how to confirm
+the firmware reached HID mode.
+
+**On Windows and macOS there is no virtual HID device yet** (Windows needs a
+Virtual HID Framework minidriver, macOS a DriverKit one), so real rekordbox
+cannot open the deck there until one exists; `--monitor` works everywhere in the
+meantime. Pro DJ Link over the TAP adapter remains the way to reach real
+rekordbox on the same PC today.

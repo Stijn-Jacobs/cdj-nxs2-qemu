@@ -9,6 +9,7 @@ import pytest
 
 import patch_main
 import sigpatch
+from players import cdj2000nxs2 as nxs2
 from sigpatch import Mod
 from test_main_osc import Sh4
 
@@ -108,11 +109,34 @@ def test_selection_order_does_not_change_the_image(blobs):
             == sigpatch.patch(profile, blobs, data, MODS, ['b', 'a']))
 
 
+def test_a_hook_runs_behind_the_ones_it_names_whatever_the_alphabet_says(blobs):
+    profile, data = build_image()
+    mods = {'a': MODS['a']._replace(after=('b',)), 'b': MODS['b']}
+    assert sigpatch.hook_sites(mods)[sigpatch.site_key(mods['a'])] == ['b', 'a']
+    cpu = run(sigpatch.patch(profile, blobs, data, mods, ['a', 'b']))
+    assert cpu.r[0] == (0 + 3 + 1) * 4          # b, then a
+
+
+def test_a_hook_named_in_after_but_not_selected_does_not_hold_the_other_back(blobs):
+    profile, data = build_image()
+    mods = {'a': MODS['a']._replace(after=('b',)), 'b': MODS['b']}
+    cpu = run(sigpatch.patch(profile, blobs, data, mods, ['a']))
+    assert cpu.r[0] == (0 + 1) * 4
+
+
+def test_hooks_that_wait_for_each_other_are_refused():
+    mods = {'a': MODS['a']._replace(after=('b',)), 'b': MODS['b']._replace(after=('a',))}
+    with pytest.raises(SystemExit, match='wait for another'):
+        sigpatch.hook_sites(mods)
+
+
 def test_a_hook_and_an_owner_mod_on_one_span_are_refused(blobs):
     profile, data = build_image()
     mods = {'a': MODS['a'], 'b': MODS['b']._replace(hook=False)}
-    with pytest.raises(SystemExit, match='overlap'):
-        sigpatch.patch(profile, blobs, data, mods, ['a', 'b'])
+    report = {}
+    sigpatch.patch(profile, blobs, data, mods, ['a', 'b'], report=report)
+    assert report['a'][0] == 'applied'
+    assert report['b'][0] == 'skipped' and 'overlaps' in report['b'][1]
 
 
 @pytest.mark.parametrize('ops, why', [
@@ -139,5 +163,5 @@ def test_real_main_takes_every_main_mod_at_once_deterministically():
     for name in ('abletonlink', 'abletonlinkpong', 'oscbeat', 'usbmidi'):
         alone = patch_main.patch(data, [name])
         mod = patch_main.MODS[name]
-        span = sigpatch.find_sig(sigpatch.Image(patch_main.MAIN_PROFILE, data), mod) + 2 * mod.start
+        span = sigpatch.find_sig(sigpatch.Image(nxs2.MAIN_PROFILE, data), mod) + 2 * mod.start
         assert alone[span:span + 2 * (mod.end - mod.start)] == out[span:span + 2 * (mod.end - mod.start)]

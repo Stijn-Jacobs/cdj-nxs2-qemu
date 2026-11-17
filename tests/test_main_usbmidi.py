@@ -10,9 +10,14 @@ import struct
 
 import pytest
 
+import modelfw
 import patch_main
 import sigpatch
+from players import cdj2000nxs2 as nxs2
 from test_main_osc import Sh4
+from helpers import mod_row
+
+USB_MIDI = modelfw.mod_patch('usb_midi', 'cdj2000nxs2')
 
 BASE = 0x08000000
 DEVICE = 0x0AB84CFA
@@ -42,7 +47,7 @@ def blob(name):
 # -- registry and placement ------------------------------------------------------
 
 def test_registered_as_hooks_on_the_midi_task_and_the_timer_interrupt():
-    for name, site in (('usbmidi', patch_main.MIDI_TASK), ('usbmiditick', patch_main.TIMER_TICK)):
+    for name, site in (('usbmidi', USB_MIDI.MIDI_TASK), ('usbmiditick', USB_MIDI.TIMER_TICK)):
         mod = patch_main.MODS[name]
         assert mod.target == 'main' and mod.hook and not mod.literal
         assert dict(sig=mod.sig, start=mod.start, end=mod.end) == site
@@ -50,11 +55,7 @@ def test_registered_as_hooks_on_the_midi_task_and_the_timer_interrupt():
 
 
 def test_the_registry_row_enables_both_halves():
-    path = os.path.join(os.path.dirname(patch_main.__file__), 'mods.conf')
-    rows = [line.split('|') for line in open(path, encoding='utf-8')
-            if line.strip() and not line.startswith('#')]
-    (row,) = [r for r in rows if r[0] == 'usb_midi']
-    assert row[1].split('+') == ['CDJ_MAIN_USBMIDI', 'CDJ_MAIN_USBMIDITICK']
+    assert mod_row('usb_midi').env.split('+') == ['CDJ_MAIN_USBMIDI', 'CDJ_MAIN_USBMIDITICK']
 
 
 def test_the_timing_half_is_placed_right_after_the_sending_half():
@@ -67,7 +68,7 @@ def test_the_timing_half_is_placed_right_after_the_sending_half():
 def test_real_main_has_each_site_once_where_the_design_puts_it():
     with open(REAL_MAIN, 'rb') as f:
         data = f.read()
-    img = sigpatch.Image(patch_main.MAIN_PROFILE, data)
+    img = sigpatch.Image(nxs2.MAIN_PROFILE, data)
     out = patch_main.patch(data, sorted(patch_main.MODS))
     for name, at in (('usbmidi', 0x084F6250), ('usbmiditick', 0x08448F9E)):
         mod = patch_main.MODS[name]

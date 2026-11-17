@@ -12,3 +12,7 @@ sh4_ss.add(when: 'CONFIG_CDJ2000NXS2', if_true: files(
   'standin/standin_linkramp.c', 'standin/standin_mp3.c',
 ))
 sh4_ss.add(when: 'CONFIG_SH7269GUI', if_true: files('sh7269gui.c'))
+if cdj_web
+  sh4_ss.add(when: 'CONFIG_CDJ2000NXS2', if_true: files('web_main.c'))
+  sh4_ss.add(when: 'CONFIG_SH7269GUI', if_true: files('web_display.c'))
+endif

@@ -210,3 +210,34 @@ contention, not the core.
 - FAUCR sticky flags are not maintained.
 - AMR circular addressing is not implemented.
 - Exceptions (EFR/IERR) stop the step loop instead of vectoring.
+
+## Native kernels
+- `c66x_native.c` runs whole passes of a hot, pure loop or leaf function (RAM
+  and registers only) as native C: every register, control register, store,
+  cycle and counter a pass leaves is the interpreter's own. Kernels: the NXS2
+  polyphase FIR (131 cycles a pass on its dot-product path, 111 on its SPLOOP
+  path), the ring-descriptor walk and ring copy, the cubic interpolator and
+  the clipped two-pole filter step, the three MASTER TEMPO loops (level
+  envelope twins, peak-neighbour marking), and the C6747 decks' cubic
+  interpolator.
+- A pass runs natively only when it ends inside the current `c66x_step`
+  budget and starts with nothing in flight and no deliverable interrupt.
+  Interrupts arrive only between steps, so such a pass cannot have been
+  interrupted; the pass that crosses the step end is interpreted.
+- A kernel is found by its code, not its address: every page of decoded code
+  is searched for its bytes (FNV-1a), with the fields a relink changes left
+  out: the MVK/MVKH constants that build an absolute address, and branches
+  out of the kernel. The search runs again whenever `code_gen` moves or
+  decoded code reaches a new page. The pass takes its code addresses from
+  where the match is and its data addresses from the matched MVK/MVKH pairs,
+  so a release that moves the kernel or its tables still runs it natively.
+  A kernel found nowhere, or in more than one place, is interpreted; the
+  exit line `c66x native: kernels ...` says which. `tools/native_sig.py`
+  prints a table entry's signature from the boot table, and
+  `make native-test` moves the FIR to another address and table and finds
+  it there.
+- A compiled region rooted at the kernel's entry runs instead of the native
+  form, so a DSP module keeps its own speed on that kernel.
+- `C66X_NATIVE=0` turns it off; `C66X_NATIVE=check` predicts every pass and
+  compares it with the interpreter's. Both NXS2 play recordings and the
+  XDJ-1000 one replay bit-exact with every kernel on.

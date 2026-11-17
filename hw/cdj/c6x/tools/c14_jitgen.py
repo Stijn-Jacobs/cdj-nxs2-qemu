@@ -43,6 +43,10 @@ import sys
 # module, and start-up refuses a module built by another version.
 GENERATOR_VERSION = 1
 
+# Bumped whenever the generated C only gets faster or smaller; start-up still
+# loads an older module and offers to build the faster one.
+GENERATOR_REVISION = 2
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 CORE_DIR = os.path.dirname(HERE)
 
@@ -50,6 +54,7 @@ OPK_CONST, OPK_REG, OPK_PAIR, OPK_MEM, OPK_CTRL, OPK_ADDR = 1, 2, 3, 4, 5, 6
 OPK_ILC = 10
 WK_REG, WK_CTRL = 0, 1
 CR_ILC = 0xd
+CR_FADCR, CR_FMCR = 0x12, 0x14
 MAX_QUEUE = 7          # NBR - 1: never let a region reach the interpreter's overflow trap
 PRE_CYCLES = 17        # WQ_SLOTS + 1: writes scheduled before entry land within this many cycles
 MAX_KNOWN = 4          # registers with a compile-time value carried in the state
@@ -58,6 +63,7 @@ CHAIN_DEPTH = 24       # a region hands over to another root only this many cycl
 CAP_MAX = 16           # C66X_JIT_CAP
 RET_REG = 35           # B3, the return-address register of the TI C6000 calling convention
 WIDE_MEM = False      # opt-in paired RAM accesses; preserve the default output
+NEAREST = False       # --nearest: float ops compiled for round-to-nearest only
 # the module is compiled with the same float semantics as the core
 JIT_CFLAGS = ["-std=gnu11", "-fPIC", "-fvisibility=hidden", "-ffp-contract=off", "-frounding-math",
               "-march=native", "-w"]
@@ -107,6 +113,11 @@ class Decoder:
             fn.restype = ctypes.c_int
         os.environ.pop("C66X_JIT", None)
         os.environ.pop("C66X_JIT_PROFILE", None)
+        # With natives on, the core marks each native kernel's loop head special,
+        # so no region roots there or runs through it and the deck enters the
+        # native form, several times faster than compiled code. Natives off in
+        # the caller's environment would build a module that shadows them.
+        os.environ["C66X_NATIVE"] = "1"
         self.core = self.lib.c66x_new(None)
         self.maps, self.prof, self.idle_head, self.kerns = [], [], 0, []
         self.have = set()          # roots an already loaded module compiles
@@ -232,6 +243,19 @@ def handler_number(name):
     return names.index(name)
 
 
+def stores_last(items):
+    """A cycle's (instruction, packet) pairs in the order its code runs them, and
+    the first store. The interpreter holds a cycle's stores to its end only so
+    that its loads read the old values; running every other instruction first
+    and then the stores, each group in its own order, lands the same bytes in
+    the same order while each store lands as it runs (store_now) instead of
+    queueing through the core."""
+    h_store = handler_number("H_STORE")
+    is_store = [ins.fop == "store" or ins.handler == h_store for ins, _ in items]
+    stores = [it for it, st in zip(items, is_store) if st]
+    return [it for it, st in zip(items, is_store) if not st] + stores, (stores[0][0] if stores else None)
+
+
 def native(ins):
     f = ins.fop
     if f == "nop" or f in INT_OPS or f in FLOAT_OPS:
@@ -247,6 +271,13 @@ def native(ins):
     return False
 
 
+def writes_rounding(dec, addr):
+    """True when a --nearest module must leave the instruction to the interpreter:
+    it writes FADCR or FMCR, which hold the rounding fields its float ops assume."""
+    sh = dec.shape(addr)
+    return NEAREST and sh is not None and any(k == WK_CTRL and i in (CR_FADCR, CR_FMCR) for _, k, i in sh[2])
+
+
 def compilable(dec, pk):
     """Why a packet cannot be compiled, or None."""
     if pk is None:
@@ -254,7 +285,7 @@ def compilable(dec, pk):
     if not pk.cacheable:
         return "not cacheable"
     if pk.special:
-        return "sploop family"
+        return "sploop family or native kernel head"
     if dec.idle_head and pk.pc == dec.idle_head:
         return "idle head"
     for ins in pk.insns:
@@ -267,7 +298,68 @@ def compilable(dec, pk):
             return "handler %s traps" % ins.name
         if sh[1] > CAP_MAX:
             return "handler %s writes too much" % ins.name
+        if writes_rounding(dec, ins.addr):
+            return "handler %s writes the rounding mode" % ins.name
     return None
+
+
+def fill_store(ins):
+    """(base, size, writeback mode, offset, source, source high half) of an
+    unconditional store of a register by the inline RAM path, or None."""
+    ops = ins.ops
+    dw = ins.mfast & 0x40
+    if ins.fop != "store" or ins.cond_reg >= 0 or not ins.mfast or ops[0].kind != (OPK_PAIR if dw else OPK_REG):
+        return None
+    return (ops[1].reg, 8 if dw else ins.mfast & 7, (ins.mfast >> 4) & 3, ins.ea_delta, ops[0].reg,
+            ops[0].reg_hi if dw else None)
+
+
+def fill_ok(stores, counter=None):
+    """At most two stores, of registers the loop never writes."""
+    if not 0 < len(stores) <= 2:
+        return False
+    written = ([counter] if counter is not None else []) + [st[0] for st in stores if st[2]]
+    sources = [st[4] for st in stores] + [st[5] for st in stores if st[5] is not None]
+    return len(set(written)) == len(written) and RET_REG not in written and not set(sources) & set(written)
+
+
+@functools.lru_cache(maxsize=None)
+def _store_loop(dec, pc):
+    pk = dec.packet(pc)
+    if pk is None or pk.load or pk.xnops:
+        return None
+    counter, stores, branches = None, [], []
+    for ins in pk.insns:
+        ops = ins.ops
+        if ins.fop == "nop":
+            continue
+        if ins.fop == "branch" and ops[0].kind == OPK_ADDR and ops[0].val & 0xffffffff == pc and ins.cond_z == 0:
+            branches.append(ins.cond_reg)
+            continue
+        if ins.fop == "add" and ops[0].kind == OPK_CONST and ops[0].val == -1:
+            src, dst = ops[1], ops[2]
+        elif ins.fop == "sub" and ops[1].kind == OPK_CONST and ops[1].val == 1:
+            src, dst = ops[0], ops[2]
+        elif fill_store(ins):
+            stores.append(fill_store(ins))
+            continue
+        else:
+            return None
+        if (counter is not None or src.kind != OPK_REG or src.reg != dst.reg or ins.cond_reg != dst.reg
+                or ins.cond_z != 0):
+            return None
+        counter = dst.reg
+    if counter is None or branches != [counter] or not fill_ok(stores, counter):
+        return None
+    return counter, stores
+
+
+def store_loop(dec, pk):
+    """(counter, stores) when the packet is a whole loop that only stores
+    registers it never writes, through pointers it steps by a constant, and
+    branches back to itself while it counts a register down -- a fill. Each
+    store is fill_store's tuple."""
+    return _store_loop(dec, pk.pc)
 
 
 # --------------------------------------------------------------------------
@@ -512,26 +604,25 @@ class RegionGen:
                     e("    if (__builtin_expect(%s, 0)) { c->jit_exit[%d]++; goto P%d; }"
                       % (" || ".join(w["flag"] for w in hits), EXIT_STALL, label))
                     post_used = True
+                elif not st.pre and not ring:
+                    self.fill_batch(pk, st, known)
         pre = max(st.pre - 1, 0)
         new_ring, new_imm = [], []
         queue = [dict(q) for q in st.queue]
         if st.mcnop > 0:
             mcnop, next_pc = st.mcnop - 1, st.pc
         else:
-            h_store = handler_number("H_STORE")
-            stores = any(ins.fop == "store" or ins.handler == h_store for ins in pk.insns)
             e("    c->exec_pc = %s;" % u32(pk.pc))
-            if stores and not pk.load:
-                e("    c->store_now = 1;")
+            order, first_store = stores_last([(ins, pk) for ins in pk.insns])
             self.cur_ret = ret
-            for ins in pk.insns:
+            for ins, _ in order:
+                if ins is first_store:
+                    e("    c->store_now = 1;")
                 self.deps.add(ins.addr & ~31)
                 self.insn(ins, pk, new_ring, new_imm, queue, known)
             ret = self.cur_ret
-            if stores and not pk.load:
+            if first_store is not None:
                 e("    c->store_now = 0;")
-            elif stores:
-                e("    if (c->npst) JIT_API(c)->flush_stores(c);")
             e("    c->branch_block = %s;" % ("5" if pk.branched else "c->branch_block ? c->branch_block - 1 : 0"))
             mcnop, next_pc = pk.xnops, pk.next
         e("    c->cycle++;")
@@ -542,6 +633,45 @@ class RegionGen:
             q["rem"] -= 1
         self.land(queue, ring, new_imm, next_pc, mcnop, pre, self.trim(known), "    ", ret)
         self.stubs(label, st, post_used)
+
+    def fill_batch(self, pk, st, known):
+        """In the steady state of a store_loop packet -- five taken branches back to
+        it in flight, nothing else pending -- run as many of its cycles as the
+        counter and the budget allow in one go. The cycle itself then runs as
+        compiled."""
+        loop = store_loop(self.dec, pk)
+        if (loop is None or [q["rem"] for q in st.queue] != [1, 2, 3, 4, 5]
+                or any(q["tconst"] != pk.pc for q in st.queue)):
+            return
+        counter, stores = loop
+        if counter in known:
+            return
+        self.emit_fill([q["flag"] for q in st.queue if q["flag"]], "c->reg[%d]" % counter, stores, known, "")
+
+    def emit_fill(self, flags, count, stores, known, after):
+        """Run fn_ cycles of a fill at once, fn_ no more than the count register
+        allows (each cycle decrements it and needs it nonzero first) and short of
+        the budget. Every cycle in between would have passed the same checks:
+        nothing a fill does can raise an interrupt, change code or reach another
+        unit, so the checks at the next cycle stand for all of them."""
+        if any(st[0] in known for st in stores if st[2]):
+            return
+        e = self.emit
+        e("    %s{" % ("if (%s) " % " && ".join(flags) if flags else ""))
+        ind = "        "
+        e(ind + "uint64_t fn_ = end - c->cycle - 1;")
+        e(ind + "if (%s < fn_) fn_ = %s;" % (count, count))
+        sts = []
+        for b, n, wb, d, src, hi in stores:
+            first = "c->reg[%d]" % b if wb == 2 else "c->reg[%d] + %s" % (b, u32(d))
+            sts.append("{ %s, %s, c->reg[%d], %s, %d }" % (first, u32(d if wb else 0), src,
+                                                          "c->reg[%d]" % hi if hi is not None else "0", n))
+        e(ind + "if (fn_ >= 8 && jit_fill(c, fn_, (const jit_fill_st[]){ %s }, %d)) {" % (", ".join(sts), len(sts)))
+        ups = ["%s -= (uint32_t)fn_;" % count]
+        ups += ["c->reg[%d] += (uint32_t)fn_ * %s;" % (st[0], u32(st[3])) for st in stores if st[2]]
+        e(ind + "    " + " ".join(ups) + " c->cycle += fn_;" + after)
+        e(ind + "}")
+        e("    }")
 
     @staticmethod
     def trim(known):
@@ -1428,7 +1558,7 @@ def kernel_compilable(dec, k):
             if native(ins):
                 continue
             sh = dec.shape(addr)
-            if sh is None or sh[0] != 0 or sh[1] > CAP_MAX:
+            if sh is None or sh[0] != 0 or sh[1] > CAP_MAX or writes_rounding(dec, addr):
                 return "handler %s" % ins.name
     return None
 
@@ -1521,18 +1651,13 @@ class KernelGen(RegionGen):
             e("    c->st.insns += %d;" % nnat)
         dummy = Rec()
         dummy.next = 0
-        # The interpreter holds a kernel cycle's stores to its end only so that a
-        # load in the same cycle reads the old value (fast_cycles' store_now rule):
-        # with no load among the instructions they can land at once.
-        h_load, h_store = handler_number("H_LOAD"), handler_number("H_STORE")
-        immediate = (all(ins.handler != h_load for ins in lst)
-                     and any(ins.handler == h_store for ins in lst))
-        if immediate:
-            e("    c->store_now = 1;")
-        for ins in lst:
+        order, first_store = stores_last([(ins, dummy) for ins in lst])
+        for ins, _ in order:
+            if ins is first_store:
+                e("    c->store_now = 1;")
             self.deps.add(ins.addr & ~31)
             self.insn(ins, dummy, new_ring, new_imm, [], known)
-        if immediate:
+        if first_store is not None:
             e("    c->store_now = 0;")
         e("    if (c->npst) JIT_API(c)->flush_stores(c);")
         for w in ring:
@@ -1659,7 +1784,7 @@ def loop_insn_ok(dec, ins):
     if native(ins):
         return None
     sh = dec.shape(ins.addr)
-    if sh is None or sh[0] != 0 or sh[1] > CAP_MAX:
+    if sh is None or sh[0] != 0 or sh[1] > CAP_MAX or writes_rounding(dec, ins.addr):
         return "handler %s" % ins.name
     return None
 
@@ -1850,30 +1975,31 @@ class LoopGen(KernelGen):
                 e("    if (__builtin_expect(%s, 0)) { c->jit_exit[%d]++; goto P%d; }"
                   % (" || ".join(tests), EXIT_STUB, label))
                 post_used = True
+            if phase == "S" and ii == 1 and buf and not st.pre and all(w["land"] == 0 for w in st.ring):
+                # a one-cycle kernel of stores alone: each cycle is an iteration
+                stores = [fill_store(ins) for ins in buf]
+                if all(stores) and fill_ok(stores):
+                    self.emit_fill([], "c->cr[CR_ILC]", stores, known,
+                                   " c->spl.last_iter = (int)(c->cycle - c->spl.t0);")
         ring = [dict(w) for w in st.ring if (root or w["land"] > 0)]
         new_ring, new_imm = [], []
         dummy = Rec()
         dummy.next = 0
-        h_load, h_store = handler_number("H_LOAD"), handler_number("H_STORE")
         pm_ins = [ins for ins in (pm.insns if pm else []) if ins.name not in LOOP_SKIP]
-        allins = list(buf) + pm_ins
-        immediate = (all(ins.handler != h_load for ins in allins) and any(ins.handler == h_store for ins in allins))
+        order, first_store = stores_last([(ins, dummy) for ins in buf] + [(ins, pm) for ins in pm_ins])
         if st.mcnop:
             e("    c->mcnop = %d;" % (st.mcnop - 1))
         if pm is not None:
             e("    c->exec_pc = %s; c->pc = %s;" % (u32(pm.pc), u32(pm.next)))
-        if immediate:
-            e("    c->store_now = 1;")
-        for ins in buf:
+        for ins, owner in order:
+            if ins is first_store:
+                e("    c->store_now = 1;")
             self.deps.add(ins.addr & ~31)
-            self.insn(ins, dummy, new_ring, new_imm, [], known)
-        for ins in pm_ins:
-            self.deps.add(ins.addr & ~31)
-            self.insn(ins, pm, new_ring, new_imm, [], known)
+            self.insn(ins, owner, new_ring, new_imm, [], known)
         if pm is not None:
             for ins in pm.insns:
                 self.deps.add(ins.addr & ~31)
-        if immediate:
+        if first_store is not None:
             e("    c->store_now = 0;")
         e("    if (c->npst) JIT_API(c)->flush_stores(c);")
         if pm is not None:
@@ -1964,15 +2090,14 @@ class LoopGen(KernelGen):
         new_ring, new_imm = [], []
         known = {}
         pm_ins = [ins for ins in pk0.insns if ins.name not in LOOP_SKIP]
-        h_load, h_store = handler_number("H_LOAD"), handler_number("H_STORE")
-        immediate = (all(ins.handler != h_load for ins in pm_ins) and any(ins.handler == h_store for ins in pm_ins))
-        if immediate:
-            e("    c->store_now = 1;")
-        for ins in pm_ins:
+        order, first_store = stores_last([(ins, pk0) for ins in pm_ins])
+        for ins, _ in order:
+            if ins is first_store:
+                e("    c->store_now = 1;")
             self.insn(ins, pk0, new_ring, new_imm, [], known)
         for ins in pk0.insns:
             self.deps.add(ins.addr & ~31)
-        if immediate:
+        if first_store is not None:
             e("    c->store_now = 0;")
         e("    if (c->npst) JIT_API(c)->flush_stores(c);")
         e("    c->branch_block = %s;" % ("5" if pk0.branched else "c->branch_block ? c->branch_block - 1 : 0"))
@@ -2050,7 +2175,14 @@ extern _Thread_local unsigned jit_hop_entry;
  * much as the switches did. Entry points reset it: the core calls in nearest. */
 #define JIT_RM(c) ((c)->jit_xs.f[63])
 
-#ifdef __SSE2__
+#ifdef JIT_NEAREST
+/* Built with --nearest: the core enters the module only while every rounding
+ * field of FADCR and FMCR is clear (c66x_jit_nearest), no compiled packet
+ * writes either register, and the host is in round-to-nearest whenever the core
+ * calls in. Each float op is then the plain host op: no mode to read or switch,
+ * and nothing for a fence to keep in order. */
+static inline void jit_round(c66x_core *c, unsigned rm) { (void)c; (void)rm; }
+#elif defined(__SSE2__)
 #include <xmmintrin.h>
 /* The host's float maths is SSE, so the mode is one MXCSR field; fesetround
  * also rewrites the x87 control word. */
@@ -2079,14 +2211,26 @@ static inline void jit_round(c66x_core *c, unsigned rm)
  * switch: at -O2 a C674x firmware running in a directed mode got products
  * rounded in the default one. The operands' bits pass through an empty asm
  * after the op's switch and the result's bits before any later one. */
+#ifdef JIT_NEAREST
+#define JIT_FENCE(x) ((void)0)
+#else
 #define JIT_FENCE(x) __asm__ volatile("" : "+r"(x) :: "memory")
+#endif
+
+static inline unsigned jit_rmode(c66x_core *c, int unit, int side)
+{
+#ifdef JIT_NEAREST
+    return 0;
+#else
+    uint32_t r = (unit >= 6) ? c->cr[CR_FMCR] : c->cr[CR_FADCR];
+    return side == 2 ? (r >> 25) & 3 : (r >> 9) & 3;
+#endif
+}
 
 /* fop_run's F_ADDSP/F_SUBSP/F_MPYSP */
 static inline uint32_t jit_fop(c66x_core *c, int unit, int side, uint32_t a, uint32_t b, char op)
 {
-    uint32_t r = (unit >= 6) ? c->cr[CR_FMCR] : c->cr[CR_FADCR];
-    unsigned rm = side == 2 ? (r >> 25) & 3 : (r >> 9) & 3;
-    jit_round(c, rm); JIT_FENCE(a); JIT_FENCE(b);
+    jit_round(c, jit_rmode(c, unit, side)); JIT_FENCE(a); JIT_FENCE(b);
     float p, q, res;
     memcpy(&p, &a, 4);
     memcpy(&q, &b, 4);
@@ -2102,9 +2246,7 @@ static inline float jit_u2f(uint32_t v) { float f; memcpy(&f, &v, 4); return f; 
 /* exec_insn's H_DADDSP/H_DSUBSP/H_DMPYSP: the operation on each half of a pair */
 static inline uint64_t jit_dsp(c66x_core *c, int unit, int side, uint64_t a, uint64_t b, char op)
 {
-    uint32_t r = (unit >= 6) ? c->cr[CR_FMCR] : c->cr[CR_FADCR];
-    unsigned rm = side == 2 ? (r >> 25) & 3 : (r >> 9) & 3;
-    jit_round(c, rm); JIT_FENCE(a); JIT_FENCE(b);
+    jit_round(c, jit_rmode(c, unit, side)); JIT_FENCE(a); JIT_FENCE(b);
     uint32_t o[2];
     for (int k = 0; k < 2; k++) {
         float p = jit_u2f((uint32_t)(a >> (32 * k))), q = jit_u2f((uint32_t)(b >> (32 * k)));
@@ -2114,12 +2256,6 @@ static inline uint64_t jit_dsp(c66x_core *c, int unit, int side, uint64_t a, uin
     uint64_t v = ((uint64_t)o[1] << 32) | o[0];
     JIT_FENCE(v);
     return v;
-}
-
-static inline unsigned jit_rmode(c66x_core *c, int unit, int side)
-{
-    uint32_t r = (unit >= 6) ? c->cr[CR_FMCR] : c->cr[CR_FADCR];
-    return side == 2 ? (r >> 25) & 3 : (r >> 9) & 3;
 }
 
 static inline uint32_t jit_f2u(float f) { uint32_t v; memcpy(&v, &f, 4); return v; }
@@ -2364,11 +2500,68 @@ static inline void jit_store(c66x_core *c, uint32_t ea, uint32_t v, unsigned n)
         m[0] = v;
         if (n > 1) m[1] = v >> 8;
         if (n > 2) { m[2] = v >> 16; m[3] = v >> 24; }
+        /* integer bookkeeping only, so it keeps the op's rounding mode: a
+         * filter storing beside its own code would otherwise switch per store */
         if (rr->codepage[(ea - rr->base) >> FP_PAGE_SHIFT])
-            JIT_API(c)->invalidate_code(c, ea, n);
+            c->api->invalidate_code(c, ea, n);
         return;
     }
     JIT_API(c)->store_defer(c, ea, v, n);
+}
+
+/* One store of a fill loop: first address, step per iteration, value (a
+ * doubleword's high half in hi), size. */
+typedef struct { uint32_t ea, step, v, hi, n; } jit_fill_st;
+
+static inline void jit_fill_put(uint8_t *d, const jit_fill_st *s)
+{
+    d[0] = s->v;
+    if (s->n > 1) d[1] = s->v >> 8;
+    if (s->n > 2) { d[2] = s->v >> 16; d[3] = s->v >> 24; }
+    if (s->n > 4) { d[4] = s->hi; d[5] = s->hi >> 8; d[6] = s->hi >> 16; d[7] = s->hi >> 24; }
+}
+
+/* n iterations of a fill loop's stores, when every one of them would take
+ * the inline RAM path without touching a code page: then nothing else can
+ * see them happen one by one. Returns 0, having written nothing, otherwise. */
+static inline int jit_fill(c66x_core *c, uint64_t n, const jit_fill_st *s, unsigned ns)
+{
+    ramreg *rr = &c->ram[c->last_ram];
+    if (c->npst || c->watch_fn || (c->idle_armed && !c->idle_fx))
+        return 0;
+    int64_t off[2];
+    for (unsigned k = 0; k < ns; k++) {
+        int64_t span = (int64_t)(int32_t)s[k].step * (int64_t)(n - 1);
+        off[k] = (int64_t)s[k].ea - rr->base;
+        int64_t lo = off[k] + (span < 0 ? span : 0), hi = off[k] + (span > 0 ? span : 0) + s[k].n;
+        if (lo < 0 || hi > rr->size)
+            return 0;
+        for (int64_t p = lo >> FP_PAGE_SHIFT; p <= (hi - 1) >> FP_PAGE_SHIFT; p++)
+            if (rr->codepage[p])
+                return 0;
+    }
+    uint8_t *m = rr->host;
+    if (ns == 2 && s[0].n == s[1].n && s[0].step == 2 * s[0].n && s[1].step == s[0].step
+        && s[0].v == s[1].v && s[0].hi == s[1].hi && (off[1] == off[0] + s[0].n || off[0] == off[1] + s[0].n)) {
+        /* two streams interleaved into one run of the same value */
+        uint8_t *d = m + (off[0] < off[1] ? off[0] : off[1]);
+        uint8_t img[8];
+        unsigned same = 1;
+        jit_fill_put(img, &s[0]);
+        for (unsigned b = 1; b < s[0].n; b++)
+            same &= img[b] == img[0];
+        if (same) {
+            memset(d, img[0], n * 2 * s[0].n);
+            return 1;
+        }
+        for (uint64_t i = 0; i < 2 * n; i++)
+            jit_fill_put(d + i * s[0].n, &s[0]);
+        return 1;
+    }
+    for (uint64_t i = 0; i < n; i++)
+        for (unsigned k = 0; k < ns; k++)
+            jit_fill_put(m + off[k] + (int64_t)(int32_t)s[k].step * (int64_t)i, &s[k]);
+    return 1;
 }
 
 /* A captured handler wrote a different shape than the generator saw: the
@@ -2465,7 +2658,7 @@ __attribute__((destructor)) static void jit_sites_dump(void)
 
 
 def main():
-    global WIDE_MEM
+    global WIDE_MEM, NEAREST
     ap = argparse.ArgumentParser()
     ap.add_argument("prof")
     ap.add_argument("out")
@@ -2479,8 +2672,14 @@ def main():
                     help="--only for every address in this file (one per line); a curated "
                          "module's roots plus a new workload's, without re-ranking either")
     ap.add_argument("--no-cc", action="store_true")
+    ap.add_argument("--copy-burst", action="store_true",
+                    help="fuse recognized plain-RAM copy pipelines (experimental: check with an EXACT replay; "
+                         "requires --wide-mem, which every model's MODEL_DSP_GEN_ARGS passes)")
     ap.add_argument("--wide-mem", action="store_true",
                     help="combine paired RAM loads/stores (experimental; verify with an EXACT replay)")
+    ap.add_argument("--nearest", action="store_true",
+                    help="compile float ops for round-to-nearest only: the core enters the module only "
+                         "while FADCR and FMCR select it (a firmware that never sets a directed mode)")
     # 16-17 gcc at once (~0.8 GB each) beside a running deck hung the WSL VM (c16)
     ap.add_argument("--jobs", type=int, default=min(6, os.cpu_count() or 4), help="parallel gcc processes")
     ap.add_argument("--opt", default="2", help="gcc optimisation level")
@@ -2526,7 +2725,12 @@ def main():
                     help="the busy-wait head regions stop at (the machine's CDJ_C6X_IDLE, 0x80076F00)")
     a = ap.parse_args()
     WIDE_MEM = a.wide_mem
-    prelude = PRELUDE + (WIDE_PRELUDE if WIDE_MEM else "")
+    NEAREST = a.nearest
+    if a.copy_burst and not WIDE_MEM:
+        ap.error("--copy-burst requires --wide-mem")
+    prelude = ("#define JIT_NEAREST 1\n" if NEAREST else "") + PRELUDE + (WIDE_PRELUDE if WIDE_MEM else "")
+    if a.copy_burst:
+        prelude += open(os.path.join(os.path.dirname(__file__), "c14_copy_burst.h")).read()
     for path in a.only_file or []:
         a.only = (a.only or []) + [int(x, 0) for x in open(path).read().split()]
     if a.only:
@@ -2729,6 +2933,10 @@ def main():
             seen.add(k.addr)
             code, nn = lg.generate()
             nodes += nn
+            if a.copy_burst:
+                from c14_copy_fusion import fuse_copy
+                code, fused = fuse_copy(code)
+                print("loop 0x%08x: copy burst %s" % (k.addr, "recognized" if fused else "not applicable"), file=sys.stderr)
             codes.append(code)
             n = lg.name
             deps = sorted(lg.deps)
@@ -2765,6 +2973,8 @@ def main():
     main_parts.append("static const char *const jit_site_why[] = { %s };"
                       % ", ".join('"%s"' % w for p, w in sites or [(0, "")]))
     main_parts.append(SITES_DUMP % nsites)
+    if NEAREST:
+        main_parts.append('__attribute__((visibility("default"))) const uint32_t c66x_jit_nearest = 1;')
     main_parts.append('__attribute__((visibility("default"))) '
                       'const c66x_jit_module c66x_jit_exports = { C66X_JIT_ABI, %d, regions, %d, kernels, %d, regions0, '
                       '%d, loops, %d, qregions };' % (len(table), len(ktable), len(table0), len(ltable), len(qtable)))

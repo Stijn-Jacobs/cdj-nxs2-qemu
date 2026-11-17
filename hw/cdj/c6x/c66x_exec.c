@@ -3,9 +3,6 @@
  * C66x core: instruction execution and the SPLOOP loop buffer.
  */
 #include "c66x_priv.h"
-#ifdef __SSE2__
-#include <xmmintrin.h>
-#endif
 
 /* ------------------------------------------------------------------------ */
 /* arithmetic helpers                                                        */
@@ -40,25 +37,6 @@ static unsigned rmode(c66x_core *c, const c66x_insn *in)
     uint32_t r = (in->unit >= 6) ? c->cr[CR_FMCR] : c->cr[CR_FADCR];
     return in->side == 2 ? (r >> 25) & 3 : (r >> 9) & 3;
 }
-
-#ifdef __SSE2__
-/* Host float maths is SSE, so the rounding mode is one MXCSR field; the
- * C library's fesetround also rewrites the x87 control word, which cost a
- * fifth of the DSP thread on a firmware that runs in a directed mode. */
-static inline void host_round(unsigned rm)
-{
-    static const uint32_t rc[4] = { 0, 3u << 13, 2u << 13, 1u << 13 };
-
-    _mm_setcsr((_mm_getcsr() & ~(3u << 13)) | rc[rm]);
-}
-#else
-static const int fe_mode[4] = { FE_TONEAREST, FE_TOWARDZERO, FE_UPWARD, FE_DOWNWARD };
-
-static inline void host_round(unsigned rm)
-{
-    fesetround(fe_mode[rm]);
-}
-#endif
 
 static inline float  u2f(uint32_t v) { float f; memcpy(&f, &v, 4); return f; }
 static inline uint32_t f2u(float f) { uint32_t v; memcpy(&v, &f, 4); return v; }

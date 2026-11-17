@@ -50,7 +50,7 @@ def test_a_setup_that_never_asked_for_sound_does_not_mute_start():
 
 def test_an_older_players_start_has_sound_after_its_own_setup(tmp_path, monkeypatch):
     seen = {}
-    monkeypatch.setattr(start.deck, "start", lambda player, env, dry: seen.update(env))
+    monkeypatch.setattr(start.deck, "start", lambda player, env, dry, app_cmd, decks: seen.update(env))
     monkeypatch.setattr(start, "_offer_rebuild", lambda *a: True)
     start._start_deck(Layout(), model.load("xdj1000"),
                       conf.with_start_defaults(conf.parse(conf.render({"CDJ_MODEL": "xdj1000"}))), True)
@@ -59,7 +59,7 @@ def test_an_older_players_start_has_sound_after_its_own_setup(tmp_path, monkeypa
 
 def test_an_older_players_stale_check_looks_at_the_recorded_build_trees(monkeypatch):
     seen = {}
-    monkeypatch.setattr(start.deck, "start", lambda player, env, dry: 0)
+    monkeypatch.setattr(start.deck, "start", lambda player, env, dry, app_cmd, decks: 0)
     monkeypatch.setattr(start, "_stale_builds", lambda lay, env: seen.update(env) or [])
     monkeypatch.delenv("MAIN_QEMU", raising=False)
     c = conf.with_start_defaults({"CDJ_MODEL": "cdj900", "QEMU_BUILD": "/x/build", "QEMU_EB_BUILD": "/x/build-eb"})

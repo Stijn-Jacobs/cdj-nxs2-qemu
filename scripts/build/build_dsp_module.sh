@@ -6,8 +6,9 @@
 # ~/c14gen/curated[-<model>]/m.so and leave the run-time auto-JIT off.
 #
 # About half an hour, no recording. One headless deck boots, loads a track and
-# plays PLAY_S (default 30; 45 for the rig player, whose play also sweeps MASTER TEMPO
-# and the tempo fader) seconds with no module; its machine writes the
+# plays PLAY_S (default 60; 45 for the rig player, whose play also sweeps MASTER TEMPO
+# and the tempo fader; a one-window player's play turns MASTER TEMPO on, MODEL_PROFILE_STEPS)
+# seconds with no module; its machine writes the
 # profile at exit. After the instrumented build a second such run, with that
 # module loaded, collects the profile-guided counts. A short play is enough
 # because the hot code is the decoder every play runs: on the CDJ-2000 fw 4.33 a
@@ -29,12 +30,21 @@
 #                  ~/c14gen/curated[-<id>]/m.so
 #          WORK=<dir>   profile and generated C (default extract/dsp-module)
 #          JOBS=<n>     parallel generator/gcc jobs (min(14, threads); ~0.8 GB RAM each)
-#          PLAY_S=30|45 seconds the deck plays, each time
+#          PLAY_S=60|45 seconds the deck plays, each time
 #          DSP_MODULE_DIR=<dir>   install there instead of ~/c14gen/<module>
 #          C66X_JIT_LIBDIR   where the DSP core is built (~/build/c6x)
 #
 # --preflight only checks disk space and tools, and says why it would not run.
 # --reuse-profile skips the profile run and builds from the one in WORK.
+# DSP_SUPPLEMENT=1, on a model with MODEL_DSP_SUPPLEMENT_ARGS, also installs
+# m.extra.so (scripts/build/build_dsp_supplement.sh), loaded after m.so; off by
+# default, since its gain was measured on one broad private profile only and
+# not on this short-play one. DSP_SUPPLEMENT_JOBS defaults to 6; both modules
+# share the installed m.stamp. DSP_SUPPLEMENT_PROFILE can name a private
+# profile of a broader workload.
+# A model with MODEL_DSP_LEFTOVER_ARGS instead always gets an m.extra.so built
+# with those options from what the training play still interpreted with the
+# module loaded, unless DSP_SUPPLEMENT=1 asks for the private pass.
 set -uo pipefail
 E="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 . "$E/scripts/cdj_paths.sh"
@@ -48,7 +58,7 @@ export CDJ_MODEL="$MODEL_ID"
 IDLE_SPEC="${MODEL_DSP_IDLE:-}"
 IDLE_HEAD="${IDLE_SPEC%%:*}"; IDLE_HEAD="${IDLE_HEAD:-0x80076F00}"
 # A one-window deck's machine profiles differently from the rig's;
-# a rig player with its own DSP program (the CDJ-TOUR1) names the main loop it
+# a rig player with its own DSP program names the main loop it
 # skips in the same field and is built the way the default player is.
 OLDER=0; [ -z "$IDLE_SPEC" ] || [ "${MODEL_LAUNCH:-rig}" = rig ] || OLDER=1
 WORK="${WORK:-$CDJ_ROOT/extract/dsp-module${CURATED#curated}}"
@@ -59,7 +69,7 @@ DEST="${DSP_MODULE_DIR:-$HOME/c14gen/$CURATED}"
 # The rig player's profile play also sweeps MASTER TEMPO and the tempo fader
 # (scripts/run/warm_jit.py), which takes longer than the plain play of a
 # one-window model.
-if [ "$OLDER" = 1 ]; then PLAY_S="${PLAY_S:-30}"; else PLAY_S="${PLAY_S:-45}"; fi
+if [ "$OLDER" = 1 ]; then PLAY_S="${PLAY_S:-60}"; else PLAY_S="${PLAY_S:-45}"; fi
 NEED_MB=2000
 CORES="$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
 JOBS="${JOBS:-$(( CORES < 14 ? CORES : 14 ))}"
@@ -146,13 +156,32 @@ run make -C "$C6X" -j"$JOBS" "O=$LIBDIR" "$LIBDIR/libc66x.so" ||
 # interpreter -- it replays EXACT and runs no faster than no module.
 played() {  # <warm_jit exit code> <tag>
     if [ "$OLDER" = 1 ]; then
-        [ "$1" = 0 ] || die "the deck never played the track (see /tmp/bridge-main-${2}1.log); run it again"
+        [ "$1" = 0 ]
     else
         pcm="$(grep -a 'nonzero PCM words' "/tmp/bridge-main-${2}1.log" 2>/dev/null | tail -1 |
                sed -n 's/.*nonzero PCM words \([0-9]*\).*/\1/p')"
-        [ "${pcm:-0}" -gt 0 ] ||
-            die "the deck never played the track (no PCM in /tmp/bridge-main-${2}1.log; see /tmp/run-${2}1.txt); run it again"
+        [ "${pcm:-0}" -gt 0 ]
     fi
+}
+# The miss is occasional and the next play usually loads, so a missed play is
+# run once more, from empty output dirs, before giving up.
+play() {  # <tag> <output dirs...> -- <env assignments...>
+    local tag="$1" dirs=() try rc d
+    shift
+    while [ "$1" != -- ]; do dirs+=("$1"); shift; done
+    shift
+    for try in 1 2; do
+        run env "$@" bash "$E/scripts/run/warm_jit.sh" "$tag"
+        rc=$?
+        { [ "$DRY" = 1 ] || played "$rc" "$tag"; } && return 0
+        [ "$try" = 2 ] && break
+        echo "the deck did not play the track; trying once more"
+        for d in "${dirs[@]}"; do rm -rf "$d" && mkdir -p "$d"; done
+    done
+    if [ "$OLDER" = 1 ]; then
+        die "the deck never played the track (see /tmp/bridge-main-${tag}1.log); run it again"
+    fi
+    die "the deck never played the track (no PCM in /tmp/bridge-main-${tag}1.log; see /tmp/run-${tag}1.txt); run it again"
 }
 
 if [ "$REUSE" = 1 ] && [ -s "$PROF/profile.txt" ]; then
@@ -160,11 +189,12 @@ if [ "$REUSE" = 1 ] && [ -s "$PROF/profile.txt" ]; then
     echo "using the profile already in $WORK"
 else
     stage "2/4 profiling one deck with no module ($PLAY_S s of play; slower than real time)"
+    # Decks left running starve the profiled one until it misses its load.
+    stale="$(pgrep qemu-system 2>/dev/null | wc -l | tr -d ' ')"
+    [ "$DRY" = 1 ] || [ "${stale:-0}" = 0 ] ||
+        die "$stale QEMU process(es) still running: ./start.sh stop, or pkill -9 -f qemu-system, then run this again"
     [ "$DRY" = 1 ] || { rm -rf "$PROF" && mkdir -p "$PROF"; }
-    run env MODULE=none AUTOJIT=0 PLAY_S="$PLAY_S" C66X_JIT_PROFILE="$(native "$PROF")" \
-        bash "$E/scripts/run/warm_jit.sh" prof
-    prof_rc=$?
-    [ "$DRY" = 1 ] || played "$prof_rc" prof
+    play prof "$PROF" -- MODULE=none AUTOJIT=0 PLAY_S="$PLAY_S" C66X_JIT_PROFILE="$(native "$PROF")"
 fi
 if [ "$DRY" = 0 ]; then
     [ -s "$PROF/profile.txt" ] || die "no profile in $PROF: the deck did not shut down cleanly"
@@ -181,8 +211,10 @@ if [ "$OLDER" = 1 ]; then
     # shellcheck disable=SC2206  # the profile's options are words
     GEN_ARGS+=(--idle-head "$IDLE_HEAD" $MODEL_DSP_GEN_ARGS)
 else
+    # The rig players' DSP program never sets a directed rounding mode, so their
+    # float ops compile to plain host ops.
     GEN_ARGS+=(--idle-head "$IDLE_HEAD" --clean-prof "$(native "$PROF")" --clean-roots 2000
-               --qprof "$(native "$PROF")")
+               --qprof "$(native "$PROF")" --nearest)
 fi
 run python3 "$C6X/tools/c14_jitgen.py" "$(native "$PROF")" "$(native "$GEN")/m" \
     --lib "$(native "$LIBDIR/libc66x.so")" --no-cc "${GEN_ARGS[@]}" \
@@ -219,10 +251,18 @@ else
         "-fprofile-dir=$(native "$PGO_DIR")" || die "the instrumented build failed"
 fi
 # The counts are written when the deck quits and the module is unloaded.
-run env MODULE=none AUTOJIT=0 PLAY_S="$PLAY_S" DSP_TRAIN_MODULE="$(native "$OBJ/m.so")" \
-    bash "$E/scripts/run/warm_jit.sh" train
-train_rc=$?
-[ "$DRY" = 1 ] || played "$train_rc" train
+# A leftover supplement is generated from what this play still interprets: the
+# instrumented build has the same regions as the profiled one.
+LEFT="$WORK/leftover"
+LEFT_KNOB=()
+TRAIN_DIRS=("$PGO_DIR")
+if [ -n "${MODEL_DSP_LEFTOVER_ARGS:-}" ]; then
+    [ "$DRY" = 1 ] || { rm -rf "$LEFT" && mkdir -p "$LEFT"; }
+    LEFT_KNOB=(C66X_JIT_PROFILE="$(native "$LEFT")")
+    TRAIN_DIRS+=("$LEFT")
+fi
+play train "${TRAIN_DIRS[@]}" -- MODULE=none AUTOJIT=0 PLAY_S="$PLAY_S" DSP_TRAIN_MODULE="$(native "$OBJ/m.so")" \
+    "${LEFT_KNOB[@]}"
 if [ "$DRY" = 0 ]; then
     n="$(find "$PGO_DIR" -name "$([ "$CLANG" = 1 ] && echo '*.profraw' || echo '*.gcda')" | wc -l)"
     [ "$n" -gt 0 ] || die "the training run wrote no profile (see /tmp/bridge-main-train1.log)"
@@ -236,10 +276,36 @@ else
         -Wno-missing-profile "-fprofile-dir=$(native "$PGO_DIR")" || die "the profiled build failed"
 fi
 
+# A separate, bounded pass preserves the curated pass's loops and queued
+# branches. The core loads it second so its regions override overlapping roots.
+EXTRA="$WORK/supplement"
+SUPPLEMENT=0
+SUPP_PROF="${DSP_SUPPLEMENT_PROFILE:-$PROF}"
+SUPP_ARGS="${MODEL_DSP_SUPPLEMENT_ARGS:-}"
+if [ "${DSP_SUPPLEMENT:-0}" = 1 ] && [ -n "$SUPP_ARGS" ]; then
+    SUPPLEMENT=1
+elif [ -n "${MODEL_DSP_LEFTOVER_ARGS:-}" ]; then
+    SUPPLEMENT=1
+    SUPP_PROF="$LEFT"
+    SUPP_ARGS="$MODEL_DSP_LEFTOVER_ARGS"
+    [ "$DRY" = 1 ] || [ -s "$LEFT/profile.txt" ] ||
+        die "the training run wrote no leftover profile (see /tmp/bridge-main-train1.log)"
+fi
+if [ "$SUPPLEMENT" = 1 ]; then
+    [ "$DRY" = 1 ] || rm -rf "$EXTRA"
+    run env C66X_JIT_LIBDIR="$LIBDIR" JOBS="${DSP_SUPPLEMENT_JOBS:-6}" DSP_SUPPLEMENT_ARGS="$SUPP_ARGS" \
+        bash "$E/scripts/build/build_dsp_supplement.sh" "$SUPP_PROF" "$EXTRA" ||
+        die "the supplemental generator/build failed"
+fi
 run mkdir -p "$DEST"
 run rm -f "$DEST/m.stamp"
 run cp "$OBJ/m.so" "$DEST/m.so.new"
 run mv -f "$DEST/m.so.new" "$DEST/m.so"
+run rm -f "$DEST/m.extra.so"
+if [ "$SUPPLEMENT" = 1 ]; then
+    run cp "$EXTRA/m.so" "$DEST/m.extra.so.new"
+    run mv -f "$DEST/m.extra.so.new" "$DEST/m.extra.so"
+fi
 run env PYTHONPATH="$(native "$E")" python3 -m launcher dsp-stamp "$(native "$DEST")" ||
     die "the module was installed but its stamp was not written"
 [ "$DRY" = 1 ] || rm -f "$OBJ"/*.o

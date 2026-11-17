@@ -421,6 +421,9 @@ def add_app(app):
                 _copy(src, os.path.join(c6x, os.path.relpath(src, os.path.join(EMU, C6X))))
     for f in ("README.md", "requirements.txt"):
         shutil.copy2(os.path.join(EMU, f), app)
+    # The README links into docs/; the screenshots stay online.
+    shutil.copytree(os.path.join(EMU, "docs"), os.path.join(app, "docs"),
+                    ignore=shutil.ignore_patterns("img"))
 
 
 def check_compiler(runtime, cc, app):

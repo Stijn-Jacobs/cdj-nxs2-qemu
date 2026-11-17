@@ -1,5 +1,5 @@
 diff --git a/target/sh4/cpu-qom.h b/target/sh4/cpu-qom.h
-index 6cf5fbb..3ca285e 100644
+index 6cf5fbb0..3ca285ee 100644
 --- a/target/sh4/cpu-qom.h
 +++ b/target/sh4/cpu-qom.h
 @@ -27,6 +27,8 @@

@@ -35,6 +35,9 @@ typedef struct CdjDmacState {
     uint32_t dreq_pending;
     QEMUBH *dreq_bh;
     hwaddr dreq_base, dreq_size;    /* the FIFO window, size 0 = none */
+    /* A fixed FIFO port that moves one whole burst per transfer; NULL none. */
+    hwaddr fifo_port;
+    bool (*fifo_transfer)(bool, uint8_t *, unsigned);
     Notifier exit;
     uint32_t nread[CDJ_DMAC_SIZE / 4];
     uint32_t reg[CDJ_DMAC_SIZE / 4];
@@ -167,11 +170,41 @@ static void cdj_dmac_run(CdjDmacState *s, hwaddr chan, bool from_dreq)
         return;
     }
 
+    /* SDHI moves one staged block through a fixed FIFO even when the TS
+     * burst is wider than its 16-bit MMIO port. Do not advance along MMIO. */
+    if (s->fifo_transfer &&
+        ((sm == 0 && A7ADDR(sar) == s->fifo_port) ||
+         (dm == 0 && A7ADDR(dar) == s->fifo_port))) {
+        bool writing = dm == 0 && A7ADDR(dar) == s->fifo_port;
+        if (len > 512 || (writing ? sm : dm) != 1) {
+            /* TE stays clear: never claim a transfer that did not happen. */
+            qemu_log_mask(LOG_GUEST_ERROR, "dmac: ch %d FIFO burst refused "
+                          "(len %" PRIu64 ", SM=%u DM=%u)\n",
+                          cdj_dmac_chan_num(chan), len, sm, dm);
+            return;
+        }
+        buf = g_malloc(len);
+        if (writing) {
+            physical_memory_read(A7ADDR(sar), buf, len);
+        }
+        if (!s->fifo_transfer(writing, buf, len)) {
+            return;
+        }
+        if (!writing) {
+            physical_memory_write(A7ADDR(dar), buf, len);
+        }
+        s->reg[(chan + 0x00) / 4] = sar + (writing ? len : 0);
+        s->reg[(chan + 0x04) / 4] = dar + (writing ? 0 : len);
+        s->reg[(chan + 0x08) / 4] = 0;
+        cdj_dmac_complete(s, chan, false);
+        return;
+    }
+
     if (sm == 1 && dm == 1) {
         /* Plain memcpy, the hot path: one bulk copy. */
         buf = g_malloc(len);
-        cpu_physical_memory_read(A7ADDR(sar), buf, len);
-        cpu_physical_memory_write(A7ADDR(dar), buf, len);
+        physical_memory_read(A7ADDR(sar), buf, len);
+        physical_memory_write(A7ADDR(dar), buf, len);
         s->reg[(chan + 0x00) / 4] = sar + len;
         s->reg[(chan + 0x04) / 4] = dar + len;
         s->reg[(chan + 0x08) / 4] = 0;
@@ -182,8 +215,8 @@ static void cdj_dmac_run(CdjDmacState *s, hwaddr chan, bool from_dreq)
     buf = g_malloc(unit);
     /* One unit at a time, so a fixed end stays put. */
     while (tcr--) {
-        cpu_physical_memory_read(A7ADDR(sar), buf, unit);
-        cpu_physical_memory_write(A7ADDR(dar), buf, unit);
+        physical_memory_read(A7ADDR(sar), buf, unit);
+        physical_memory_write(A7ADDR(dar), buf, unit);
         if (sm == 1) {
             sar += unit;
         } else if (sm == 2) {
@@ -200,7 +233,7 @@ static void cdj_dmac_run(CdjDmacState *s, hwaddr chan, bool from_dreq)
         char hex[3 * sizeof(head) + 1];
         unsigned k;
 
-        cpu_physical_memory_read(A7ADDR(s->reg[(chan + 0x04) / 4]), head,
+        physical_memory_read(A7ADDR(s->reg[(chan + 0x04) / 4]), head,
                                  sizeof(head));
         for (k = 0; k < sizeof(head); k++) {
             snprintf(hex + 3 * k, 4, "%02x ", head[k]);
@@ -209,7 +242,7 @@ static void cdj_dmac_run(CdjDmacState *s, hwaddr chan, bool from_dreq)
                     "head: %s", (unsigned)chan, len,
                     s->reg[(chan + 0x04) / 4], hex);
         /* The tail shows whether a sector arrived (an MBR ends 55 aa). */
-        cpu_physical_memory_read(A7ADDR(s->reg[(chan + 0x04) / 4]) + len - 16,
+        physical_memory_read(A7ADDR(s->reg[(chan + 0x04) / 4]) + len - 16,
                                  head, sizeof(head));
         for (k = 0; k < sizeof(head); k++) {
             snprintf(hex + 3 * k, 4, "%02x ", head[k]);
@@ -392,6 +425,14 @@ void cdj_dmac_dei_connect(unsigned ch, qemu_irq irq)
 {
     assert(cdj_dmac && ch >= 4 && ch < DMAC_CHANNELS);
     cdj_dmac_dei_attach(cdj_dmac, ch, irq, 0);
+}
+
+void cdj_dmac_fifo_connect(hwaddr port,
+                          bool (*transfer)(bool, uint8_t *, unsigned))
+{
+    assert(cdj_dmac);
+    cdj_dmac->fifo_port = A7ADDR(port);
+    cdj_dmac->fifo_transfer = transfer;
 }
 
 /* dei[] gives the first four channels' DEI lines, a NULL line leaving that

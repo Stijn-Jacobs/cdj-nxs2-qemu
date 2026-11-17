@@ -70,6 +70,10 @@ static struct intc_vect cdj_intc_vectors[] = {
      * 0x08326E50, 0x08326E62 and 0x08326EAE. */
     INTC_VECT(CDJ_DMAC1B_DEI4, 0xB00), INTC_VECT(CDJ_DMAC1B_DEI5, 0xB20),
     INTC_VECT(CDJ_MSIOFI0, 0xC80),
+    /* SCIF0 (ERI/RXI/BRI/TXI muxed), H'C00, IPRG [15:12], IMR5 bit 0.
+     * The CDJ-900NXS console driver (init 0x0892D490) writes IPRG = 0x4000
+     * and IMCR5 |= 0x01 and is purely interrupt driven. */
+    INTC_VECT(CDJ_SCIF0, 0xC00),
 };
 
 /* Sources sharing one priority field are an sh_intc group: the group
@@ -105,7 +109,8 @@ static struct intc_mask_reg cdj_intc_mask_registers[] = {
     /* IMR4/IMCR4: -, TUNI2, TUNI1, TUNI0 (TMU0), JPUI, -, -, LCDCI */
     { IMCR(4), IMR(4), 8, { 0, CDJ_TMU0_TUNI2, CDJ_TMU0_TUNI1, CDJ_TMU0_TUNI0,
                             0, 0, 0, CDJ_LCDCI } },
-    { IMCR(5),  IMR(5),  8, { 0 } },
+    /* IMR5/IMCR5: ..., SCIF2, SCIF1, SCIF0 in bits 2..0. */
+    { IMCR(5),  IMR(5),  8, { 0, 0, 0, 0, 0, 0, 0, CDJ_SCIF0 } },
     /* IMR6/IMCR6: -, -, ICBI, SCIFA4, CEU1I, -, MSIOFI1, MSIOFI0. The
      * firmware writes IMCR6 = 0x01 (MSIOFI0). */
     { IMCR(6),  IMR(6),  8, { 0, 0, 0, 0, 0, 0, 0, CDJ_MSIOFI0 } },
@@ -145,7 +150,8 @@ static struct intc_prio_reg cdj_intc_prio_registers[] = {
     { IPR(4),  0, 16, 4, { CDJ_DMAC0A, 0, 0, 0 } },
     /* IPRF: KEYSC [15:12], DMAC0B [11:8], USB0/USB1 [7:4], CMT [3:0] */
     { IPR(5),  0, 16, 4, { 0, 0, CDJ_USBI, 0 } },
-    { IPR(6),  0, 16, 4, { 0 } },
+    /* IPRG: SCIF0 [15:12], SCIF1 [11:8], SCIF2 [7:4]. */
+    { IPR(6),  0, 16, 4, { CDJ_SCIF0, 0, 0, 0 } },
     /* IPRH: MSIOFI0 [15:12], MSIOFI1 [11:8], I2C1 [7:4], I2C0 [3:0]. The IIC
      * channels set their nibbles at 0x083AF952 and 0x083AF9A8. */
     { IPR(7),  0, 16, 4, { CDJ_MSIOFI0, 0, CDJ_IIC1, CDJ_IIC0 } },
@@ -175,8 +181,8 @@ void cdj_intc_init(MemoryRegion *sysmem, SuperHCPU *cpu)
 }
 
 /* CDJ_IRQ5_PROBE_MS=<period>: toggle IRQ5 on a timer. The firmware enables
- * IRQ5 but nothing on this board drives it; probably the SCIFA4 peer's
- * signal line. A probe, not a model. */
+ * IRQ5, the PHY's INT# pin (cdj_ether.c drives it). A probe on top of that
+ * model, not a model. */
 static QEMUTimer *cdj_irq5_timer;
 static int64_t cdj_irq5_period_ms;
 static unsigned cdj_irq5_pulses;

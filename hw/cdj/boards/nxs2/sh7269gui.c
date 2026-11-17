@@ -13,22 +13,28 @@
 #include "qemu/osdep.h"
 #include "qemu/units.h"
 #include "qemu/timer.h"
+#include "qemu/thread.h"
 #include "qemu/error-report.h"
 #include "qapi/error.h"
 #include "cpu.h"
-#include "hw/sysbus.h"
-#include "hw/boards.h"
-#include "hw/loader.h"
+#include "hw/core/sysbus.h"
+#include "hw/core/boards.h"
+#include "hw/core/loader.h"
 #include "hw/misc/unimp.h"
-#include "sysemu/sysemu.h"
-#include "sysemu/reset.h"
-#include "exec/address-spaces.h"
+#include "system/system.h"
+#include "system/reset.h"
+#include "system/address-spaces.h"
+#include "system/physmem.h"
 #include "chardev/char-fe.h"
 #include "ui/console.h"
 #include "ui/input.h"
 #include "migration/vmstate.h"
 #include "cdj_panelkeys.h"
 #include "cdj_gui_keys.h"
+#include "cdj_link_ring.h"
+#ifdef __EMSCRIPTEN__
+#include "web_display.h"
+#endif
 
 
 /*
@@ -42,7 +48,7 @@
  * Without the chardev the link is absent.
  */
 typedef struct {
-    CharBackend chr;
+    CharFrontend chr;
     bool present;
     GByteArray *rx;                  /* bytes from the peer, not yet consumed */
     GArray *rx_hash;                 /* one hash per COMPLETE frame in rx */
@@ -526,11 +532,10 @@ static int spilink_pre_save(void *opaque)
     return 0;
 }
 
-static int spilink_post_save(void *opaque)
+static void spilink_post_save(void *opaque)
 {
     spilink.mig_rx = NULL;
     spilink.mig_hash = NULL;
-    return 0;
 }
 
 static int spilink_post_load(void *opaque, int version_id)
@@ -573,11 +578,18 @@ static void spilink_init(void)
 {
     Chardev *c = qemu_chr_find("spilink");
 
+    if (!c) {
+        c = cdj_link_ring_chardev("spilink");
+    }
     spilink.rx = g_byte_array_new();
     spilink.rx_hash = g_array_new(FALSE, FALSE, sizeof(uint32_t));
     spilink.rx_count = g_hash_table_new(g_direct_hash, g_direct_equal);
     vmstate_register_any(NULL, &vmstate_spilink, &spilink);
     if (!c) {
+#ifdef __EMSCRIPTEN__
+        spilink.present = true;
+        info_report("sh7269gui: SPI link fed by the page's recording");
+#endif
         return;
     }
     qemu_chr_fe_init(&spilink.chr, c, &error_abort);
@@ -663,6 +675,31 @@ static void sh2a_ack(SuperHCPU *cpu, uint16_t vec)
     sh2a_irq_pump(NULL);        /* let anything queued behind it through */
 }
 
+/*
+ * The pump presents the highest level first, so a request taken from the
+ * middle of the ring leaves a hole that is only reclaimed once the head gets
+ * there. A masked request at the head lets the holes behind it fill the ring,
+ * and a dropped DEI4 kills the display link, so a full ring is squeezed
+ * before anything is added to it.
+ */
+static void sh2a_irq_compact(void)
+{
+    unsigned i, n;
+
+    if ((sh2a_irq.tail + 1) % SH2A_IRQ_QUEUE_LEN != sh2a_irq.head) {
+        return;
+    }
+    n = sh2a_irq.head;
+    for (i = sh2a_irq.head; i != sh2a_irq.tail;
+         i = (i + 1) % SH2A_IRQ_QUEUE_LEN) {
+        if (sh2a_irq.q[i].used) {
+            sh2a_irq.q[n] = sh2a_irq.q[i];
+            n = (n + 1) % SH2A_IRQ_QUEUE_LEN;
+        }
+    }
+    sh2a_irq.tail = n;
+}
+
 static void sh2a_irq_pump(void *opaque)
 {
     CPUState *cs;
@@ -680,8 +717,13 @@ static void sh2a_irq_pump(void *opaque)
      * Present the highest-level pending request, not the oldest. SH-2A only
      * accepts a request above SR.IMASK; strict FIFO let a masked DEI (level 3)
      * block every CMI0 tick (level 8) queued behind it. A higher-level raise
-     * preempts a standing request, which goes back in the queue.
+     * preempts a standing request, which goes back in the queue, but only
+     * while the CPU cannot take it: the vCPU accepts a request only after the
+     * main loop drops the BQL, and the pump and the CMI0 timer expire in the
+     * same pass, so a tick allowed to displace an unmasked DEI would do so
+     * every pass and the link task would time out on the lost transfer end.
      */
+    sh2a_irq_compact();
     {
         unsigned i, best = SH2A_IRQ_QUEUE_LEN;
         int best_level = -1;
@@ -705,7 +747,9 @@ static void sh2a_irq_pump(void *opaque)
         if (best != SH2A_IRQ_QUEUE_LEN &&
             (cs->interrupt_request & CPU_INTERRUPT_HARD) && prio &&
             sh2a_irq.cur_valid &&
-            sh2a_irq.q[best].level > sh2a_irq.cur_level) {
+            sh2a_irq.q[best].level > sh2a_irq.cur_level &&
+            ((sh2a_irq.cpu->env.sr & (1u << SR_BL)) ||
+             sh2a_irq.cur_level <= ((sh2a_irq.cpu->env.sr >> 4) & 0xf))) {
             /* Preempt: the standing request goes back into the queue. */
             unsigned n = (sh2a_irq.tail + 1) % SH2A_IRQ_QUEUE_LEN;
 
@@ -849,6 +893,7 @@ static void sh2a_raise(SuperHCPU *cpu, uint16_t vec, uint8_t level)
         }
     }
 
+    sh2a_irq_compact();
     next = (sh2a_irq.tail + 1) % SH2A_IRQ_QUEUE_LEN;
     if (next == sh2a_irq.head) {
         /* Full. */
@@ -877,12 +922,26 @@ static void sh2a_raise(SuperHCPU *cpu, uint16_t vec, uint8_t level)
  *   +0x04 CMCNT_0  up-counter
  *   +0x06 CMCOR_0  compare value
  *
- * A periodic QEMU timer fires at the CMCOR interval; CMCNT is synthesised on
- * read from the time remaining.
+ * A QEMU timer fires at the CMCOR interval; CMCNT is synthesised on read from
+ * the time remaining.
+ *
+ * CMCNT clears on a match and counts on, so each match is one period after the
+ * previous one, however late the timer callback or the handler's CMF clear
+ * runs. Without icount the virtual clock is host time and the main loop wakes
+ * 2-3.5 ms late on Windows; restarting the period from either of those lost
+ * the late part of every tick for good. A match that falls due while CMF is
+ * still set is delivered at the handler's clear instead of merged into the
+ * pending one: the lateness is the host's, the guest was not slow.
+ *
+ * The backlog is capped at SH7269_CMT_MAX_LAG periods, then the tick slips.
+ * 16 covers a whole 15.6 ms default Windows timer quantum, the longest
+ * ordinary main-loop wakeup gap; a longer stall would replay every RTOS
+ * timeout due in it back to back, e.g. the link task's ~1000-tick wait.
  */
 #define SH7269_CMT_BASE     0xFFFEC000
 #define SH7269_CMT_PCLK     33333333    /* peripheral clock, best estimate */
 #define SH7269_CMI0_VECTOR  188         /* CMI0, hardware manual table 7.4 */
+#define SH7269_CMT_MAX_LAG  16
 
 typedef struct {
     MemoryRegion iomem;
@@ -936,11 +995,35 @@ static void cmt_rearm(Sh7269Cmt *s)
     timer_mod(s->timer, s->next_ns);
 }
 
+/* Deliver the match that is due, if CMF is free to take it. */
+static void cmt_match(Sh7269Cmt *s)
+{
+    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    int64_t late = now - (int64_t)s->next_ns;
+
+    if (!s->period_ns || late < 0 || (s->cmcsr & 0x80)) {
+        return;
+    }
+    if (late > SH7269_CMT_MAX_LAG * (int64_t)s->period_ns) {
+        s->next_ns = now;
+    }
+
+    s->cmcsr |= 0x80;                    /* CMF */
+    if (s->cmcsr & 0x40) {               /* CMIE */
+        /* CMI0 is vector 188; the firmware sets IPR12 = 0x8000 (level 8).
+         * Vector 175 is VFIELD (VDC4), not the timer. */
+        sh2a_raise(s->cpu, SH7269_CMI0_VECTOR, 8);
+    }
+
+    s->next_ns += s->period_ns;
+    if ((int64_t)s->next_ns > now) {
+        timer_mod(s->timer, s->next_ns);
+    }
+}
+
 static void cmt_fire(void *opaque)
 {
     Sh7269Cmt *s = opaque;
-
-    s->cmcsr |= 0x80;                    /* CMF */
 
     if (getenv("CDJ_GUI_CMT_DEBUG")) {
         static int scanned;
@@ -955,7 +1038,7 @@ static void cmt_fire(void *opaque)
                 uint8_t b[4];
                 uint32_t slot;
 
-                cpu_physical_memory_read(vbr + v * 4, b, 4);
+                physical_memory_read(vbr + v * 4, b, 4);
                 slot = ((uint32_t)b[0] << 24) | ((uint32_t)b[1] << 16) |
                        ((uint32_t)b[2] << 8) | b[3];
                 if ((slot >= 0x0E500000 && slot < 0x0E600000) ||
@@ -973,13 +1056,7 @@ static void cmt_fire(void *opaque)
         }
     }
 
-    if (s->cmcsr & 0x40) {               /* CMIE */
-        /* CMI0 is vector 188; the firmware sets IPR12 = 0x8000 (level 8).
-         * Vector 175 is VFIELD (VDC4), not the timer. */
-        sh2a_raise(s->cpu, SH7269_CMI0_VECTOR, 8);
-    }
-
-    cmt_rearm(s);
+    cmt_match(s);
 }
 
 static uint64_t cmt_read(void *opaque, hwaddr off, unsigned size)
@@ -1021,15 +1098,22 @@ static void cmt_write(void *opaque, hwaddr off, uint64_t val, unsigned size)
         s->cmstr = val;
         cmt_rearm(s);
         break;
-    case 0x02:
+    case 0x02: {
+        bool cks_changed = (s->cmcsr ^ val) & 3;
+
         /* CMF is write-0-to-clear; the handler's ack drops the request. */
         if (!(val & 0x80)) {
             s->cmcsr &= ~0x80;
             sh2a_ack(s->cpu, SH7269_CMI0_VECTOR);
         }
         s->cmcsr = (s->cmcsr & 0x80) | (val & 0x7f);
-        cmt_rearm(s);
+        if (cks_changed) {
+            cmt_rearm(s);
+        } else {
+            cmt_match(s);
+        }
         break;
+    }
     case 0x04: s->cmcnt = val; break;
     case 0x06: s->cmcor = val; cmt_rearm(s); break;
     default:   break;
@@ -1500,6 +1584,26 @@ static void dmac_run(Sh7269Dmac *s, unsigned ch)
                 break;
             }
         }
+#ifdef __EMSCRIPTEN__
+        /*
+         * The recording holds exactly what each receive got natively, so take
+         * the next `need` bytes whole: the firmware sees the recorded stream
+         * in order at whatever speed it runs here. A heartbeat taken this way
+         * is what CDJ_GUI_LINK_IDLE_MS repeats while the recording is held
+         * back.
+         */
+        if (!qemu_chr_fe_backend_connected(&spilink.chr) && !spilink.rx->len) {
+            g_byte_array_set_size(spilink.rx, need);
+            if (cdj_wasm_link_take(spilink.rx->data, need)) {
+                if (need == SPILINK_FRAME && spilink_is_heartbeat(spilink.rx->data)) {
+                    memcpy(spilink.last_hb, spilink.rx->data, need);
+                    spilink.have_hb = true;
+                }
+            } else {
+                g_byte_array_set_size(spilink.rx, 0);
+            }
+        }
+#endif
         if (spilink.rx->len < need) {
             if (getenv("CDJ_GUI_DMA_DEBUG") && !s->pending[ch]) {
                 info_report("dmac: ch%u rx deferred, have %u of %u bytes",
@@ -1680,7 +1784,7 @@ static void dmac_run(Sh7269Dmac *s, unsigned ch)
                 uint32_t chain[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
                 unsigned found = 0, w;
 
-                cpu_physical_memory_read(sp, buf, sizeof(buf));
+                physical_memory_read(sp, buf, sizeof(buf));
                 for (w = 0; w < sizeof(buf) / 4 && found < 8; w++) {
                     uint32_t v = ldl_be_p(buf + w * 4);
 
@@ -2285,7 +2389,7 @@ static void present_fps_init(void)
 
 static void lcd_present(Sh7269Lcd *s)
 {
-    dpy_gfx_update_full(s->con);
+    qemu_console_update_full(s->con);
     if (present_fps) {
         int64_t sec = (qemu_clock_get_ms(QEMU_CLOCK_REALTIME)
                        - present_fps->start_ms) / 1000;
@@ -2317,7 +2421,7 @@ static void gui_refresh_tick(void *opaque)
 {
     Sh7269Lcd *s = opaque;
 
-    graphic_hw_update(s->con);
+    qemu_console_hw_update(s->con);
     timer_mod(s->refresh_timer,
               qemu_clock_get_ms(QEMU_CLOCK_REALTIME) + s->refresh_period_ms);
 }
@@ -2337,7 +2441,7 @@ static void gui_refresh_timer_init(Sh7269Lcd *s)
                 "QEMU's 30 ms refresh timer (CDJ_GUI_REFRESH_MS)", ms);
 }
 
-static void lcd_update(void *opaque)
+static bool lcd_update(void *opaque)
 {
     Sh7269Lcd *s = opaque;
     DisplaySurface *surf = qemu_console_surface(s->con);
@@ -2351,18 +2455,18 @@ static void lcd_update(void *opaque)
     if (reg) {
         uint32_t base = 0;
 
-        cpu_physical_memory_read(reg, &base, 4);
+        physical_memory_read(reg, &base, 4);
         base = be32_to_cpu(base);
         if (base) {
             if (!s->vdc_copy) {
                 s->vdc_copy = g_malloc0(SH7269_LCD_BYTES);
                 s->vdc_prev = g_malloc0(SH7269_LCD_BYTES);
             }
-            cpu_physical_memory_read(base, s->vdc_copy, SH7269_LCD_BYTES);
+            physical_memory_read(base, s->vdc_copy, SH7269_LCD_BYTES);
             /* No dirty log on this memory, so diff against the last frame. */
             if (!s->invalid
                 && !memcmp(s->vdc_copy, s->vdc_prev, SH7269_LCD_BYTES)) {
-                return;
+                return true;
             }
             memcpy(s->vdc_prev, s->vdc_copy, SH7269_LCD_BYTES);
             s->invalid = false;
@@ -2381,7 +2485,7 @@ static void lcd_update(void *opaque)
                 }
             }
             lcd_present(s);
-            return;
+            return true;
         }
     }
 
@@ -2415,7 +2519,7 @@ static void lcd_update(void *opaque)
     /* CDJ_GUI_LCD_FORCE: always repaint (gdbstub writes set no dirty bit). */
     if (!s->invalid && !changed && !getenv("CDJ_GUI_LCD_FORCE")) {
         g_free(snap);
-        return;
+        return true;
     }
     g_free(snap);
     s->dirty = false;
@@ -2440,7 +2544,7 @@ static void lcd_update(void *opaque)
             }
         }
         lcd_present(s);
-        return;
+        return true;
     }
 
     for (y = 0; y < SH7269_LCD_HEIGHT; y++) {
@@ -2481,6 +2585,7 @@ static void lcd_update(void *opaque)
             }
         }
     }
+    return true;
 }
 
 static void lcd_invalidate(void *opaque)
@@ -2505,6 +2610,13 @@ static void lcd_invalidate(void *opaque)
  *   end u32 started   sequence number of the frame being written
  * A frame is written as started, pixels, done. A reader that reads the file
  * front to back and finds done == started has a whole frame.
+ *
+ * The file is written by a thread of its own. A write can block for a second
+ * when the file sits on a slow disk (Windows throttles a writer whose dirty
+ * pages the disk cannot take), and on the main loop that held the BQL and
+ * stopped the display CPU with it: no CMI0 tick taken, no link transfer, the
+ * screen frozen. A frame that comes while the last is being written replaces
+ * the one waiting.
  */
 #define CDJ_FRAME_HDR 32
 
@@ -2512,8 +2624,12 @@ static struct {
     FILE *f;
     QEMUTimer *timer;
     unsigned period_ms;
-    uint8_t *cur, *prev;
-    uint32_t seq;
+    uint8_t *cur, *prev, *next, *out;
+    bool sent;
+    QemuThread thread;
+    QemuMutex lock;
+    QemuCond ready;
+    bool pending;
 } gui_frame;
 
 static void gui_frame_put32(long off, uint32_t v)
@@ -2532,26 +2648,49 @@ static void gui_frame_tick(void *opaque)
     timer_mod(gui_frame.timer, qemu_clock_get_ms(QEMU_CLOCK_REALTIME)
                                + gui_frame.period_ms);
     if (reg) {
-        cpu_physical_memory_read(reg, &base, 4);
+        physical_memory_read(reg, &base, 4);
         base = be32_to_cpu(base);
     }
     if (base) {
-        cpu_physical_memory_read(base, gui_frame.cur, SH7269_LCD_BYTES);
+        physical_memory_read(base, gui_frame.cur, SH7269_LCD_BYTES);
     } else {
         memcpy(gui_frame.cur, s->fb + SH7269_LCD_OFFSET, SH7269_LCD_BYTES);
     }
-    if (gui_frame.seq && !memcmp(gui_frame.cur, gui_frame.prev, SH7269_LCD_BYTES)) {
+    if (gui_frame.sent && !memcmp(gui_frame.cur, gui_frame.prev, SH7269_LCD_BYTES)) {
         return;
     }
     memcpy(gui_frame.prev, gui_frame.cur, SH7269_LCD_BYTES);
-    gui_frame.seq++;
-    gui_frame_put32(CDJ_FRAME_HDR + SH7269_LCD_BYTES, gui_frame.seq);
-    fflush(gui_frame.f);
-    fseek(gui_frame.f, CDJ_FRAME_HDR, SEEK_SET);
-    fwrite(gui_frame.cur, 1, SH7269_LCD_BYTES, gui_frame.f);
-    fflush(gui_frame.f);
-    gui_frame_put32(8, gui_frame.seq);
-    fflush(gui_frame.f);
+    gui_frame.sent = true;
+    qemu_mutex_lock(&gui_frame.lock);
+    memcpy(gui_frame.next, gui_frame.cur, SH7269_LCD_BYTES);
+    gui_frame.pending = true;
+    qemu_cond_signal(&gui_frame.ready);
+    qemu_mutex_unlock(&gui_frame.lock);
+}
+
+static void *gui_frame_writer(void *opaque)
+{
+    uint32_t seq = 0;
+
+    for (;;) {
+        qemu_mutex_lock(&gui_frame.lock);
+        while (!gui_frame.pending) {
+            qemu_cond_wait(&gui_frame.ready, &gui_frame.lock);
+        }
+        memcpy(gui_frame.out, gui_frame.next, SH7269_LCD_BYTES);
+        gui_frame.pending = false;
+        qemu_mutex_unlock(&gui_frame.lock);
+
+        seq++;
+        gui_frame_put32(CDJ_FRAME_HDR + SH7269_LCD_BYTES, seq);
+        fflush(gui_frame.f);
+        fseek(gui_frame.f, CDJ_FRAME_HDR, SEEK_SET);
+        fwrite(gui_frame.out, 1, SH7269_LCD_BYTES, gui_frame.f);
+        fflush(gui_frame.f);
+        gui_frame_put32(8, seq);
+        fflush(gui_frame.f);
+    }
+    return NULL;
 }
 
 static void gui_frame_init(Sh7269Lcd *s)
@@ -2564,7 +2703,13 @@ static void gui_frame_init(Sh7269Lcd *s)
     if (!path || !*path) {
         return;
     }
+#ifdef _WIN32
+    /* "T": a temporary file, which Windows keeps in its cache instead of
+     * writing it back, so a slow disk does not limit the frame rate. */
+    gui_frame.f = fopen(path, "w+bT");
+#else
     gui_frame.f = fopen(path, "w+b");
+#endif
     if (!gui_frame.f) {
         warn_report("CDJ_GUI_FRAME_FILE: cannot open %s: %s", path,
                     strerror(errno));
@@ -2576,9 +2721,15 @@ static void gui_frame_init(Sh7269Lcd *s)
     fwrite(hdr, 1, sizeof(hdr), gui_frame.f);
     gui_frame.cur = g_malloc0(SH7269_LCD_BYTES);
     gui_frame.prev = g_malloc0(SH7269_LCD_BYTES);
+    gui_frame.next = g_malloc0(SH7269_LCD_BYTES);
+    gui_frame.out = g_malloc0(SH7269_LCD_BYTES);
     fwrite(gui_frame.cur, 1, SH7269_LCD_BYTES, gui_frame.f);
     gui_frame_put32(CDJ_FRAME_HDR + SH7269_LCD_BYTES, 0);
     fflush(gui_frame.f);
+    qemu_mutex_init(&gui_frame.lock);
+    qemu_cond_init(&gui_frame.ready);
+    qemu_thread_create(&gui_frame.thread, "cdj-frames", gui_frame_writer, NULL,
+                       QEMU_THREAD_DETACHED);
     gui_frame.period_ms = MAX(1000 / rate, 1);
     gui_frame.timer = timer_new_ms(QEMU_CLOCK_REALTIME, gui_frame_tick, s);
     timer_mod(gui_frame.timer, qemu_clock_get_ms(QEMU_CLOCK_REALTIME));
@@ -2620,7 +2771,7 @@ static void band_fps_sample(void *opaque)
 
     /* the frame lcd_update shows: the VDC's buffer, or LCD memory */
     if (reg) {
-        cpu_physical_memory_read(reg, &base, 4);
+        physical_memory_read(reg, &base, 4);
         base = be32_to_cpu(base);
     }
     for (y = BAND_Y0; y < BAND_Y1; y++) {
@@ -2629,7 +2780,7 @@ static void band_fps_sample(void *opaque)
         uint8_t row[BAND_ROW_BYTES];
 
         if (base) {
-            cpu_physical_memory_read(base + off, row, BAND_ROW_BYTES);
+            physical_memory_read(base + off, row, BAND_ROW_BYTES);
         } else {
             memcpy(row, lcd_state->fb + SH7269_LCD_OFFSET + off,
                    BAND_ROW_BYTES);
@@ -2765,7 +2916,7 @@ static void gui_touch_changed(GuiTouch *s)
 }
 
 static void gui_touch_event(DeviceState *dev, QemuConsole *src,
-                            InputEvent *evt)
+                            QemuInputEvent *evt)
 {
     GuiTouch *s = gui_touch;
 
@@ -2774,7 +2925,7 @@ static void gui_touch_event(DeviceState *dev, QemuConsole *src,
     }
     switch (evt->type) {
     case INPUT_EVENT_KIND_ABS: {
-        InputMoveEvent *m = evt->u.abs.data;
+        InputMoveEvent *m = &evt->abs;
 
         /* The axis spans the 800x480 console at any window zoom. */
         if (m->axis == INPUT_AXIS_X) {
@@ -2789,7 +2940,7 @@ static void gui_touch_event(DeviceState *dev, QemuConsole *src,
         break;
     }
     case INPUT_EVENT_KIND_BTN: {
-        InputBtnEvent *b = evt->u.btn.data;
+        InputBtnEvent *b = &evt->btn;
 
         if (b->button == INPUT_BUTTON_LEFT) {
             s->cur.down = b->down;
@@ -2883,7 +3034,7 @@ static void lcd_init(MemoryRegion *sysmem, MemoryRegion *sdram)
         s->scan = sdram;
     }
 
-    s->con = graphic_console_init(NULL, 0, &lcd_ops, s);
+    s->con = qemu_graphic_console_create(NULL, 0, &lcd_ops, s);
     qemu_console_resize(s->con, SH7269_LCD_WIDTH, SH7269_LCD_HEIGHT);
     lcd_state = s;
     gui_refresh_timer_init(s);
@@ -3380,10 +3531,10 @@ static int sh7269_load_image(const uint8_t *img, size_t len)
 
         if (src == 0) {
             g_autofree uint8_t *zero = g_malloc0(size);
-            cpu_physical_memory_write(dest, zero, size);
+            physical_memory_write(dest, zero, size);
             info_report("sh7269: zero-fill 0x%08x + 0x%08x", dest, size);
         } else {
-            cpu_physical_memory_write(dest, img + src, size);
+            physical_memory_write(dest, img + src, size);
             /* on-chip RAM from 0xFFF80000 holds a data copy, not code */
             if (dest < GUI_ONCHIP_BASE) {
                 gui_code[gui_code_n].dest = dest;
@@ -3423,7 +3574,7 @@ static void gui_mpoke_tick(void *opaque)
         for (k = 0; k < gui_mpoke[i].size; k++) {
             b[k] = (v >> (8 * (gui_mpoke[i].size - 1 - k))) & 0xFF;
         }
-        cpu_physical_memory_write(gui_mpoke[i].addr, b, gui_mpoke[i].size);
+        physical_memory_write(gui_mpoke[i].addr, b, gui_mpoke[i].size);
         gui_mpoke_writes++;
     }
     gui_peek_report();
@@ -3452,7 +3603,7 @@ static void gui_peek_report(void)
         for (k = 0; k < gui_peek[i].words; k++) {
             uint8_t b[4];
 
-            cpu_physical_memory_read(gui_peek[i].addr + 4 * k, b, 4);
+            physical_memory_read(gui_peek[i].addr + 4 * k, b, 4);
             v[k] = ((uint32_t)b[0] << 24) | ((uint32_t)b[1] << 16)
                  | ((uint32_t)b[2] << 8) | (uint32_t)b[3];
             if (v[k] != gui_peek[i].last[k]) {
@@ -3570,7 +3721,7 @@ static uint32_t gui_find_code(const GuiCodeSig *sig)
         g_autofree uint8_t *buf = g_malloc(gui_code[c].size);
         uint32_t off, k;
 
-        cpu_physical_memory_read(gui_code[c].dest, buf, gui_code[c].size);
+        physical_memory_read(gui_code[c].dest, buf, gui_code[c].size);
         for (off = 0; off + sig->n * 2 <= gui_code[c].size; off += 2) {
             for (k = 0; k < sig->n; k++) {
                 if (lduw_be_p(buf + off + k * 2) != sig->op[k]) {
@@ -3596,10 +3747,10 @@ static void gui_patch_mov_imm(uint32_t pc, uint8_t imm)
 {
     uint8_t b[2];
 
-    cpu_physical_memory_read(pc, b, 2);
+    physical_memory_read(pc, b, 2);
     b[0] = 0xE0 | (b[0] & 0x0F);                    /* mov #imm,rN */
     b[1] = imm;
-    cpu_physical_memory_write(pc, b, 2);
+    physical_memory_write(pc, b, 2);
 }
 
 /*
@@ -3876,7 +4027,7 @@ static void sh7269gui_init(MachineState *machine)
      * offset (the first 0x30000 bytes, the boot ROM, are not in the image).
      */
     if (getenv("CDJ_GUI_CS0_FLASH")) {
-        cpu_physical_memory_write(0x00030000, img, len);
+        physical_memory_write(0x00030000, img, len);
         info_report("sh7269gui: CS0 flash image 0x%zx bytes at 0x00030000",
                     (size_t)len);
     }
@@ -3898,7 +4049,7 @@ static void sh7269gui_init(MachineState *machine)
             g_autofree uint8_t *buf = g_malloc(span);
 
             memset(buf, (int)(strtoul(fill, NULL, 0) & 0xFF), span);
-            cpu_physical_memory_write(0x0DF00000, buf, span);
+            physical_memory_write(0x0DF00000, buf, span);
             info_report("sh7269gui: glyph window 0x0DF00000+0x%zx filled with "
                         "0x%02lx", span, strtoul(fill, NULL, 0) & 0xFF);
         }
@@ -3910,7 +4061,7 @@ static void sh7269gui_init(MachineState *machine)
                 error_report("sh7269gui: cannot read font blob '%s'", blob);
                 exit(1);
             }
-            cpu_physical_memory_write(0x0DF00000, bd, bl);
+            physical_memory_write(0x0DF00000, bd, bl);
             info_report("sh7269gui: glyph blob '%s' 0x%zx bytes at 0x0DF00000",
                         blob, (size_t)bl);
             g_free(bd);
@@ -3938,7 +4089,7 @@ static void sh7269gui_init(MachineState *machine)
             if (al > 0x1200000) {
                 al = 0x1200000;         /* never touch the glyph window */
             }
-            cpu_physical_memory_write(0x0CD00000, ad, al);
+            physical_memory_write(0x0CD00000, ad, al);
             info_report("sh7269gui: art blob '%s' 0x%zx bytes at 0x0CD00000",
                         art, (size_t)al);
             g_free(ad);

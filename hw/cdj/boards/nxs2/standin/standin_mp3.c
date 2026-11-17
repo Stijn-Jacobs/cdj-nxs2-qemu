@@ -157,7 +157,7 @@ static void cdj_frames_emit(const uint8_t *buf, uint32_t n,
 
 static struct {
     bool parsed, on, opened, failed;
-    QEMUSoundCard card;
+    AudioBackend *be;
     SWVoiceOut *voice;
     mp3dec_t dec;
     uint8_t *cbuf;              /* compressed bitstream, append-only        */
@@ -292,14 +292,14 @@ static void cdj_audio_live_cb(void *opaque, int avail)
         cdj_alive.pcm_pos += step;
         avail -= 4;
         if (n == (int)ARRAY_SIZE(out)) {
-            if (AUD_write(cdj_alive.voice, (uint8_t *)out, n * 2) <= 0) {
+            if (!audio_be_write(cdj_alive.be, cdj_alive.voice, out, n * 2)) {
                 return;
             }
             n = 0;
         }
     }
     if (n) {
-        AUD_write(cdj_alive.voice, (uint8_t *)out, n * 2);
+        audio_be_write(cdj_alive.be, cdj_alive.voice, out, n * 2);
     }
 }
 
@@ -309,26 +309,26 @@ static void cdj_audio_live_open(void)
         .freq = 44100,
         .nchannels = 2,
         .fmt = AUDIO_FORMAT_S16,
-        .endianness = 0,
     };
     Error *err = NULL;
 
-    AUD_register_card("cdj2000nxs2", &cdj_alive.card, &err);
-    if (err) {
+    cdj_alive.be = audio_get_default_audio_be(&err);
+    if (!cdj_alive.be) {
         warn_report_err(err);
         warn_report("audio live: no audio backend -- add -audiodev to the "
                     "command line, e.g. -audiodev pa,id=cdj");
         cdj_alive.failed = true;
         return;
     }
-    cdj_alive.voice = AUD_open_out(&cdj_alive.card, cdj_alive.voice, "cdj-dsp",
-                                   NULL, cdj_audio_live_cb, &as);
+    cdj_alive.voice = audio_be_open_out(cdj_alive.be, cdj_alive.voice,
+                                        "cdj-dsp", NULL, cdj_audio_live_cb,
+                                        &as);
     if (!cdj_alive.voice) {
         warn_report("audio live: the backend refused a 44100 Hz stereo voice");
         cdj_alive.failed = true;
         return;
     }
-    AUD_set_active_out(cdj_alive.voice, 1);
+    audio_be_set_active_out(cdj_alive.be, cdj_alive.voice, true);
     cdj_alive.opened = true;
     info_report("audio live: the model's DSP is decoding ch3 to a 44100 Hz "
                 "stereo voice -- this is the track's own bitstream, decoded, "
@@ -336,9 +336,9 @@ static void cdj_audio_live_open(void)
 }
 
 /*
- * Must be called at machine init. QEMU's AudioState only enables a backend on a
- * run-state change, so a card registered after the VM is running is never
- * pulled.
+ * Must be called at machine init. A QEMU audio backend only enables its
+ * voices on a run-state change, so a voice opened after the VM is running is
+ * never pulled.
  */
 void cdj_audio_live_arm(void)
 {
@@ -444,7 +444,7 @@ void cdj_audio_out(unsigned ch, uint32_t sar, uint32_t bytes)
         return;
     }
     buf = g_malloc(bytes);
-    cpu_physical_memory_read(phys, buf, bytes);
+    physical_memory_read(phys, buf, bytes);
     cdj_aout.windows++;
 
     /*

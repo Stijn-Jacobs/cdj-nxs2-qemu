@@ -30,7 +30,12 @@ bool cdj_c6x_on(void)
 
 static uint64_t cdj_c6x_thread_cpu_ns(void)
 {
-#ifdef CLOCK_THREAD_CPUTIME_ID
+#if defined(__EMSCRIPTEN__)
+    /* No per-thread CPU clock in a browser (the call fails and every CPU-time
+     * stat would read 0); wall time overstates it by the thread's waits. The
+     * governor steers on wall time and does not read this. */
+    return get_clock_realtime();
+#elif defined(CLOCK_THREAD_CPUTIME_ID)
     struct timespec ts;
 
     if (!clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts)) {
@@ -639,6 +644,7 @@ static void cdj_c6x_start(uint32_t entry)
     c->windows_seen = 0;
     c->cycles = 0;
     c->cyc_rem = 0;
+    c->mhz_need = 0;
     c->halted = false;
     c->start_virt_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
     c->epoch_ns = c->start_virt_ns;
@@ -889,7 +895,7 @@ void cdj_c6x_upp_ship(uint32_t sar, uint32_t bytes)
         return;
     }
     buf = g_malloc(bytes);
-    cpu_physical_memory_read(A7ADDR(sar), buf, bytes);
+    physical_memory_read(A7ADDR(sar), buf, bytes);
     /*
      * Delivered at DMA completion, not queued behind the DSP thread: MAIN's
      * next request (the 0x40/0x18 record arm) must not reach a DSP that has
@@ -1030,7 +1036,7 @@ bool cdj_c6x_link_rx(CdjDma1State *s, unsigned ch, uint32_t dar,
         }
         c->rx_head = (c->rx_head + 1) % C6X_RXQ;
         c->rx_len--;
-        cpu_physical_memory_write(A7ADDR(dar), le, 2);
+        physical_memory_write(A7ADDR(dar), le, 2);
         if (dm == 1) {
             dar += 2;
         }
@@ -1265,7 +1271,7 @@ bool cdj_c6x_link_tx(CdjDma1State *s, unsigned ch, uint32_t sar,
     for (uint32_t i = 0; i < count; i++) {
         uint8_t le[2];
 
-        cpu_physical_memory_read(A7ADDR(sar), le, 2);
+        physical_memory_read(A7ADDR(sar), le, 2);
         if (i < C6X_TXWORDS) {
             c->txf[slot][i] = le[0] | le[1] << 8;
         }
@@ -1345,7 +1351,8 @@ static void cdj_c6x_report(const char *why)
                 "%.1f M/host s), pc 0x%08x, stop %d, irqs %" PRIu64
                 " [INT4 %u INT5 %u INT6 %u INT7 %u INT8 %u INT9 %u], "
                 "slipped %.3f s, idle skips %" PRIu64 ", windows %u, "
-                "uPP queued %zu, INTC EVTFLAG stores %" PRIu64 ", booted %s",
+                "uPP queued %zu, INTC EVTFLAG stores %" PRIu64 ", booted %s, "
+                "EDMA3 dropped %" PRIu64,
                 why, run_s, c->cycles,
                 run_s > 0 ? c->cycles / run_s / 1e6 : 0,
                 c->host_ns ? c->cycles / (c->host_ns / 1e9) / 1e6 : 0,
@@ -1354,7 +1361,8 @@ static void cdj_c6x_report(const char *why)
                 st.irq_edges[7], st.irq_edges[8], st.irq_edges[9],
                 c->slipped_ns / 1e9, c->idle_skips, c->windows_seen,
                 c->soc ? c6655_soc_upp_queued(c->soc) : 0,
-                c->intc_flag_writes, c->booted_latch ? "yes" : "no");
+                c->intc_flag_writes, c->booted_latch ? "yes" : "no",
+                c->soc ? c6655_soc_edma_overruns(c->soc) : 0);
     if (c->prof) {
         static int64_t wall0, virt0;
         int64_t wall = get_clock_realtime();
@@ -1420,17 +1428,12 @@ static void cdj_c6x_report(const char *why)
             }
         }
     }
-    /* MAIN's own view of the DSP link and the DSP's shared struct. */
+    /* MAIN's own view of the DSP link and the DSP's shared struct. MAIN's
+     * words sit at fixed addresses of the CDJ-2000NXS2 1.87 image, so
+     * CDJ_RAM_DIAG=0 leaves that line out on any other. */
     {
-        uint32_t up = 0, frames = 0, st1 = 0, lvl = 0, stat = 0;
-        uint16_t ver[2] = { 0, 0 };
+        const char *ram_diag = getenv("CDJ_RAM_DIAG");
 
-        cpu_physical_memory_read(0x0995A138, &up, 4);
-        cpu_physical_memory_read(0x09959F20, &frames, 4);
-        cpu_physical_memory_read(0x0A35F71C, &st1, 4);
-        cpu_physical_memory_read(0x09944170, &lvl, 4);
-        cpu_physical_memory_read(0x09944168, &stat, 4);
-        cpu_physical_memory_read(0x10DBFC7C, ver, 4);
         {
             uint8_t *s158 = cdj_c6x_ram(0x008C8800 + 0x158, 4);
             uint8_t *b34 = cdj_c6x_ram(0x008C8800 + 0xB34, 4);
@@ -1466,9 +1469,20 @@ static void cdj_c6x_report(const char *why)
                         RD32(cdj_c6x_ram(0x008FFFE8, 4)), c->id1_p10_nonzero);
 #undef RD32
         }
-        info_report("c6x[%s]: MAIN: link up %u, frames %u, DSP registrar st[1] "
-                    "%u, version 0x%04x.%04x, status 0x150 0x%08x, level 0x158 "
-                    "0x%08x", why, up, frames, st1, ver[0], ver[1], stat, lvl);
+        if (!ram_diag || strcmp(ram_diag, "0")) {
+            uint32_t up = 0, frames = 0, st1 = 0, lvl = 0, stat = 0;
+            uint16_t ver[2] = { 0, 0 };
+
+            physical_memory_read(0x0995A138, &up, 4);
+            physical_memory_read(0x09959F20, &frames, 4);
+            physical_memory_read(0x0A35F71C, &st1, 4);
+            physical_memory_read(0x09944170, &lvl, 4);
+            physical_memory_read(0x09944168, &stat, 4);
+            physical_memory_read(0x10DBFC7C, ver, 4);
+            info_report("c6x[%s]: MAIN: link up %u, frames %u, DSP registrar st[1] "
+                        "%u, version 0x%04x.%04x, status 0x150 0x%08x, level 0x158 "
+                        "0x%08x", why, up, frames, st1, ver[0], ver[1], stat, lvl);
+        }
     }
     {
         GString *g = g_string_new("");
@@ -1782,12 +1796,22 @@ static void cdj_c6x_tick(void *opaque)
  * for nearly a whole window and still falls behind, the clock drops to what the
  * host delivered; it climbs back a few percent per window once the thread has
  * slack. Only the clock changes: what the DSP computes does not.
+ *
+ * Below the cycles its interrupt work needs, the DSP does not run late, it
+ * drops work: the McBSP and its EDMA3 transfers keep real time, a completion
+ * that lands before the ISR has taken the previous one raises no interrupt,
+ * and that 16-sample audio block is never rendered. MASTER TEMPO at a 100 MHz
+ * clock took INT6 2200 times per virtual second instead of 44100 / 16 = 2756
+ * and played 0.8x. So a dropped completion raises the clock at once and the
+ * governor never goes below that clock again; a host too slow for it then
+ * shows as lateness, not as wrong pitch.
  */
 static void cdj_c6x_govern(CdjC6x *c)
 {
     const int64_t window_ns = 200 * SCALE_MS;
     int64_t wall = get_clock();
     uint64_t dsp_ns = c6655_soc_now_ns(c->soc);
+    uint64_t overruns = c6655_soc_edma_overruns(c->soc);
     int64_t dw = wall - c->gov.wall;
     uint64_t dv, busy, dc;
 
@@ -1796,6 +1820,7 @@ static void cdj_c6x_govern(CdjC6x *c)
         c->gov.dsp_ns = dsp_ns;
         c->gov.host_ns = c->host_ns;
         c->gov.cycles = c->cycles;
+        c->gov.overruns = overruns;
         return;
     }
     if (dw < window_ns) {
@@ -1804,9 +1829,16 @@ static void cdj_c6x_govern(CdjC6x *c)
     dv = dsp_ns - c->gov.dsp_ns;
     busy = c->host_ns - c->gov.host_ns;
     dc = c->cycles - c->gov.cycles;
-    if (busy * 10 >= dw * 9 && dv * 100 < dw * 97) {
+    if (overruns != c->gov.overruns && c->mhz < c->mhz_run) {
+        c->mhz_need = MIN(c->mhz + c->mhz / 8 + 1, c->mhz_run);
+        info_report("c6x: %" PRIu64 " EDMA3 completions dropped at %" PRIu64
+                    " MHz, clock now at least %" PRIu64 " MHz",
+                    overruns - c->gov.overruns, c->mhz, c->mhz_need);
+        c->mhz = c->mhz_need;
+        c->cyc_rem = 0;
+    } else if (busy * 10 >= dw * 9 && dv * 100 < dw * 97) {
         uint64_t host_mhz = dc * 1000 / busy;
-        uint64_t mhz = MAX(host_mhz * 97 / 100, c->mhz_floor);
+        uint64_t mhz = MAX(MAX(host_mhz * 97 / 100, c->mhz_floor), c->mhz_need);
 
         if (mhz < c->mhz) {
             c->mhz = mhz;
@@ -1820,6 +1852,7 @@ static void cdj_c6x_govern(CdjC6x *c)
     c->gov.dsp_ns = dsp_ns;
     c->gov.host_ns = c->host_ns;
     c->gov.cycles = c->cycles;
+    c->gov.overruns = overruns;
 }
 
 /*
@@ -2065,10 +2098,9 @@ static int cdj_c6x_pre_save(void *opaque)
     return 0;
 }
 
-static int cdj_c6x_post_save(void *opaque)
+static void cdj_c6x_post_save(void *opaque)
 {
     qemu_mutex_unlock(&((CdjC6x *)opaque)->run_lock);
-    return 0;
 }
 
 static int cdj_c6x_post_load(void *opaque, int version_id)
@@ -2093,8 +2125,8 @@ static int cdj_c6x_post_load(void *opaque, int version_id)
 
 static const VMStateDescription vmstate_cdj_c6x = {
     .name = "cdj-c6x",
-    .version_id = 1,
-    .minimum_version_id = 1,
+    .version_id = 2,
+    .minimum_version_id = 2,
     .pre_save = cdj_c6x_pre_save,
     .post_save = cdj_c6x_post_save,
     .post_load = cdj_c6x_post_load,
@@ -2112,6 +2144,7 @@ static const VMStateDescription vmstate_cdj_c6x = {
         VMSTATE_INT32(booted_level, CdjC6x),
         VMSTATE_INT64(epoch_ns, CdjC6x),
         VMSTATE_UINT64(cyc_rem, CdjC6x),
+        VMSTATE_UINT64(mhz_need, CdjC6x),
         VMSTATE_INT64(start_virt_ns, CdjC6x),
         VMSTATE_INT32(pth0, CdjC6x),
         VMSTATE_BOOL(loaded, CdjC6x),

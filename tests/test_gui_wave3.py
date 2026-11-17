@@ -13,6 +13,7 @@ import pytest
 
 import patch_gui
 import sigpatch
+from players import cdj2000nxs2 as nxs2
 from helpers import path
 from sh2a import Memory, Sh2a
 
@@ -264,7 +265,7 @@ OVERVIEW_SITE, OVERVIEW_RESUME = 0x1C007B8E, 0x1C007B9E
 def real_memory(image, front):
     """Every segment the load table copies, behind the scratch regions the
     caller added first (find() takes the first region that holds an address)."""
-    img = sigpatch.Image(patch_gui.GUI_PROFILE, image)
+    img = sigpatch.Image(nxs2.GUI_PROFILE, image)
     for _, dest, src, size in img.copies():
         if dest < 0xFFF80000:
             front.add(dest, image[src:src + size])
@@ -281,7 +282,7 @@ def real_images():
 @needs_real_gui
 def test_real_image_takes_all_three_display_mods_at_once(real_images):
     stock, patched = real_images
-    img = sigpatch.Image(patch_gui.GUI_PROFILE, stock)
+    img = sigpatch.Image(nxs2.GUI_PROFILE, stock)
     for name in ('wave3', 'wave3ov', 'phrase'):
         assert patch_gui.MODS[name].fw_versions == ('1.81',)
         assert sigpatch.find_sig(img, patch_gui.MODS[name]) is not None

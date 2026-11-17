@@ -37,7 +37,7 @@ typedef struct c66x_operand {
     uint8_t kind;
     uint8_t size;       /* bytes: 1, 2, 4, 5 (40-bit pair) or 8        */
     uint8_t rw;         /* tic6x_rw                                    */
-    uint8_t low_first, low_last, high_first, high_last;
+    uint8_t low_first, high_first;   /* the cycle each half is written (binutils) */
     uint8_t reg, reg_hi;
     uint8_t mem_mode;   /* binutils mem_mode: 0 -, 1 +, 8 --x, 9 ++x, 10 x--, 11 x++, |4 = register offset */
     uint8_t mem_offreg;
@@ -46,30 +46,35 @@ typedef struct c66x_operand {
     int32_t val;
 } c66x_operand;
 
+/* The fast loop reads only the first cache line of an instruction: its fast
+ * form, condition and first three operands. A record is aligned to the line,
+ * so an interpreted packet touches one line per instruction instead of three. */
 typedef struct c66x_insn {
     uint32_t addr;
-    uint32_t opcode;     /* for 16-bit: dsz/br/sat folded in, as binutils */
-    int16_t  opc;        /* index into tic6x_opcode_table, -1 = undefined, -2 = header */
-    uint8_t  size;       /* 2 or 4 bytes                                   */
-    uint8_t  nops;
+    /* Interpreter caches, here and below; the decoder zeroes them. */
+    int32_t  ea_delta;   /* load/store at base register + this, no write-back (mfast) */
+    uint16_t handler;    /* filled in by the interpreter                   */
+    uint8_t  fop;        /* nonzero: a plain 32-bit register form the fast loop runs inline */
+    uint8_t  mfast;      /* nonzero: that form; bits 0-2 size, 3 sign-extend, 4 pre-/5 post-modify base, 6 stdw */
     int8_t   cond_reg;   /* -1 = unconditional                             */
     uint8_t  cond_z;     /* condition true when register == 0             */
+    uint8_t  size;       /* 2 or 4 bytes                                   */
+    uint8_t  xnops;      /* NOP cycles inserted after the packet (NOP n, BNOP, CALLP, PROT load) */
+    c66x_operand op[4];
+    uint32_t opcode;     /* for 16-bit: dsz/br/sat folded in, as binutils */
+    int16_t  opc;        /* index into tic6x_opcode_table, -1 = undefined, -2 = header */
+    uint8_t  nops;
     uint8_t  p;          /* next instruction is in the same execute packet */
     int8_t   unit;       /* 0..7 = L1 L2 S1 S2 D1 D2 M1 M2, -1 = none      */
     uint8_t  side;       /* 1 = A, 2 = B, 0 = no functional unit           */
     uint8_t  prot;       /* fetch packet header PROT                       */
     uint8_t  compact;    /* came from a header-based fetch packet          */
-    uint16_t handler;    /* filled in by the interpreter                   */
-    c66x_operand op[4];
-    /* Interpreter caches; the decoder zeroes them. */
     uint8_t  sub;        /* handler variant (load size, shift, field selects) */
     uint8_t  xread;      /* reads a register through a cross path            */
     uint8_t  rmask;      /* operands read before execution                   */
     uint8_t  regmask;    /* ... of which plain 32-bit registers              */
     uint8_t  constmask;  /* ... of which constants                           */
-    uint8_t  xnops;      /* NOP cycles inserted after the packet (NOP n, BNOP, CALLP, PROT load) */
     uint8_t  isbranch;   /* blocks interrupts for the next five packets      */
-    uint8_t  fop;        /* nonzero: a plain 32-bit register form the fast loop runs inline */
     uint8_t  pk_n;       /* when this insn starts a packet: its length, 0 = unknown */
     uint8_t  pk_mask;    /* SPMASK units in that packet                       */
     uint8_t  pk_xread;
@@ -78,11 +83,9 @@ typedef struct c66x_insn {
     uint8_t  pk_xnops;   /* the NOP cycles the packet inserts (max over its instructions) */
     uint8_t  pk_branched;/* ... has a branch instruction                         */
     uint8_t  pk_allfop;  /* every instruction has a fast form                    */
-    uint64_t pk_xmask;   /* registers read through a cross path: stall if written at E1 */
-    int32_t  ea_delta;   /* load/store at base register + this, no write-back (mfast) */
-    uint8_t  mfast;      /* nonzero: that form; bits 0-2 size, 3 sign-extend, 4 pre-/5 post-modify base, 6 stdw */
     uint32_t pk_next;    /* address after that packet                         */
-} c66x_insn;
+    uint64_t pk_xmask;   /* registers read through a cross path: stall if written at E1 */
+} __attribute__((aligned(64))) c66x_insn;
 
 /* Reads the 32 bytes of a fetch packet; nonzero = not readable. */
 typedef int (*c66x_fp_reader)(void *opaque, uint32_t fp_addr, uint8_t fp[32]);

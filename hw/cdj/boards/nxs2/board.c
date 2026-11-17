@@ -187,6 +187,7 @@ static void cdj2000nxs2_init(MachineState *machine)
     }
     cdj_spilink_init();
     cdj_dirty_init();
+    cdj_mpoke_init();
     {
         /* DMA1: DMA1_SAR_0 is at 0xFDC08020, so channels start at +0x20
          * (DMA0 starts at +0x00). Channels 0-3 (DMAC1A) are the GUI link.
@@ -212,7 +213,8 @@ static void cdj2000nxs2_init(MachineState *machine)
     /* HPB window: physical area 1 (0x04000000-0x07FFFFFF) is the on-chip
      * peripheral bus. EtherMAC is modelled; the rest of 0x04C00000 is logged. */
     cdj_ether_init(sysmem, "sh7724.ether", 0x04600000,
-                  cdj_count_irq(cdj_intc.irqs[CDJ_ETHI], "EtherMAC ETHI"), 0, false);
+                  cdj_count_irq(cdj_intc.irqs[CDJ_ETHI], "EtherMAC ETHI"),
+                  cdj_count_irq(cdj_intc.irqs[CDJ_IRQ5], "PHY INT (IRQ5)"), 0, false);
     cdj_unimp("sh7724.hpb",   0x04C00000, 0x100000);
     cdj_hpb_probe_init(sysmem);   /* logging/ready-probe for the 0x04CE0000 chip */
     if (!getenv("CDJ_USB_STUB")) {

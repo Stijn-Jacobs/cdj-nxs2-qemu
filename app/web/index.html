@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>NXS2 Virtual Deck</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #050505; color: #9a9ea6;
+               font: 12px/1.4 Helvetica, Arial, sans-serif; overflow: hidden; }
+  #face { position: relative; margin: 0 auto; touch-action: none; user-select: none;
+          -webkit-user-select: none; -webkit-touch-callout: none;
+          width: min(100vw, calc((100vh - 20px) * 972 / 1252)); aspect-ratio: 972 / 1252; }
+  #face > img, #face > canvas, #face > svg { position: absolute; display: block; }
+  #body { left: 0; top: 0; width: 100%; height: 100%; }
+  #lcd { background: #000; image-rendering: auto; }
+  #face > img.pressed { pointer-events: none; display: none; }
+  #face > img.pressed.down { display: block; }
+  #hits { left: 0; top: 0; width: 100%; height: 100%; }
+  #hits * { fill: transparent; stroke: none; cursor: pointer; }
+  #status { height: 20px; text-align: center; white-space: nowrap; }
+</style>
+</head>
+<body>
+<div id="face">
+  <img id="body" alt="" draggable="false">
+  <canvas id="lcd"></canvas>
+  <svg id="hits" xmlns="http://www.w3.org/2000/svg"></svg>
+</div>
+<div id="status">loading</div>
+<script src="link.js"></script>
+<script src="deck.js"></script>
+<script>
+  const deck = Number(new URLSearchParams(location.search).get("deck")) || 1;
+  startDeck(document.getElementById("face"), document.getElementById("status"),
+            (face) => serverLink(deck, face), deck, "face-cdj2000nxs2.json");
+</script>
+</body>
+</html>

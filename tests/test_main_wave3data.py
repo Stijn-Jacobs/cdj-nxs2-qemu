@@ -15,6 +15,7 @@ import pytest
 import patch_main
 import sigpatch
 from test_main_osc import Sh4
+from helpers import stock_mods
 
 SITE = 0x102                    # span start; not 4-aligned, like the firmware's
 RESUME = SITE + 16
@@ -41,7 +42,7 @@ def build_image():
 
 def patched_image():
     profile, data = build_image()
-    mods = {'wave3data': patch_main.MODS['wave3data']}
+    mods = stock_mods({'wave3data': patch_main.MODS['wave3data']})
     image = bytearray(sigpatch.patch(profile, patch_main.blob_path, data, mods, ['wave3data']))
     at = image.find(struct.pack('<I', DETAIL), CAVE[0])
     image[at:at + 4] = struct.pack('<I', DETAIL_LOW)

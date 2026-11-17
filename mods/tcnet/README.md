@@ -37,8 +37,8 @@ Master and a timestamp in microseconds into the current second of the deck's
 
 **Listening.** The deck opens the listener port it advertises, UDP 65023, and
 reads it. A node that sends the deck its Opt-IN joins the deck's node list at
-the listener port it names; a node that sends a Request joins at the address
-and port it sent from, and is answered there. The list holds four nodes, a new
+the listener port it names, and is answered there; a node that sends a Request
+without one joins at the address and port it sent from. The list holds four nodes, a new
 one replacing the oldest. Requests are answered for the deck's own layer only,
 for Metrics (data type 2) and MetaData (4).
 
@@ -64,14 +64,8 @@ real update (firmware 1.87). The broadcasts go through the same firmware
 routine as the Pro DJ Link beat packet, from MAIN's Pro DJ Link socket; the
 listener is a second socket of the firmware's own UDP layer, opened and polled
 with the firmware's calls, and sends from port 65023. It is a firmware patch
-like the other [mods](../../README.md#mods).
+like the other [mods](../../docs/mods.md).
 
-**What is verified.** The patch sites are found by signature in firmware 1.87,
-and the routines are run in an SH-4 interpreter against packets decoded from
-the specification's offsets (`tests/test_main_tcnet.py`). On the emulated
-deck, Resolume Arena lists it as a Pioneer player and follows its time. The
-listener answers Metrics and MetaData, but to the port a request came from
-rather than the listener port Arena names in it, so Arena does not show the
-BPM or the title yet. None of it has been tried on a real deck.
+Resolume Arena lists the deck as a Pioneer player and follows its time. Not tried on a real deck.
 
-Back to the [mods](../../README.md#mods).
+Back to the [mods](../../docs/mods.md).

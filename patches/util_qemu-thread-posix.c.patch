@@ -1,0 +1,21 @@
+diff --git a/util/qemu-thread-posix.c b/util/qemu-thread-posix.c
+index 089606c9..2c625999 100644
+--- a/util/qemu-thread-posix.c
++++ b/util/qemu-thread-posix.c
+@@ -416,6 +416,16 @@ static void *qemu_thread_start(void *args)
+ 
+ #pragma GCC diagnostic pop
+ 
++#ifdef EMSCRIPTEN
++    /*
++     * Returning from a thread ends it only while nothing keeps Emscripten's
++     * runtime alive in its worker, and every suspended coroutine fiber does
++     * (Asyncify counts each unwind). The migration thread is left holding one
++     * after a save, so it never ended and migrate_fd_cleanup waited forever
++     * in qemu_thread_join. pthread_exit ends a thread regardless.
++     */
++    pthread_exit(r);
++#endif
+     return r;
+ }
+ 

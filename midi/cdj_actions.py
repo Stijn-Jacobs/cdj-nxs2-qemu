@@ -317,13 +317,15 @@ ACTIONS = {a.name: a for a in [
     KeyAction("eject", 0x0C, 0x10, DECODED),
     KeyAction("four_beat_loop", 0x1A, 0x80, DECODED),
     # The four pads: the decoder's only tests of 0x1A below 0x80, each calling
-    # the HotCue setter 0x084E1974 with its pad index. Pad A set and recalled a
-    # cue on a running deck (the recall replays the audio). The firmware also
-    # names HotCue E-H, which no decoder bit reaches; BANK is not found.
-    KeyAction("hot_cue_a", 0x1A, 0x01, CONFIRMED),
-    KeyAction("hot_cue_b", 0x1A, 0x02, DECODED),
-    KeyAction("hot_cue_c", 0x1A, 0x04, DECODED),
-    KeyAction("hot_cue_d", 0x1A, 0x08, DECODED),
+    # the HotCue setter 0x084E1974 with its pad index. The bits run backwards:
+    # the decoder 0x0844D690 takes the pad for 0x01/0x02/0x04/0x08 from the
+    # table at 0xA80EA828 as 4/3/2/1, and 0x08 recalled a stick's hot cue A.
+    # Each pad sets a cue on an empty slot and recalls a set one. The firmware
+    # also names HotCue E-H, which no decoder bit reaches; BANK is not found.
+    KeyAction("hot_cue_a", 0x1A, 0x08, CONFIRMED),
+    KeyAction("hot_cue_b", 0x1A, 0x04, CONFIRMED),
+    KeyAction("hot_cue_c", 0x1A, 0x02, CONFIRMED),
+    KeyAction("hot_cue_d", 0x1A, 0x01, CONFIRMED),
 
     # The touch screen, one pixel per binding (see TouchTapAction).
     TouchTapAction("touch_tap", PARTIAL),

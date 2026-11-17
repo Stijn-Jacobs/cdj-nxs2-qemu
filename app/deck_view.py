@@ -15,8 +15,8 @@ of thing:
     takes.
 
 The lamps come back from the relay: MAIN's panel-lamp frame lights PLAY, CUE,
-SLIP, MASTER TEMPO and the jog ring, and its jog pointer drives the centre
-display.
+SLIP, MASTER TEMPO and the light in the jog's outer ring (white, or red), and
+its jog pointer drives the centre display.
 """
 
 import math
@@ -65,6 +65,9 @@ class DeckView:
         self.surf = None
         self.dirty = []                 # pixel rects of self.surf to redraw
 
+    def close(self):
+        self.jog.stop()
+
     def send(self, datagram):
         """One panel datagram to this deck, through the relay."""
         self.relay.send(self.tag, datagram)
@@ -98,6 +101,8 @@ class DeckView:
         self.centre_state = None
         self.pointer_step = None
         self._draw_centre()
+        self.ring_state = (0, 0)
+        self._draw_ring()
         self._sprite("cap", self.art.slider_cap(), (0, 0), key="cap")
         self._place_cap()
         # Draw the lamps' lit looks ahead, a few per tick, so the first blink
@@ -132,9 +137,9 @@ class DeckView:
         self.dirty.append(self._layer_rect(name))
 
     def _order(self):
-        """Bottom to top: the keys over the jog, the selector over the keys
-        around it, the centre display over the jog."""
-        return ["body", "lcd", "jog", "cap"] + self.key_order + ["select", "centre"]
+        """Bottom to top: the ring light over the jog, the keys over both,
+        the selector over the keys around it, the centre display over the jog."""
+        return ["body", "lcd", "jog", "ring", "cap"] + self.key_order + ["select", "centre"]
 
     def _redraw(self, rect):
         s = self.surf
@@ -187,13 +192,24 @@ class DeckView:
                            math.ceil(max(xs) - min(xs)) + 2 * pad,
                            math.ceil(max(ys) - min(ys)) + 2 * pad)
 
+    def _draw_ring(self):
+        look = self.relay.state(self.tag).ring()
+        if look == self.ring_state:
+            return
+        self.ring_state = look
+        if look == (0, 0):
+            self.dirty.append(self._layer_rect("ring"))
+            del self.layers["ring"]
+            return
+        img, pos = self.art.ring_sprite(*look)
+        self._sprite("ring", img, pos, key=("ring",) + look)
+
     def _draw_centre(self):
         st = self.relay.state(self.tag)
-        look = (st.lamp("ring"), st.live)
-        if look != self.centre_state:
-            self.centre_state = look
-            img, pos = self.art.centre_sprite(*look)
-            self._sprite("centre", img, pos, key=("centre",) + look)
+        if st.live != self.centre_state:
+            self.centre_state = st.live
+            img, pos = self.art.centre_sprite(st.live)
+            self._sprite("centre", img, pos, key=("centre", st.live))
             self.pointer_step = None
         turns = st.pointer_turns()
         step = -1 if turns is None else round(turns * 135)
@@ -282,6 +298,7 @@ class DeckView:
             down = self.controls[name].down
             if lamp or down or name in self.lit:
                 self._draw_key(name, lamp, down)
+        self._draw_ring()
         self._draw_centre()
         if frame is None:
             self._warm_one()

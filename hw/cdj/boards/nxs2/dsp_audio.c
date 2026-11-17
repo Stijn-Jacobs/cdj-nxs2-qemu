@@ -25,8 +25,7 @@ void cdj_dspau_arm(void)
      * earlier; the loop it settles into is 7644 frames at deck speed 1.0 and
      * scales with the deck speed (fader or MASTER TEMPO). */
     static const CdjHostAudioCfg cfg = {
-        .env = "CDJ_C6X_AUDIO", .card = "cdj2000nxs2-dsp",
-        .voice = "cdj-c6x-mcbsp", .label = "c6x",
+        .env = "CDJ_C6X_AUDIO", .voice = "cdj-c6x-mcbsp", .label = "c6x",
         .source = "IC301's McBSP0 PCM",
         .loop = { .period = 7644, .replay = 8820,
                   .lag_min = 7000, .lag_max = 20000 },

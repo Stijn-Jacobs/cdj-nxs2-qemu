@@ -18,6 +18,9 @@ POSIX slashes, percent-encoded, ':' and '/' left bare) -- reimplemented here
 rather than shelling out to baken for it, since this script has no other
 reason to depend on it at run time.
 
+make_test_stick.py writes its synthetic tracks through the same track_xml()
+and document(), with the grid, key and cue points it knows exactly.
+
 usage: python collection_xml.py <music_dir> <collection.xml> [--playlist NAME]
 """
 import argparse
@@ -121,21 +124,41 @@ def tag_octave(path, bpm, notes):
     return bpm
 
 
-def track_xml(track_id, path, tags, audio, notes):
-    ext = os.path.splitext(path)[1].lower()
-    name = tags["title"] or os.path.splitext(os.path.basename(path))[0]
-    tempo = None
+def resolve_tempo(path, tags, notes):
+    """(bpm, first_beat_seconds) for a track nothing is known about up front:
+    the BPM tag (octave-checked against the audio), else the estimate, else
+    None -- no beat grid, with the reason added to notes."""
     if tags["bpm"] > 0:
-        tempo = (tag_octave(path, tags["bpm"], notes), 0.0)
-    elif bpm_estimate.available():
+        return tag_octave(path, tags["bpm"], notes), 0.0
+    if bpm_estimate.available():
         estimated = bpm_estimate.estimate(path)
         if estimated:
-            tempo = estimated
-        else:
-            notes.append("%s: no clear beat found; no beat grid" % os.path.basename(path))
+            return estimated
+        notes.append("%s: no clear beat found; no beat grid" % os.path.basename(path))
     else:
         notes.append("%s: no BPM tag, and no ffmpeg/numpy to estimate one; no beat grid"
-                      % os.path.basename(path))
+                     % os.path.basename(path))
+    return None
+
+
+MEMORY_CUE = -1   # a <POSITION_MARK>'s Num for a memory cue; hot cues are 0 (A) to 7 (H)
+
+
+def position_mark_xml(start, num=MEMORY_CUE):
+    """One cue point as rekordbox's <POSITION_MARK>: Type 0 (a cue, not a
+    loop), Start in seconds. baken copies it onto the stick's cue list."""
+    return '      <POSITION_MARK Name="" Type="0" Start="%.3f" Num="%d"/>\n' % (start, num)
+
+
+def track_xml(track_id, path, tags, audio, notes, tempo=None, key="", marks=()):
+    """One <TRACK>. tempo is (bpm, first_beat_seconds) when the caller knows
+    it exactly (make_test_stick.py does), or None to take it from the tags or
+    the audio as resolve_tempo() does. key is rekordbox's Tonality ("Am",
+    "F#m", ...); marks are (start_seconds, num) cue points."""
+    ext = os.path.splitext(path)[1].lower()
+    name = tags["title"] or os.path.splitext(os.path.basename(path))[0]
+    if tempo is None:
+        tempo = resolve_tempo(path, tags, notes)
 
     attrs = {
         "TrackID": str(track_id),
@@ -150,15 +173,19 @@ def track_xml(track_id, path, tags, audio, notes):
         "BitRate": str(tags["bitrate"]),
         "SampleRate": str(tags["sample_rate"]),
         "Location": encode_location(os.path.abspath(path)),
-        "Tonality": "",
+        "Tonality": key,
     }
     line = "    <TRACK " + " ".join(
         '%s="%s"' % (k, sax.escape(v)) for k, v in attrs.items())
-    if tempo is None:
+    children = []
+    if tempo is not None:
+        bpm, offset = tempo
+        children.append('      <TEMPO Inizio="%.3f" Bpm="%.2f" Metro="4/4" Battito="1"/>\n'
+                        % (offset, bpm))
+    children.extend(position_mark_xml(start, num) for start, num in marks)
+    if not children:
         return line + "/>\n"
-    bpm, offset = tempo
-    return line + ">\n      <TEMPO Inizio=\"%.3f\" Bpm=\"%.2f\" Metro=\"4/4\" Battito=\"1\"/>\n    </TRACK>\n" \
-        % (offset, bpm)
+    return line + ">\n" + "".join(children) + "    </TRACK>\n"
 
 
 def build(music_dir, playlist_name):
@@ -176,10 +203,15 @@ def build(music_dir, playlist_name):
     for i, path in enumerate(files, start=1):
         tags, audio = read_tags(path)
         tracks.append(track_xml(i, path, tags, audio, notes))
+    return document(tracks, playlist_name), notes, len(tracks)
 
+
+def document(tracks, playlist_name, product="collection_xml.py"):
+    """The whole collection.xml around the <TRACK> entries in `tracks`
+    (TrackIDs 1..n), with one playlist that holds all of them in order."""
     out = ['<?xml version="1.0" encoding="UTF-8"?>\n',
            '<DJ_PLAYLISTS Version="1.0.0">\n',
-           '  <PRODUCT Name="cdj-nxs2-re collection_xml.py" Version="1" Company="none"/>\n',
+           '  <PRODUCT Name="cdj-nxs2-re %s" Version="1" Company="none"/>\n' % sax.escape(product),
            '  <COLLECTION Entries="%d">\n' % len(tracks)]
     out.extend(tracks)
     out.append('  </COLLECTION>\n')
@@ -193,7 +225,7 @@ def build(music_dir, playlist_name):
     out.append('    </NODE>\n')
     out.append('  </PLAYLISTS>\n')
     out.append('</DJ_PLAYLISTS>\n')
-    return "".join(out), notes, len(tracks)
+    return "".join(out)
 
 
 def main(argv):

@@ -27,7 +27,7 @@ static void load_reg(bfin_core *c, unsigned grp, unsigned reg, uint32_t v)
     } else if (grp < 2) {
         (grp ? c->p : c->r)[reg] = v;
     } else {
-        bfin_set_reg(c, grp, reg, v);
+        bfin_reg_put(c, grp, reg, v);
     }
 }
 
@@ -87,7 +87,7 @@ static void prog_ctrl(bfin_core *c, uint16_t iw, uint16_t pad)
     case 2:
         switch (op) {
         case 0:
-            c->idle = !c->wake;
+            c->idle = !(c->wake || c->wake_level);
             c->wake = 0;
             return;
         case 3: case 4:                         /* CSYNC, SSYNC */
@@ -130,7 +130,7 @@ static void push_pop_reg(bfin_core *c, uint16_t iw, uint16_t pad)
         uint32_t v = bfin_load(c, c->p[6], 4);
 
         c->p[6] += 4;
-        bfin_set_reg(c, grp, reg, v);
+        bfin_reg_put(c, grp, reg, v);
         if (grp == 7 && reg == 3) {
             bfin_reti_pushed(c, 0);
         }
@@ -646,7 +646,7 @@ static void jump_short(bfin_core *c, uint16_t iw, uint16_t pad)
 
 static void reg_move(bfin_core *c, uint16_t iw, uint16_t pad)
 {
-    bfin_set_reg(c, (iw >> 9) & 7, (iw >> 3) & 7,
+    bfin_reg_put(c, (iw >> 9) & 7, (iw >> 3) & 7,
                  bfin_reg(c, (iw >> 6) & 7, iw & 7));
 }
 
@@ -794,7 +794,7 @@ static void ldimm_half(bfin_core *c, uint16_t iw0, uint16_t iw1)
     } else {
         v = (v & 0xFFFF0000) | iw1;
     }
-    bfin_set_reg(c, grp, reg, v);
+    bfin_reg_put(c, grp, reg, v);
 }
 
 /* LDIMMhalf into a data or pointer register, one handler per form. */
@@ -947,7 +947,7 @@ static int x_bundle(bfin_core *c, const bfin_insn *i)
         if (c->load[n].grp < 2) {
             (c->load[n].grp ? c->p : c->r)[c->load[n].reg] = c->load[n].val;
         } else {
-            bfin_set_reg(c, c->load[n].grp, c->load[n].reg, c->load[n].val);
+            bfin_reg_put(c, c->load[n].grp, c->load[n].reg, c->load[n].val);
         }
     }
     BFIN_NEXT_CHECKED(c, i);

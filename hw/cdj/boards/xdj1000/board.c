@@ -6,8 +6,9 @@
 #include "usb_r8a66597.h"
 #include "cdj_pnl_link.h"
 #include "cdj_pnl_touch.h"
+#include "cdj_pnl_stateout.h"
 #include "cdj_gui_keys.h"
-#include "hw/char/serial.h"
+#include "hw/char/serial-mm.h"
 /*
  * Pioneer XDJ-1000 MAIN board (Renesas SH7724), in bring-up.
  *
@@ -27,7 +28,9 @@
 #define SH7724_PNL_SYNC  0x8F
 
 typedef struct Sh7724PanelExtra {
+    unsigned frame_len;
     bool lever_fwd;
+    bool tempo_centre;
     CdjPnlTouch touch;
 } Sh7724PanelExtra;
 
@@ -39,6 +42,13 @@ typedef struct Sh7724PanelExtra {
  * would run backwards from its first frame and look frozen. The lever sits at
  * FWD, where the bit reads 1.
  */
+/*
+ * The CDJ-900NXS tempo slider, as on the CDJ-2000 and NXS2: bytes 4-5 are the
+ * position, bytes 6-7 the centre reference (fw 1.31 decodes them at
+ * 0x08B63278 into 0x0B2E82AC and 0x0B2E82B0). With the centre at 0 TEMPO stays
+ * at 0.00 % wherever the slider is. Both default to mid travel (0.00 %); a
+ * live lvl overrides them.
+ */
 static void sh7724_panel_defaults(CdjPnlLinkState *s, void *extra, uint8_t *rx)
 {
     Sh7724PanelExtra *e = extra;
@@ -46,6 +56,19 @@ static void sh7724_panel_defaults(CdjPnlLinkState *s, void *extra, uint8_t *rx)
     if (e->lever_fwd) {
         rx[0x0F] |= 0x02;
     }
+    if (e->tempo_centre) {
+        rx[4] = 0x80;
+        rx[6] = 0x80;
+    }
+}
+
+/* MAIN's frame carries the panel's lamps; the app lights the face from it. */
+static void sh7724_panel_on_frame(CdjPnlLinkState *s, void *extra,
+                                  const uint8_t *frame)
+{
+    Sh7724PanelExtra *e = extra;
+
+    cdj_pnl_stateout(frame, e->frame_len);
 }
 
 static void sh7724_panel_last(CdjPnlLinkState *s, void *extra, uint8_t *rx,
@@ -182,8 +205,10 @@ typedef struct Sh7724Deck {
     unsigned pnl_frame;
     bool pwm_ram;
     bool lever_fwd;             /* idle frame reports the direction lever at FWD */
+    bool tempo_centre;          /* idle frame reports the tempo slider's centre */
     bool touch_screen;          /* resistive panel digitised by the panel MCU */
     int auth_iic;               /* IIC channel of the auth chip, or -1 */
+    bool scif0_irq;             /* console on SCIF0 is interrupt driven */
 } Sh7724Deck;
 
 /*
@@ -251,7 +276,11 @@ static void sh7724_deck_init(MachineState *machine, const Sh7724Deck *deck)
 
     cdj_ata_init(sysmem, "sh7724.atapi", A7ADDR(0xA4DA2100), NULL);
     cdj_ether_init(sysmem, "sh7724.ether", 0x04600000,
-                   cdj_count_irq(cdj_intc.irqs[CDJ_ETHI], "EtherMAC ETHI"), 0, false);
+                   cdj_count_irq(cdj_intc.irqs[CDJ_ETHI], "EtherMAC ETHI"),
+                   cdj_count_irq(cdj_intc.irqs[CDJ_IRQ5], "PHY INT (IRQ5)"), 0, false);
+    /* The launcher holds each deck's own MAC in RAM with CDJ_MPOKE, so two
+     * linked decks do not both announce the blank flash's address. */
+    cdj_mpoke_init();
 
     cdj_tmu_init(sysmem, 0x1FD80000,
                  cdj_count_irq(cdj_intc.irqs[CDJ_TMU0_TUNI0], "TMU0 TUNI0"),
@@ -272,8 +301,10 @@ static void sh7724_deck_init(MachineState *machine, const Sh7724Deck *deck)
                   CDJ_USB_SIZE,
                   (CdjDmacDei[]) { { dei[0] }, { dei[1] }, { dei[2] }, { dei[3] } });
 
-    cdj_scif(sysmem, "scif0", CDJ_SCIF0_ADDR,
-             serial_hd(0) ?: qemu_chr_new("scif0-null", "null", NULL));
+    cdj_scif_irq(sysmem, "scif0", CDJ_SCIF0_ADDR,
+                 serial_hd(0) ?: qemu_chr_new("scif0-null", "null", NULL),
+                 deck->scif0_irq ? cdj_count_irq(cdj_intc.irqs[CDJ_SCIF0],
+                                                 "SCIF0") : NULL);
     cdj_scif(sysmem, "scif1", CDJ_SCIF1_ADDR,
              serial_hd(1) ?: qemu_chr_new("scif1-null", "null", NULL));
     if (deck->auth_iic >= 0) {
@@ -290,6 +321,7 @@ static void sh7724_deck_init(MachineState *machine, const Sh7724Deck *deck)
         }
     }
     static const CdjPnlLinkHooks panel_hooks = {
+        .on_frame = sh7724_panel_on_frame,
         .build_defaults = sh7724_panel_defaults,
         .build_last = sh7724_panel_last,
         .drain_extra = sh7724_panel_drain,
@@ -301,7 +333,9 @@ static void sh7724_deck_init(MachineState *machine, const Sh7724Deck *deck)
                                                 SH7724_PNL_SYNC, &panel_hooks,
                                                 sizeof(*panel));
 
+    panel->frame_len = deck->pnl_frame;
     panel->lever_fwd = deck->lever_fwd;
+    panel->tempo_centre = deck->tempo_centre;
     cdj_gui_keys_init(sh7724_deck_keys, ARRAY_SIZE(sh7724_deck_keys),
                       deck->name);
     if (deck->touch_screen) {
@@ -333,7 +367,9 @@ static const Sh7724Deck cdj900nxs_deck = {
     .usb_base = CDJ_USB_BASE,
     .usb_irq = CDJ_USB0,
     .pnl_frame = 24,
+    .tempo_centre = true,
     .auth_iic = 0,
+    .scif0_irq = true,
 };
 
 static const Sh7724Deck xdj700_deck = {

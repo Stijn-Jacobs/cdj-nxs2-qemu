@@ -126,3 +126,79 @@ def test_main_model_flag_is_forwarded(tmp_path, capsys):
     missing = str(tmp_path / "no.upd")
     assert firmware.main(["--model", "cdj2000", missing]) == 1
     assert "no such file or folder: %s" % missing in capsys.readouterr().err
+
+
+def _fake_unpack(monkeypatch, image):
+    """A one-step unpack that leaves `image` as the update's only image."""
+    def sections(py, tools, out, upd_files, log):
+        with open(os.path.join(out, "extract", "main_unpacked.bin"), "wb") as f:
+            f.write(image)
+        return True
+    monkeypatch.setattr(firmware, "_do_sections", sections)
+
+
+def _one_image_model(monkeypatch, official_image):
+    m = model.load()
+    monkeypatch.setattr(m, "fw_steps", ["sections"])
+    monkeypatch.setattr(m, "expected", (("extract/main_unpacked.bin", _sha256(official_image)),))
+    return m
+
+
+def test_version_labels_are_listed_once_in_file_order(tmp_path):
+    upd = tmp_path / "C2KNXS2.UPD"
+    upd.write_bytes(b"GUI Ver1.81 xx Ver1.00 yy Ver1.85 zz Ver1.00")
+    assert firmware.version_labels(str(upd)) == ["1.81", "1.00", "1.85"]
+
+
+def test_a_foreign_update_is_refused_unless_any_firmware_is_given(tmp_path):
+    upd = tmp_path / "C2KNXS2.UPD"
+    upd.write_bytes(b"Ver1.70")
+    with pytest.raises(firmware.FirmwareError, match=r"(?s)Only v1\.87 is supported.*--any-firmware"):
+        firmware.prepare(str(upd), model=model.load(), say=lambda s: None)
+
+
+def test_any_firmware_installs_a_different_image_and_it_shows_as_differing(tmp_path, monkeypatch):
+    m = _one_image_model(monkeypatch, b"official")
+    _fake_unpack(monkeypatch, b"modded")
+    upd = tmp_path / "C2KNXS2.UPD"
+    upd.write_bytes(b"Ver1.99")
+    dest = tmp_path / "extract"
+    said = []
+    firmware.prepare(str(upd), out=str(tmp_path / "out"), install_to=str(dest), model=m,
+                     say=said.append, any_firmware=True)
+    assert (dest / "main_unpacked.bin").read_bytes() == b"modded"
+    assert firmware.differing_images(str(dest), m) == ["main_unpacked.bin"]
+    assert any(line.startswith("WARNING: C2KNXS2.UPD is not") and "Ver1.99" in line for line in said)
+    assert any(line.startswith("  DIFF  extract/main_unpacked.bin") for line in said)
+
+
+def test_any_firmware_still_fails_when_an_image_is_not_produced(tmp_path, monkeypatch):
+    m = _one_image_model(monkeypatch, b"official")
+    monkeypatch.setattr(firmware, "_do_sections", lambda py, tools, out, upd_files, log: True)
+    upd = tmp_path / "C2KNXS2.UPD"
+    upd.write_bytes(b"x")
+    with pytest.raises(firmware.FirmwareError, match="is missing"):
+        firmware.prepare(str(upd), out=str(tmp_path / "out"), install_to=str(tmp_path / "extract"), model=m,
+                         say=lambda s: None, any_firmware=True)
+    assert not (tmp_path / "extract").exists()
+
+
+def test_an_official_reinstall_no_longer_differs(tmp_path, monkeypatch):
+    m = _one_image_model(monkeypatch, b"official")
+    dest = tmp_path / "extract"
+    dest.mkdir()
+    (dest / "main_unpacked.bin").write_bytes(b"modded")
+    assert firmware.differing_images(str(dest), m) == ["main_unpacked.bin"]
+    _fake_unpack(monkeypatch, b"official")
+    monkeypatch.setitem(m.__dict__, "upd_sha256", [_sha256(b"Ver1.87")])
+    upd = tmp_path / "C2KNXS2.UPD"
+    upd.write_bytes(b"Ver1.87")
+    firmware.prepare(str(upd), out=str(tmp_path / "out"), install_to=str(dest), force=True, model=m,
+                     say=lambda s: None)
+    assert firmware.differing_images(str(dest), m) == []
+
+
+def test_main_accepts_any_firmware(tmp_path, capsys):
+    missing = str(tmp_path / "no.upd")
+    assert firmware.main(["--any-firmware", missing]) == 1
+    assert "no such file or folder" in capsys.readouterr().err

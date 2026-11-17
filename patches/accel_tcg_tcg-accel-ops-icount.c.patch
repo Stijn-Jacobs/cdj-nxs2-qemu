@@ -1,0 +1,25 @@
+diff --git a/accel/tcg/tcg-accel-ops-icount.c b/accel/tcg/tcg-accel-ops-icount.c
+index d0f7b410..7d150bc4 100644
+--- a/accel/tcg/tcg-accel-ops-icount.c
++++ b/accel/tcg/tcg-accel-ops-icount.c
+@@ -45,10 +45,20 @@ static int64_t icount_get_limit(void)
+          */
+         deadline = qemu_clock_deadline_ns_all(QEMU_CLOCK_VIRTUAL,
+                                               QEMU_TIMER_ATTR_ALL);
++#ifndef EMSCRIPTEN
+         /* Check realtime timers, because they help with input processing */
+         deadline = qemu_soonest_timeout(deadline,
+                 qemu_clock_deadline_ns_all(QEMU_CLOCK_REALTIME,
+                                            QEMU_TIMER_ATTR_ALL));
++#else
++        /*
++         * Left out in a browser. The main loop thread runs the realtime
++         * timers while this thread executes without the BQL, but it wakes
++         * late there, so an overdue realtime timer (the 1 ms link pump) cut
++         * the slices to a few hundred instructions, each paying a cpu_exec
++         * entry and a clock read through JavaScript.
++         */
++#endif
+ 
+         /*
+          * Maintain prior (possibly buggy) behaviour where if no deadline

@@ -92,9 +92,9 @@ class Jog:
     HOLD_S = 0.25
     FIRST_EVENT_S = 0.03            # the gap assumed before a drag's first move
 
-    def __init__(self, send):
+    def __init__(self, send, **platter):
         self.send = send
-        self.platter = A.Platter()
+        self.platter = A.Platter(**platter)
         self.ticks_per_degree = self.platter.nominal_tps / self.NOMINAL_DEG_S
         self.carry = 0.0
         self.angle = 0.0                # degrees turned, for the drawing
@@ -211,3 +211,39 @@ class TempoSlider:
         if value != self.sent:
             self.sent = value
             self.send(self.action.datagram(value))
+
+
+class WordSlider:
+    """An older player's tempo fader, `pos` running 0 (top, '-') to 1 (bottom, '+').
+
+    The position is a 16-bit word in report bytes `off` and `off + 1`, and the
+    firmware converts it to a tempo only against the centre reference in the
+    word after it, so the first move sends that too. On the CDJ-2000 the ends
+    of the word read -10.00 % and +10.00 % and 0x8000 reads 0.00 %.
+    """
+
+    DETENT = 0.015
+    CENTRE = 0x8000
+
+    def __init__(self, send, off):
+        self.send = send
+        self.off = off
+        self.pos = 0.5
+        self.sent = None
+
+    def set(self, pos):
+        pos = max(0.0, min(1.0, pos))
+        if abs(pos - 0.5) < self.DETENT:
+            pos = 0.5
+        self.pos = pos
+        word = round(pos * 0xFFFF)
+        if word == self.sent:
+            return
+        if self.sent is None:
+            self._send_word(self.off + 2, self.CENTRE)
+        self.sent = word
+        self._send_word(self.off, word)
+
+    def _send_word(self, off, word):
+        self.send(f"0x{off:02x}:{word >> 8}:0:lvl")
+        self.send(f"0x{off + 1:02x}:{word & 0xFF}:0:lvl")

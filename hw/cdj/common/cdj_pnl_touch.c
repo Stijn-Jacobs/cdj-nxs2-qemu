@@ -149,13 +149,14 @@ void cdj_pnl_touch_summary(const CdjPnlTouch *t)
 
 static CdjPnlTouch *pointer_target;
 
-static void pointer_event(DeviceState *dev, QemuConsole *src, InputEvent *evt)
+static void pointer_event(DeviceState *dev, QemuConsole *src,
+                          QemuInputEvent *evt)
 {
     CdjTouch *host = &pointer_target->host;
 
     switch (evt->type) {
     case INPUT_EVENT_KIND_ABS: {
-        InputMoveEvent *m = evt->u.abs.data;
+        InputMoveEvent *m = &evt->abs;
 
         /* The axis spans the 800x480 console at any window zoom. */
         if (m->axis == INPUT_AXIS_X) {
@@ -170,7 +171,7 @@ static void pointer_event(DeviceState *dev, QemuConsole *src, InputEvent *evt)
         break;
     }
     case INPUT_EVENT_KIND_BTN: {
-        InputBtnEvent *b = evt->u.btn.data;
+        InputBtnEvent *b = &evt->btn;
 
         if (b->button == INPUT_BUTTON_LEFT) {
             host->down = b->down;

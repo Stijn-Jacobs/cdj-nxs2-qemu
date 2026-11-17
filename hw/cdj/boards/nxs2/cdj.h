@@ -13,28 +13,27 @@
 #include "qemu/main-loop.h"
 #include "qapi/error.h"
 #include "cpu.h"
-#include "hw/sysbus.h"
-#include "hw/boards.h"
-#include "hw/loader.h"
-#include "hw/qdev-properties.h"
+#include "hw/core/sysbus.h"
+#include "hw/core/boards.h"
+#include "hw/core/loader.h"
+#include "hw/core/qdev-properties.h"
 #include "hw/misc/unimp.h"
 #include "hw/block/flash.h"
 #include "chardev/char-fe.h"
-/* QEMU 9.1 still uses the sysemu/ include prefix. */
-#include "sysemu/blockdev.h"
-#include "sysemu/block-backend.h"
+#include "system/blockdev.h"
+#include "system/block-backend.h"
 #include "hw/sh4/sh.h"
 #include "hw/sh4/sh_intc.h"
 #include "hw/timer/tmu012.h"
-#include "hw/irq.h"
-#include "hw/usb.h"
+#include "hw/core/irq.h"
+#include "hw/usb/usb.h"
 #include "net/net.h"
 #include "exec/cdj-pcring.h"
-#include "sysemu/reset.h"
-#include "sysemu/runstate.h"
+#include "system/reset.h"
+#include "system/runstate.h"
 #include "qemu/notify.h"
-#include "sysemu/sysemu.h"
-#include "exec/address-spaces.h"
+#include "system/system.h"
+#include "system/address-spaces.h"
 #include "ui/console.h"
 #include "ui/surface.h"
 #include "ui/vgafont.h"
@@ -66,7 +65,7 @@
 #define CDJ_AREA6_PHYS      0x18000000      /* CS6, opt-in via CDJ_AREA6 */
 #define CDJ_AREA6_SIZE      (16 * MiB)
 
-#include "audio/audio.h"
+#include "qemu/audio.h"
 
 /* Entry is image offset 0x800 (from the decompressor stub's literal pool).
  * With VBR at the image base: +0x100 general exception, +0x400 TLB miss,
@@ -223,9 +222,10 @@ typedef struct CdjC6x {
     uint64_t mhz;
     uint64_t mhz_run;               /* CDJ_C6X_MHZ, taken up once stage 1 boots */
     uint64_t mhz_floor;             /* CDJ_C6X_GOVERN: lowest clock the governor picks, 0 = off */
+    uint64_t mhz_need;              /* lowest clock that has not dropped an EDMA3 completion */
     struct {
         int64_t wall;
-        uint64_t dsp_ns, host_ns, cycles;
+        uint64_t dsp_ns, host_ns, cycles, overruns;
     } gov;
     uint64_t max_catchup_ns;
     bool running;
@@ -404,7 +404,7 @@ typedef struct CdjPfcState {
 
 typedef struct CdjScifaState {
     MemoryRegion iomem;
-    CharBackend chr;
+    CharFrontend chr;
     const char *name;
     Notifier exit;
     unsigned traced;
@@ -540,6 +540,7 @@ enum {
     CDJ_ETHI,                    /* EtherMAC, vector H'D60, IPRJ [11:8]       */
     CDJ_LCDCI,                   /* LCDC, vector H'F40, IPRB [11:8]           */
     CDJ_2DG_TRI,                 /* 2DG transfer end, vector H'780, IPRI [3:0] */
+    CDJ_SCIF0,                   /* SCIF0, vector H'C00, IPRG [15:12]        */
     CDJ_INTC_NR_SOURCES
 };
 

@@ -1,5 +1,5 @@
 diff --git a/chardev/char-win-stdio.c b/chardev/char-win-stdio.c
-index 13325ca..015fe3a 100644
+index 0deba3b..022cdde 100644
 --- a/chardev/char-win-stdio.c
 +++ b/chardev/char-win-stdio.c
 @@ -93,8 +93,14 @@ static DWORD WINAPI win_stdio_thread(LPVOID param)

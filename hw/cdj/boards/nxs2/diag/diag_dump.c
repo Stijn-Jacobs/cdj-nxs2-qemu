@@ -104,7 +104,7 @@ void cdj_ivt_dump(Notifier *n, void *unused)
     uint32_t slot[CDJ_IVT_SLOTS];
     unsigned i, installed = 0, unhooked = 0, top = CDJ_IVT_FIRST_IRQ;
 
-    cpu_physical_memory_read(CDJ_IVT_BASE, slot, sizeof(slot));
+    physical_memory_read(CDJ_IVT_BASE, slot, sizeof(slot));
 
     /* The table's top is the last slot holding a code pointer. */
     for (i = CDJ_IVT_FIRST_IRQ; i < CDJ_IVT_SLOTS; i++) {
@@ -137,10 +137,10 @@ void cdj_ivt_dump(Notifier *n, void *unused)
         uint32_t h = 0;
         unsigned k;
 
-        cpu_physical_memory_read(CDJ_IVT_BASE + (0x400 >> 3), &h, 4);
+        physical_memory_read(CDJ_IVT_BASE + (0x400 >> 3), &h, 4);
         h = le32_to_cpu(h);
         if (h) {
-            cpu_physical_memory_read(h & 0x1FFFFFFF, code, sizeof(code));
+            physical_memory_read(h & 0x1FFFFFFF, code, sizeof(code));
             qemu_log("ivt: handler 0x%08x bytes:", h);
             for (k = 0; k < sizeof(code); k++) {
                 qemu_log(" %02x", code[k]);
@@ -170,8 +170,8 @@ void cdj_console_dump(Notifier *n, void *unused)
     uint32_t st[4];
     bool printable = false;
 
-    cpu_physical_memory_read(CDJ_CONSOLE_BUF, buf, CDJ_CONSOLE_LEN);
-    cpu_physical_memory_read(CDJ_CONSOLE_STATE, st, sizeof(st));
+    physical_memory_read(CDJ_CONSOLE_BUF, buf, CDJ_CONSOLE_LEN);
+    physical_memory_read(CDJ_CONSOLE_STATE, st, sizeof(st));
     buf[CDJ_CONSOLE_LEN] = 0;
 
     for (unsigned i = 0; i < CDJ_CONSOLE_LEN && buf[i]; i++) {

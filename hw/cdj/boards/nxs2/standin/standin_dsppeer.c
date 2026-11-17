@@ -607,7 +607,7 @@ void cdj_dsp_fill(uint8_t *out, unsigned words)
             && (cdj_dsp.param_pending || cdj_dsp.param_always)) {
             uint16_t t = 0;
 
-            cpu_physical_memory_read(cdj_dsp.tag_addr, &t, 2);
+            physical_memory_read(cdj_dsp.tag_addr, &t, 2);
             vec_rl = cdj_dsp_rlist_find(t);
             /*
              * CDJ_DSP_TAGLOG=1: log each change of the expected tag
@@ -616,7 +616,7 @@ void cdj_dsp_fill(uint8_t *out, unsigned words)
             if (cdj_dsp.taglog && t != cdj_dsp_taglog_last) {
                 uint32_t outstanding = 0;
 
-                cpu_physical_memory_read(0x09944CA0, &outstanding, 4);
+                physical_memory_read(0x09944CA0, &outstanding, 4);
                 info_report("dsp tag: 0x%04X outstanding %u list %u",
                             t, outstanding, vec_rl ? vec_rl->n : 0);
                 if (vec_rl && vec_rl->n >= 6) {
@@ -801,7 +801,7 @@ void cdj_dsp_fill(uint8_t *out, unsigned words)
             uint16_t t = 0;
             uint32_t idx, v;
 
-            cpu_physical_memory_read(cdj_dsp.tag_addr, &t, 2);
+            physical_memory_read(cdj_dsp.tag_addr, &t, 2);
             idx = cdj_dsp_tagidx[t];
             if (idx == CDJ_DSP_PARAM_NONE) {
                 cdj_dsp.param_tag_miss++;
@@ -923,7 +923,7 @@ void cdj_dsp_fill(uint8_t *out, unsigned words)
         if (cdj_dsp.tag && cdj_dsp.tag_off + 2 <= words * 2) {
             uint16_t t = 0;
 
-            cpu_physical_memory_read(cdj_dsp.tag_addr, &t, 2);
+            physical_memory_read(cdj_dsp.tag_addr, &t, 2);
             cdj_dsp_put_word(out + cdj_dsp.tag_off, t);
             cdj_dsp.tag_last = t;
             cdj_dsp.tag_echoes++;

@@ -22,6 +22,7 @@
 #ifndef CDJ_PANELKEYS_H
 #define CDJ_PANELKEYS_H
 
+#include "qapi/error.h"
 #include "qemu/sockets.h"
 
 #define CDJ_PANELKEY_ENV   "CDJ_PANEL_KEYSOCK"
@@ -90,7 +91,7 @@ static inline int cdj_panelsock_bind(const char *name)
         close(fd);
         return -1;
     }
-    qemu_socket_set_nonblock(fd);
+    qemu_set_blocking(fd, false, &error_abort);
     return fd;
 }
 
@@ -112,7 +113,7 @@ static inline int cdj_panelsock_connect(const char *name)
         close(fd);
         return -1;
     }
-    qemu_socket_set_nonblock(fd);
+    qemu_set_blocking(fd, false, &error_abort);
     return fd;
 }
 

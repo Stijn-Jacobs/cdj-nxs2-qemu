@@ -3,7 +3,7 @@
 # build tree.
 # Sets QEMU_PYTHON_ARG: empty, or a --python= for QEMU's configure.
 #
-# QEMU 9.1's configure builds its own venv and needs two things from the Python
+# QEMU's configure builds its own venv and needs two things from the Python
 # it starts from: tomllib (3.11+) or tomli, and distlib, which it takes from pip
 # when it is not installed. pip 25 and newer no longer carry the part it uses,
 # so on a current macOS neither the system Python nor Homebrew's will do, and

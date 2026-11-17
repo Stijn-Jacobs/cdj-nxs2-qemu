@@ -2,7 +2,7 @@
 #include "sh7763.h"
 #include "cdj_getenv.h"
 #include "cdj_ether.h"
-#include "cdj_ata.h"
+#include "cdj2000_ata.h"
 #include "usb_r8a66597.h"
 /*
  * Pioneer CDJ-2000 and CDJ-2000NXS MAIN board (Renesas SH7763) -- bring-up.
@@ -15,15 +15,22 @@
  * What the board models so far is what the boot needs first: the DMAC (the
  * firmware clears bss with DMAC channel 5 and polls TE), the clock register
  * the tick constant is chosen from, the interrupt controller, the timers
- * (the kernel tick is TMU channel 4) and both SCIFs. Every other
- * SH7763 block is a named unimplemented region, so the bring-up log
- * (scripts/run/boot_main.sh) lists what to model next.
+ * (TMU0 is the NORTi tick, TMU4 is Pioneer's periodic) and both SCIFs.
+ * Every other SH7763 block is a named unimplemented region, so the bring-up
+ * log (scripts/run/boot_main.sh) lists what to model next.
  */
 
-/* The kernel tick is TMU channel 4 at 13500 counts per interrupt: 1 ms at
- * 54 MHz. The firmware picks 13500 over 11250 when FRQCR's top nibble is 3. */
+/* NORTi uses TMU0; Pioneer uses TMU4/5. The stock MAIN reads FRQCR at
+ * 0x042C5B7E and never writes it: top nibble 3 (mode 2) gives TMU0 a period
+ * of 11250 counts, anything else 13500. The mode straps set FRQCR, and the
+ * NXS strap is mode 3 (reset value 0x40320044, SH7764 hardware manual
+ * table 10.2). NXS X2 is 26.965 MHz, PLL x12, Pphi /6: 53.93 MHz. The
+ * CDJ-2000 and CDJ-900 keep 0x30000000 and 54 MHz until their straps are
+ * read. */
 #define SH7763_PERIPH_HZ    54000000
 #define SH7763_FRQCR_BOOT   0x30000000
+#define CDJ2000NXS_PERIPH_HZ 53930000
+#define CDJ2000NXS_FRQCR_BOOT 0x40320044
 
 #define CDJ2000_USBH_BASE   0xFE400000
 
@@ -50,7 +57,12 @@ static const CdjBoardDesc cdj2000nxs_board = {
      * (0x04368888, 0x04368894) before 0x04368878 first writes it. */
     .sr_seed_slot = 0x04D13694,
     .sr_seed = 0x400000F0,
-    .periph_hz = SH7763_PERIPH_HZ,
+    .periph_hz = CDJ2000NXS_PERIPH_HZ,
+    .frqcr = CDJ2000NXS_FRQCR_BOOT,
+    /* Stock MAIN's updater gives up on media ~3 s after it starts and finds
+     * a stick present at power-on ~0.2-0.3 s before that; a 500 ms first
+     * attach sent it down its no-media path (phase_saved 0x80). */
+    .usb_attach_at_boot = true,
     .ccn_trace_lo = 0x640,              /* DMAC DMTE0..DMTE3 */
     .ccn_trace_hi = 0x6A0,
     .exit_report = cdj_sh7763_intc_report,
@@ -121,8 +133,8 @@ void sh7763_board_init(MachineState *machine, const CdjBoardDesc *desc,
     SuperHCPU *cpu = cdj_board_init(machine, desc);
     qemu_irq *irq;
     bool display;
-    static const CdjRegInit cpg[] = {
-        { 0x00, SH7763_FRQCR_BOOT },
+    const CdjRegInit cpg[] = {
+        { 0x00, desc->frqcr ? desc->frqcr : SH7763_FRQCR_BOOT },
         { 0 },
     };
 
@@ -142,7 +154,7 @@ void sh7763_board_init(MachineState *machine, const CdjBoardDesc *desc,
                  cdj_count_irq(irq[S63_TMU2], "TMU2"));
     cdj_tmu_init(sysmem, 0x1FDC0000,
                  cdj_count_irq(irq[S63_TMU3], "TMU3"),
-                 cdj_count_irq(irq[S63_TMU4], "TMU4 tick"),
+                 cdj_count_irq(irq[S63_TMU4], "TMU4 Pioneer"),
                  cdj_count_irq(irq[S63_TMU5], "TMU5"));
     cdj_irqcount_exit.notify = cdj_irqcount_dump;
     cdj_add_exit_report(&cdj_irqcount_exit);
@@ -193,8 +205,12 @@ void sh7763_board_init(MachineState *machine, const CdjBoardDesc *desc,
      * base; its MDIO read routine needs one extra turnaround lead-in bit
      * (static trace only, not yet confirmed against a live MDIO read). */
     cdj_ether_init(sysmem, "sh7763.ether", 0xFEF00000,
-                  cdj_count_irq(irq[S63_GETHER0], "GETHER0"), 1, true);
-    cdj2000_sdhi_init(sysmem);
+                  cdj_count_irq(irq[S63_GETHER0], "GETHER0"), NULL, 1, true);
+    /* The launcher holds each deck's own MAC in RAM with CDJ_MPOKE, so two
+     * linked decks do not both announce the blank flash's address. */
+    cdj_mpoke_init();
+    cdj2000_sdhi_init(sysmem, cdj_count_irq(irq[S63_SDHI], "SDHI"),
+                      cdj_count_irq(irq[S63_DMTE5], "DMAC DMTE5"));
     if (auth_chip) {
         cdj2000_iic_init(sysmem, nxs_auth_answers,
                          ARRAY_SIZE(nxs_auth_answers));
@@ -204,8 +220,7 @@ void sh7763_board_init(MachineState *machine, const CdjBoardDesc *desc,
      * ATAPI_CONTROL* layout, offset for offset. GPIO/PFC is the next 64 KiB.
      * Its ISR 0x04109180 is registered as INTEVT H'C00 (T_CISR 0x0405D31C),
      * enabled through INT2PRI6 bits 31-24 and INT2MSKCR bit 20. */
-    cdj_ata_init(sysmem, "sh7763.atapi", 0xFFF00000,
-                 cdj_count_irq(irq[S63_ATAPI], "ATAPI"));
+    cdj2000_ata_init(sysmem, cdj_count_irq(irq[S63_ATAPI], "ATAPI"));
     cdj_unimp("sh7763.gpio",  0xFFF10000, 0x10000);
     /* Created after the board's RAM so that the largest RAM block sits at
      * offset 0: a migration's dirty-bitmap sync clears each block's range
@@ -231,15 +246,11 @@ void sh7763_board_init(MachineState *machine, const CdjBoardDesc *desc,
     }
     cdj_unimp("sh7763.blk-ffd3", 0xFFD30000, 0x10000);
     cdj_unimp("sh7763.blk-ff2f", 0xFF2F0000, 0x10000);
-    /* The rear USB-B function chip (MIDI/HID/audio class), not the NXS2's
-     * R8A66597 host controller: its register layout past +0x0E does not
-     * match that chip (+0x10 is an interrupt-enable register, not DMA0CFG).
-     * The probe (0x042399C8) writes 1 to +0x000 and polls it for bit 0 up to
-     * 256 times; a plain read-back register file answers that with nothing
-     * behind it, which is enough for the boot (a failed probe only parks the
-     * USB task, it does not stop MAIN). The USB host itself is on-chip at
-     * 0xFE400000 (see below). */
-    cdj_regs(sysmem, "cdj2000.usbf", 0x01000000, 0x1000, NULL);
+    /* The rear USB-B function chip (MIDI/HID/audio class), an M66291GP, not
+     * the NXS2's R8A66597 host controller. Its INT# is the SH7763's GPIO
+     * channel 2 (INTEVT 0xFC0). The USB host itself is on-chip at 0xFE400000
+     * (see above). */
+    cdj2000_usbf_init(sysmem, cdj_count_irq(irq[S63_GPIO2], "USBF"));
 
     cdj_board_load(machine);
     cdj_board_start(cpu);
@@ -272,7 +283,9 @@ static void cdj2000_init(MachineState *machine)
  * SH_FEATURE_SH4A, i.e. the SH7785. */
 static void cdj2000nxs_machine_init(MachineClass *mc)
 {
-    mc->desc = "Pioneer CDJ-2000NXS (Renesas SH7763), bring-up";
+    /* The tag tells a launcher, from -M help alone, that this binary has
+     * CDJ_NETSIM_CLOCK=wall (see cdj_netsim.c). */
+    mc->desc = "Pioneer CDJ-2000NXS (Renesas SH7763), bring-up [netsim-wall-v1]";
     mc->init = cdj2000nxs_init;
     mc->default_cpu_type = TYPE_SH7785_CPU;
     mc->default_ram_size = 128 * MiB;

@@ -1,5 +1,5 @@
 diff --git a/migration/file.c b/migration/file.c
-index 6451a21..1aaccb0 100644
+index 8ba1de2..c6c53a6 100644
 --- a/migration/file.c
 +++ b/migration/file.c
 @@ -63,7 +63,7 @@ static void file_enable_direct_io(int *flags)
@@ -11,7 +11,7 @@ index 6451a21..1aaccb0 100644
      bool ret = true;
  
      if (migrate_direct_io()) {
-@@ -103,7 +103,8 @@ void file_start_outgoing_migration(MigrationState *s,
+@@ -103,7 +103,8 @@ QIOChannel *file_connect_outgoing(MigrationState *s,
  
      trace_migration_file_outgoing(filename);
  
@@ -19,9 +19,9 @@ index 6451a21..1aaccb0 100644
 +    fioc = qio_channel_file_new_path(filename, O_CREAT | O_WRONLY | O_BINARY,
 +                                     0600, errp);
      if (!fioc) {
-         return;
+         goto out;
      }
-@@ -139,7 +140,7 @@ static void file_create_incoming_channels(QIOChannel *ioc, char *filename,
+@@ -143,7 +144,7 @@ static void file_create_incoming_channels(QIOChannel *ioc, char *filename,
  {
      int i, channels = 1;
      g_autofree QIOChannel **iocs = NULL;
@@ -30,7 +30,7 @@ index 6451a21..1aaccb0 100644
  
      if (migrate_multifd()) {
          channels += migrate_multifd_channels();
-@@ -181,7 +182,7 @@ void file_start_incoming_migration(FileMigrationArgs *file_args, Error **errp)
+@@ -185,7 +186,7 @@ void file_connect_incoming(FileMigrationArgs *file_args, Error **errp)
  
      trace_migration_file_incoming(filename);
  

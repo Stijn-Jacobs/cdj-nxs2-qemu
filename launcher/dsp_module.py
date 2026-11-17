@@ -3,9 +3,13 @@
 setup and start share. The stamp names what the module was built from:
 
   generator  c14_jitgen.py's GENERATOR_VERSION; the generated C changed meaning
+  revision   its GENERATOR_REVISION; the generated C only got faster
   abi        C66X_JIT_ABI, the core structs the module is compiled against
   firmware   the sha256 of the player's main_unpacked.bin, the DSP program's source
+             (the installed image's; the supported update's when none is installed)
   model      the player
+
+The same stamp covers m.extra.so when the build installs a supplemental pass.
 
 The core refuses a module of another ABI by itself and every compiled region
 checks its code bytes, so a module of another firmware only loses speed. A
@@ -13,6 +17,9 @@ module of another generator version is the one that could compute wrongly, and
 the core cannot tell. Start-up therefore loads none of the three kinds of
 mismatch, and loads a module with no stamp (built before stamps existed) with a
 banner.
+
+A module of an older revision is the same program, only slower: start-up loads
+it and offers to build the faster one (see upgrade_due).
 
   python -m launcher dsp-stamp <folder>   write the stamp of CDJ_MODEL's module
 """
@@ -22,12 +29,34 @@ import os
 import re
 import sys
 
-from . import model
+from . import firmware, host, model
 from .layout import Layout
 
 STAMP = "m.stamp"
+DECLINED = "m.declined"
 
 Module = collections.namedtuple("Module", "path notice")
+
+
+def paths(path):
+    """The curated module followed by its optional, jointly stamped supplement."""
+    if not path:
+        return []
+    extra = os.path.join(os.path.dirname(path), "m.extra.so")
+    return [path] + ([extra] if os.path.isfile(extra) else [])
+
+
+def _chain_sep():
+    return ";" if host.is_windows() else ":"
+
+
+def native_chain(path):
+    return _chain_sep().join(host.native(p) for p in paths(path))
+
+
+def chain_files(env):
+    """The modules C66X_JIT names that exist, in load order."""
+    return [p for p in env.get("C66X_JIT", "").split(_chain_sep()) if os.path.isfile(p)]
 
 
 def _constant(path, pattern):
@@ -35,12 +64,21 @@ def _constant(path, pattern):
         return re.search(pattern, f.read(), re.MULTILINE).group(1)
 
 
+def _main_sha256(lay, m):
+    installed = os.path.join(model.extract_dir(lay, m), "main_unpacked.bin")
+    if os.path.isfile(installed):
+        return firmware.sha256(installed)
+    return firmware.stock_main_sha256(m)
+
+
 def current(lay, m):
     """What a module built now would be stamped with."""
     c6x = os.path.join(lay.emu, "hw", "cdj", "c6x")
-    return {"generator": _constant(os.path.join(c6x, "tools", "c14_jitgen.py"), r"^GENERATOR_VERSION = (\d+)"),
+    jitgen = os.path.join(c6x, "tools", "c14_jitgen.py")
+    return {"generator": _constant(jitgen, r"^GENERATOR_VERSION = (\d+)"),
+            "revision": _constant(jitgen, r"^GENERATOR_REVISION = (\d+)"),
             "abi": _constant(os.path.join(c6x, "c66x_core_int.h"), r"^#define C66X_JIT_ABI (\d+)"),
-            "firmware": next(sha for rel, sha in m.expected if rel.endswith("main_unpacked.bin")),
+            "firmware": _main_sha256(lay, m),
             "model": m.id}
 
 
@@ -49,15 +87,48 @@ def write(folder, stamp):
         f.writelines("%s=%s\n" % kv for kv in stamp.items())
 
 
-def differences(folder, stamp):
-    """The stamp keys that differ between the module in `folder` and `stamp`;
-    None when it has no stamp."""
+def _built(folder):
+    """The stamp of the module in `folder`; None when it has none."""
     try:
         with open(os.path.join(folder, STAMP), encoding="utf-8") as f:
-            built = dict(line.rstrip("\n").split("=", 1) for line in f if "=" in line)
+            return dict(line.rstrip("\n").split("=", 1) for line in f if "=" in line)
     except OSError:
         return None
-    return [k for k in stamp if built.get(k) != stamp[k]]
+
+
+def differences(folder, stamp):
+    """The stamp keys that differ between the module in `folder` and `stamp`,
+    except the revision, which only makes a module slower; None when it has no
+    stamp."""
+    built = _built(folder)
+    if built is None:
+        return None
+    return [k for k in stamp if k != "revision" and built.get(k) != stamp[k]]
+
+
+def _declined(folder):
+    try:
+        with open(os.path.join(folder, DECLINED), encoding="utf-8") as f:
+            return int(f.read())
+    except (OSError, ValueError):
+        return 0
+
+
+def upgrade_due(lay, m):
+    """True when the installed module fits this code but is of an older
+    generator revision (every module built before revisions existed is), and
+    the user has not already declined this revision."""
+    folder = os.path.join(lay.jit_cache, m.module_dir)
+    stamp = current(lay, m)
+    if not os.path.isfile(os.path.join(folder, "m.so")) or differences(folder, stamp) != []:
+        return False
+    return max(int(_built(folder).get("revision", 0)), _declined(folder)) < int(stamp["revision"])
+
+
+def decline_upgrade(lay, m):
+    """Remembers the current revision as declined, so start-up stops asking."""
+    with open(os.path.join(lay.jit_cache, m.module_dir, DECLINED), "w", encoding="utf-8", newline="\n") as f:
+        f.write(current(lay, m)["revision"] + "\n")
 
 
 def build_command(lay, m):

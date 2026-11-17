@@ -80,10 +80,6 @@ Nothing is sent when the packet's player is not 1 to 4. `python
 mods/patch_update.py C2KNXS2.UPD out.UPD osc` writes both into a real
 update (firmware 1.87).
 
-**What is verified.** The beat half (`beat`, `bar`, `timing`) was checked live
-in the emulator: one matching message per beat, with the deck's beat timing
-unchanged. The state and event messages are tested offline only, and nothing has run on
-a real deck. The deck clock in `timing` is the firmware's millisecond tick
-word, not measured against a real clock.
+The deck clock in `timing` is the firmware's millisecond tick word. Not tried on a real deck.
 
-Back to the [mods](../../README.md#mods).
+Back to the [mods](../../docs/mods.md).

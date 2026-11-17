@@ -145,6 +145,18 @@ def fetch(con, lay):
     return binary
 
 
+def expressport_argv(binary, xml_path, device, device_name=None):
+    """baken's command that writes a stick's export (export.pdb, the analysis
+    files and the audio) into `device` from a collection.xml: waveforms are
+    computed from the audio, grid and cues taken from the XML, and no My
+    Settings are written, so the player keeps its own. Without device_name
+    the player shows the device folder's name."""
+    argv = [binary, "expressport", "--device", device, "--generate-analysis", "--no-settings"]
+    if device_name:
+        argv += ["--device-name", device_name]
+    return argv + [xml_path]
+
+
 def ensure(con, lay, o):
     """An installed baken, fetching it if needed; None (with the reason
     already printed) when neither the download nor cargo install worked."""

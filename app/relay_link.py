@@ -46,6 +46,9 @@ class DeckState:
     # per turn (midi/README.md, "LEDs").
     POINTER_BYTE = 9
     POINTER_STEPS = 135
+    # The jog ring light (pnl byte 2): the white level in bits 3:2, the red
+    # in bits 1:0.
+    RING_BYTE = 2
 
     def __init__(self):
         self.pnl = None
@@ -67,6 +70,13 @@ class DeckState:
         if not self.live or self.pnl is None or len(self.pnl) <= self.POINTER_BYTE:
             return None
         return (self.pnl[self.POINTER_BYTE] % self.POINTER_STEPS) / self.POINTER_STEPS
+
+    def ring(self):
+        """The jog ring light as (white, red) levels, each 0-3."""
+        if not self.live or self.pnl is None or len(self.pnl) <= self.RING_BYTE:
+            return 0, 0
+        b = self.pnl[self.RING_BYTE]
+        return (b >> 2) & 3, b & 3
 
     def bpm(self):
         v = self.frm.get("bpm") if self.live else None

@@ -30,4 +30,24 @@ extern unsigned cdj_pc_ring_idx;
 /* SR.BL: exceptions blocked. */
 #define CDJ_SR_BL_BIT 28
 
+/*
+ * accel/tcg is built once for every target, so what the ring and the
+ * CDJ_JCPROF jump-cache profile read from the guest CPU's state comes from the
+ * target through these hooks, set when its CPU is realized.
+ */
+#define CDJ_EXIT_KINDS_MAX 16
+
+typedef struct CdjTcgHooks {
+    /* SR as the ring records it. */
+    uint32_t (*ring_sr)(CPUState *cpu);
+    /* Why the last TB was left, as stored by the translator; resets it. */
+    unsigned (*take_exit_kind)(CPUState *cpu);
+    const char *const *exit_kind_names;
+    unsigned n_exit_kinds;                  /* at most CDJ_EXIT_KINDS_MAX */
+    /* Appends the target's own counters to a jcprof report line. */
+    void (*jcprof_report)(CPUState *cpu);
+} CdjTcgHooks;
+
+extern const CdjTcgHooks *cdj_tcg_hooks;
+
 #endif /* CDJ_PCRING_H */

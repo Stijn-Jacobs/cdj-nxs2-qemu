@@ -4,6 +4,7 @@ driver), the mouse and keys driven by posted events, nothing on the network --
 the relay and VNC ports are ones nothing listens on."""
 import os
 import sys
+import time
 
 import pytest
 
@@ -84,3 +85,43 @@ def test_keys_go_to_the_deck_and_f2_docks_the_screen(app):
     assert app.mode == "dock"
     assert [type(v).__name__ for v, _ in app.views] == ["DeckView", "DockView"]
     assert app.window.size[0] >= app.content_size[0]
+
+
+def publish_ring(deck, byte2):
+    """MAIN's panel frame for `deck`, as the relay hands it on, with byte 2 set."""
+    frame = bytearray(40)
+    frame[2] = byte2
+    st = deck.relay.state(deck.tag)
+    st.pnl, st.seen = bytes(frame), time.monotonic()
+
+
+def test_the_jog_ring_reads_white_and_red_levels(app):
+    deck = app.decks[0]
+    st = deck.relay.state(deck.tag)
+    assert st.ring() == (0, 0)              # nothing published yet
+    publish_ring(deck, 0xCC)                # what a deck that is up sends
+    assert st.ring() == (3, 0)
+    publish_ring(deck, 0xC3)
+    assert st.ring() == (0, 3)
+    st.seen = float("-inf")                 # the deck went quiet
+    assert st.ring() == (0, 0)
+
+
+def test_the_jog_outer_ring_lights_in_the_colour_main_sends(app):
+    deck = app.decks[0]
+    cx, cy, r = L.JOG
+    spot = (round(cx * deck.px), round((cy - r + 6) * deck.px))
+
+    def ring_at(byte2):
+        publish_ring(deck, byte2)
+        deck.tick(time.monotonic())
+        return deck.snapshot().getpixel(spot)
+
+    dark = ring_at(0x00)
+    white = ring_at(0xCC)
+    red = ring_at(0xC3)
+    dim = ring_at(0xC4)                     # white at level 1
+    assert min(white) > max(dark) + 80
+    assert red[0] > 200 and red[1] < 80 and red[2] < 80
+    assert max(dark) < max(dim) < min(white)
+    assert ring_at(0x00) == dark            # and back off
