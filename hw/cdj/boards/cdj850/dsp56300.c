@@ -893,6 +893,24 @@ static void exec_alu(Dsp56300 *d, uint8_t alu)
             if (c) d->sr |= SR_C; else d->sr &= ~SR_C;
             return;
         }
+        case 0x27: case 0x2F:   /* ROR: C -> bit 47, bit 24 -> C */
+        case 0x37: case 0x3F: { /* ROL: C -> bit 24, bit 47 -> C */
+            uint32_t a1 = (uint32_t)((*dst >> 24) & DSP_MASK24);
+            bool cin = (d->sr & SR_C) != 0;
+            bool c;
+            if (alu & 0x10) {
+                c = (a1 >> 23) & 1;
+                a1 = ((a1 << 1) | cin) & DSP_MASK24;
+            } else {
+                c = a1 & 1;
+                a1 = (a1 >> 1) | (cin ? 0x800000u : 0);
+            }
+            /* A2 and A0 are unchanged; N/Z come from A1, V is cleared. */
+            *dst = (*dst & ~0xFFFFFF000000ULL) | ((uint64_t)a1 << 24);
+            set_ccr_logic(d, *dst);
+            if (c) d->sr |= SR_C; else d->sr &= ~SR_C;
+            return;
+        }
         case 0x36: case 0x3E: {
             int64_t v = -sext56(*dst);
             *dst = (uint64_t)v & DSP_MASK56;
@@ -1611,6 +1629,25 @@ static bool step_one(Dsp56300 *d)
         } else if (used_ext) {
             next_pc = pc + 2;
         }
+    } else if ((op & 0xFEF880u) == 0x0A7080u) {
+        /* MOVE X/Y:(Rn+xxxx) long displacement (FM: 0000 101S 0111 0RRR
+         * 1WDD DDDD, displacement in the extension word). It shares the
+         * 0x0A/0x0B page with the <ea> bit ops; MMM=110 with bit 7 set is
+         * not a valid JCLR/JSET <ea>, so this pattern is unambiguous.
+         * Rn is not updated. W=1 loads D, W=0 stores it. */
+        unsigned rn = (op >> 8) & 7;
+        uint32_t addr = (d->r[rn] + ext) & DSP_MASK24;
+        bool y = op & 0x10000u;
+        unsigned reg = op & 0x3Fu;
+
+        if (op & 0x40u) {
+            write_reg6(d, reg, y ? mem_read_y(d, addr) : mem_read_x(d, addr));
+        } else if (y) {
+            mem_write_y(d, addr, read_reg6(d, reg));
+        } else {
+            mem_write_x(d, addr, read_reg6(d, reg));
+        }
+        next_pc = pc + 2;
     } else if ((op & 0xFF0000u) == 0x010000u ||
                (op & 0xFF0000u) == 0x0A0000u ||
                (op & 0xFF0000u) == 0x0B0000u) {
@@ -1692,6 +1729,17 @@ static bool step_one(Dsp56300 *d)
                 } else if (mid >= 0x80u) {
                     addr = 0xFFFFC0u + (mid & 0x3Fu);
                     val = space_y ? mem_read_y(d, addr) : mem_read_x(d, addr);
+                } else if (mid >= 0x40u) {
+                    /* <ea>: 01MM MRRR. The jump forms already use the
+                     * extension word as their target, so only the plain
+                     * bit ops may take an absolute address (MMMRRR 110000). */
+                    bool ea_ext = false;
+                    addr = eval_ea(d, mid & 0x3Fu, ext,
+                                   is_branch ? NULL : &ea_ext, true);
+                    if (ea_ext) {
+                        next_pc = pc + 2;
+                    }
+                    val = space_y ? mem_read_y(d, addr) : mem_read_x(d, addr);
                 } else {
                     addr = mid & 0x3Fu;
                     val = space_y ? mem_read_y(d, addr) : mem_read_x(d, addr);
@@ -1741,10 +1789,15 @@ static bool step_one(Dsp56300 *d)
             }
         }
     } else if ((op & 0xFE0000u) == 0x020000u) {
-        /* Tcc, including the optional address-register transfer (FM 13-177). */
+        /* Tcc, including the optional address-register transfer (FM 13-177):
+         *   0000 0010 CCCC 0000 0JJJ D000   Tcc S1,D1
+         *   0000 0011 CCCC 0ttt 0JJJ DTTT   Tcc S1,D1 S2,D2
+         *   0000 0010 CCCC 1ttt 0000 0TTT   Tcc S2,D2
+         * CCCC occupies bits 15:12, so the address-only flag is bit 11. */
         unsigned cc = (op >> 12) & 0xFu;
+        bool addr_only = !(op & 0x10000u) && (op & 0x800u);
         if (eval_cc(d, cc)) {
-            if (!(op & 0x8000u)) {
+            if (!addr_only) {
                 unsigned src = (op >> 4) & 7;
                 bool dst_b = op & 8;
                 uint64_t value = dst_b ? d->a : d->b;
@@ -1756,7 +1809,7 @@ static bool step_one(Dsp56300 *d)
                 }
                 if (dst_b) { d->b = value; } else { d->a = value; }
             }
-            if ((op & 0x10000u) || (op & 0x8000u)) {
+            if ((op & 0x10000u) || addr_only) {
                 d->r[op & 7] = d->r[(op >> 8) & 7];
             }
         }

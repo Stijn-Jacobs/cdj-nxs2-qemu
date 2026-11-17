@@ -157,6 +157,88 @@ int main(int argc, char **argv)
     dsp_audio_tick(d);
     assert(audio_frames == 0);
     free(d);
+
+    /* Opcodes below are taken from the CDJ-850 DSP application (segment 4). */
+    d = fresh();
+    /* Long-displacement MOVE (FM: 0000 101S 0111 0RRR 1WDD DDDD + disp):
+     * P:045c 0x0b7197 = MOVE R7,Y:(R1+9) -- not JSCLR. */
+    d->r[1] = 100; d->r[7] = 0xabcdef;
+    d->pc = 0; d->p[0] = 0x0b7197; d->p[1] = 9;
+    step_one(d);
+    assert(d->y[109] == 0xabcdef && d->r[1] == 100 && d->pc == 2 && d->sp == 0);
+    /* P:0dd2 0x0b72d4 = MOVE Y:(R2+2),R4 */
+    d->r[2] = 50; d->y[52] = 0x000123;
+    d->pc = 0; d->p[0] = 0x0b72d4; d->p[1] = 2;
+    step_one(d);
+    assert(d->r[4] == 0x000123 && d->r[2] == 50 && d->pc == 2);
+    /* X space twin, negative displacement. */
+    d->r[1] = 100; d->r[7] = 0x00beef;
+    d->pc = 0; d->p[0] = 0x0a7197; d->p[1] = 0xfffffe;
+    step_one(d);
+    assert(d->x[98] == 0x00beef && d->pc == 2);
+
+    /* Tcc: CCCC is bits 15:12, the address-only form is bit 11.
+     * P:02d5 0x028060 = TCS X1,A */
+    d->a = 0; d->x1 = 0x400000; d->sr = SR_C;
+    d->pc = 0; d->p[0] = 0x028060;
+    step_one(d);
+    assert(d->a == pack_acc24(0x400000));
+    d->a = 0; d->sr = 0;
+    d->pc = 0; step_one(d);
+    assert(d->a == 0);
+    /* P:063d 0x022902 = TNE R1,R2 (address registers only) */
+    d->a = pack_acc24(7); d->b = pack_acc24(9); d->r[1] = 0x55; d->r[2] = 0; d->sr = 0;
+    d->pc = 0; d->p[0] = 0x022902;
+    step_one(d);
+    assert(d->r[2] == 0x55 && d->a == pack_acc24(7));
+    /* 0x038742 = TCS X0,A R7,R2 (both transfers) */
+    d->x0 = 0x123456; d->r[7] = 0x777; d->r[2] = 0; d->a = 0; d->sr = SR_C;
+    d->pc = 0; d->p[0] = 0x038742;
+    step_one(d);
+    assert(d->a == pack_acc24(0x123456) && d->r[2] == 0x777);
+
+    /* Bit operations with an <ea> (mid 0x40..0x7f is MMMRRR, not aa).
+     * P:037d 0x0a6140 = BCLR #0,Y:(R1) */
+    d->r[1] = 200; d->y[200] = 0xf; d->y[1] = 0xf;
+    d->pc = 0; d->p[0] = 0x0a6140;
+    step_one(d);
+    assert(d->y[200] == 0xe && d->y[1] == 0xf && d->r[1] == 200 && (d->sr & SR_C));
+    /* P:047f 0x0a5961 = BSET #1,Y:(R1)+ post-increments R1 */
+    d->y[200] = 0;
+    d->pc = 0; d->p[0] = 0x0a5961;
+    step_one(d);
+    assert(d->y[200] == 2 && d->r[1] == 201 && d->pc == 1);
+    /* P:047c 0x0a79c0 = JCLR #0,Y:-(R1),$481 pre-decrements and branches */
+    d->y[200] = 2;
+    d->pc = 0; d->p[0] = 0x0a79c0; d->p[1] = 0x481;
+    step_one(d);
+    assert(d->r[1] == 200 && d->pc == 0x481);
+    /* P:0bd1 0x0a62f7 = JSET #23,Y:(R2),$bd5 falls through when clear */
+    d->r[2] = 300; d->y[300] = 0;
+    d->pc = 0; d->p[0] = 0x0a62f7; d->p[1] = 0xbd5;
+    step_one(d);
+    assert(d->pc == 2);
+    /* Absolute form: 0x0a7023 = BSET #3,X:$30 with the address as extension */
+    d->x[0x30] = 0;
+    d->pc = 0; d->p[0] = 0x0a7023; d->p[1] = 0x30;
+    step_one(d);
+    assert(d->x[0x30] == 8 && d->pc == 2);
+
+    /* ROL/ROR rotate A1/B1 through the carry; P:044c 0x202a37 has ROL A. */
+    d->a = pack_acc24(0x800001); d->sr = 0;
+    d->pc = 0; d->p[0] = 0x200037;
+    step_one(d);
+    assert(((d->a >> 24) & DSP_MASK24) == 0x000002 && (d->sr & SR_C));
+    d->pc = 0; step_one(d);
+    assert(((d->a >> 24) & DSP_MASK24) == 0x000005 && !(d->sr & SR_C));
+    d->b = pack_acc24(0x000001); d->sr = 0;
+    d->pc = 0; d->p[0] = 0x20002f; /* ROR B */
+    step_one(d);
+    assert(((d->b >> 24) & DSP_MASK24) == 0 && (d->sr & SR_C) && (d->sr & SR_Z));
+    d->pc = 0; step_one(d);
+    assert(((d->b >> 24) & DSP_MASK24) == 0x800000 && !(d->sr & SR_C) &&
+           (d->sr & SR_N));
+    free(d);
     return 0;
 }
 """

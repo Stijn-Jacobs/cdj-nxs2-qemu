@@ -1694,3 +1694,36 @@ three entries above are corrected here.
   time), and see whether a correct DSP speed reply changes the path. Until
   then, CDJ mode (press `vinyl` once) is the test path.
 
+
+### `dsp56300.c` decode fixes and first post-Play audio (2026-11-17)
+
+All four decode bugs from the audit above are fixed, with opcode tests
+taken from the DSP application in `tests/test_cdj850_dsp.py`:
+
+1. Long-displacement `MOVE X/Y:(Rn+xxxx)` (`0000 101S 0111 0RRR 1WDD DDDD`
+   plus a displacement word) is decoded before the bit-op page; W=1 loads.
+   For example P:045c `0x0b7197` = `MOVE R7,Y:(R1+9)`, P:0dd2 `0x0b72d4` =
+   `MOVE Y:(R2+2),R4`.
+2. `Tcc`: the address-only form is bit 11 with bit 16 clear (CCCC fills bits
+   15:12). P:02d5 `0x028060` = `TCS X1,A`; `0x022902` = `TNE R1,R2`.
+3. Bit ops with middle byte `01MMMRRR` go through `eval_ea` (with Rn
+   updates; the absolute form takes the extension word, jumps excepted).
+   P:037d `0x0a6140` = `BCLR #0,Y:(R1)`, P:047c `0x0a79c0` =
+   `JCLR #0,Y:-(R1),$481`.
+4. `ROL` (0x37/0x3F) and `ROR` (0x27/0x2F) rotate A1/B1 through C.
+
+Live run (CDJ mode, `38000:vinyl`, `42000:play`, no experiment knobs,
+`CDJ_DSP_AUDIO=1 -audio driver=wav`): no unimplemented ops, no WILD PC.
+- The DSP's output now carries signal at the fixture amplitude (peak 11999)
+  for about 15 s around load/cue and again after Play (host-clock seconds
+  47-62 and 66-68). The old captures were silent.
+- It is **not** the fixture tone. Both channels peak around 1.2-1.5 kHz
+  with broadband energy (the strongest bin holds 10-30 % of the energy),
+  against 440 Hz L / 660 Hz R expected.
+- Next: find where samples get scrambled. Candidates are the SSI half-word
+  order and channel interleave (SSI0 = right, SSI1 = left), the DSP sample
+  ring stride `2 * ((|X:<0x1F>| * 16 + X:<0x21>) >> 24)` at P:0x798, and
+  host pacing of the WAV sink.
+- Flake: with `CDJ850_DSP_DEBUG=1` plus WAV capture, or during a full
+  test-file run, MAIN sometimes misses the 20 s `usb` press and stays on
+  "NO DISC". The live test alone passed 3/3.
