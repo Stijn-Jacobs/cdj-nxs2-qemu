@@ -25,8 +25,8 @@ CDJ-900NXS only `U` (USB), `Enter` (the select knob's push) and `Space`
 `↑` / `↓`, `,` (TRACK back), `[` / `]` (SEARCH), `B`, `T`, `I`, `M`, `L` and
 `D`; `U` and four `Enter`s load the first track. `C` (CUE) and `Esc` (BACK)
 are mapped, but the emulated CDJ-900 does not react to them yet. The CDJ-850
-is earlier bring-up than the rest: it boots its firmware into RTOS init and
-parks at a task barrier (no USB stick, track loading, or keys yet).
+has no keys yet: its panel is driven by scripted events
+(`CDJ850_PANEL_SCRIPT`, see [CDJ-850](../README.md#cdj-850)).
 
 <a id="virtual-deck"></a>
 

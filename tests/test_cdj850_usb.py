@@ -5,6 +5,7 @@ No Pioneer firmware is required. MMIO checks run with the CPU stopped;
 interrupt checks run a ROM that enables interrupts and parks on a branch.
 """
 import json
+import math
 import os
 import select
 import selectors
@@ -188,15 +189,91 @@ def test_dma_longword_addressing_and_reserved_storage(deck):
     assert deck.read(DMA + 0x8C, 4) == 0x00080002
 
 
-def _make_pcm_wav(seconds=1, rate=44100):
-    data_size = seconds * rate * 4
+@pytest.mark.parametrize("ssi,channel,dmars", [(0, 1, 0x23), (1, 2, 0x27)])
+def test_ssi_dma_transmit_requests(deck, ssi, channel, dmars):
+    """SSI needs EN, DMEN and transmit mode; clocked slots drain the DMA."""
+    port = 0xFFFFC000 + 0x800 * ssi
+    base = DMA + channel * 16
+    for i, value in enumerate((0x12345600, 0xFEDCBA00, 0x65432100)):
+        deck.write(0x0C003000 + i * 4, value, 4)
+    deck.write(DMA + 0x300 + (channel // 2) * 4,
+               dmars << (8 if channel & 1 else 0))
+    deck.write(base, 0x0C003000, 4)
+    deck.write(base + 4, port + 8, 4)
+    deck.write(base + 8, 3, 4)
+    deck.write(base + 12, 0x1811, 4)
+    deck.write(DMA + 0x200, 1)
+    deck.write(port, 0x10000001, 4)  # Receive mode must not request TX DMA.
+    deck.execute("cont")
+    time.sleep(0.01)
+    deck.execute("stop")
+    assert deck.read(base + 8, 4) == 3
+    deck.write(port, 0x10000003, 4)
+    deck.execute("cont")
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        if deck.read(base + 8, 4) == 0:
+            break
+        time.sleep(0.005)
+    else:
+        pytest.fail("SSI transmit slots did not drain the armed DMA")
+    deck.execute("stop")
+    assert deck.read(base + 12, 4) & 2
+    assert deck.read(base, 4) == 0x0C00300C
+    assert deck.read(port + 8, 4) == 0x65432100
+
+
+def _make_pcm_wav(seconds=10, rate=44100):
+    """16-bit stereo PCM: 440 Hz left, 660 Hz right, about -8.7 dBFS.
+
+    Non-silent and long enough that playback does not hit end-of-track
+    at once, so an audio-path check can tell real samples from silence.
+    Both tones repeat exactly every second, so one second is tiled.
+    """
+    second = b"".join(
+        struct.pack("<hh",
+                    int(12000 * math.sin(2 * math.pi * 440 * i / rate)),
+                    int(12000 * math.sin(2 * math.pi * 660 * i / rate)))
+        for i in range(rate))
+    data = second * seconds
     hdr = struct.pack(
         "<4sI4s4sIHHIIHH4sI",
-        b"RIFF", 36 + data_size, b"WAVE",
+        b"RIFF", 36 + len(data), b"WAVE",
         b"fmt ", 16, 1, 2, rate, rate * 4, 4, 16,
-        b"data", data_size,
+        b"data", len(data),
     )
-    return hdr + (b"\x00" * data_size)
+    return hdr + data
+
+
+def test_pcm_wav_fixture_is_audible():
+    """The USB fixture track must be non-silent and longer than a blip."""
+    wav = _make_pcm_wav()
+    assert wav[:4] == b"RIFF" and wav[8:16] == b"WAVEfmt "
+    (data_len,) = struct.unpack_from("<I", wav, 40)
+    assert data_len == len(wav) - 44 == 10 * 44100 * 4
+    samples = struct.unpack_from("<2000h", wav, 44)
+    assert max(samples) > 10000 and min(samples) < -10000
+
+
+# MAIN player state for the USB deck (0x0CE6D25D + source index 2). After a
+# load it is 3 = playing (auto-play), 5 = paused/braking, 4 = paused in CDJ
+# mode; the audio command and audio-task state follow (1/3 play, 3/4 pause).
+PLAYER_STATE = 0x0CE6D25F
+SPEED = 0x0CE6C940          # speed sent to the DSP, 0x080000 = 1.0x
+READ_INDEX = 0x0C7F645C     # sector index the IRQ7 feeder reads next
+
+
+def _qmp_read(qmp, addr, unit="b"):
+    """Read one guest-physical byte/halfword/word through HMP `xp` over QMP."""
+    cmd = {"execute": "human-monitor-command",
+           "arguments": {"command-line": f"xp /1{unit}x {addr:#x}"}}
+    qmp.write(json.dumps(cmd).encode() + b"\n")
+    while True:
+        r = json.loads(qmp.readline())
+        if "return" in r:
+            return int(r["return"].split(":")[-1].strip(), 16)
+        if "error" in r:
+            raise AssertionError(r["error"])
 
 
 def _fat16_lfn_entry(name, short_name_11, order=0x41):
@@ -276,7 +353,7 @@ def _build_fat16_usb_image(img_path, track_names):
     img_path.write_bytes(img)
 
 
-def test_live_usb_source_select_browse_and_load(tmp_path):
+def test_live_usb_source_select_browse_load_and_play(tmp_path):
     binary = _cdj850_binary()
     flash = Path(__file__).resolve().parent.parent / "extract" / "cdj850" / "flash_cdj850.bin"
     if not flash.is_file():
@@ -289,15 +366,25 @@ def test_live_usb_source_select_browse_and_load(tmp_path):
 
     qmp_s, qmp_c = socket.socketpair()
     env = os.environ.copy()
-    env["CDJ850_DSP_BOOT_HLE"] = "1"
+    for k in ("CDJ850_DSP_BOOT_HLE", "CDJ850_PF16_HIGH", "CDJ850_DSP_PLAY_PF"):
+        env.pop(k, None)
+    # Run under -icount: virtual time is MAIN's instruction count, so the
+    # scripted presses land at the same point in the firmware every run.
+    # Without it the virtual clock follows the host and MAIN mounts the stick
+    # anywhere between ~3 s and ~27 s, racing a fixed `usb` press (the old
+    # flake). Under icount the stick is mounted at 2.9 s.
+    # The deck plays a track as soon as it is loaded. In VINYL mode (the
+    # factory default) PLAY then brakes to a stop and PLAY again restarts.
     env["CDJ850_PANEL_SCRIPT"] = (
-        "20000:usb:200,24000:enter:200,26000:rot+1,28000:enter:200"
+        "6000:usb:200,9000:enter:200,11000:rot+1,13000:enter:200,"
+        "19000:play:200,24000:play:200"
     )
 
     p = subprocess.Popen(
         [
             binary, "-M", "cdj850",
             "-display", "none", "-monitor", "none", "-serial", "none",
+            "-icount", "shift=2,sleep=off",
             "-drive", f"if=pflash,format=raw,file={flash},snapshot=on",
             "-drive", f"if=none,id=usbstk,format=raw,file={usb_img},snapshot=on",
             "-device", "usb-storage,drive=usbstk,port=1",
@@ -312,6 +399,8 @@ def test_live_usb_source_select_browse_and_load(tmp_path):
     qmp_c.close()
     qmp = qmp_s.makefile("rwb", buffering=0)
     display_lines = []
+    names = ["browse root", "file list", "cursor moved", "BETA.wav loaded",
+             "playing after load", "PLAY braked to a stop", "PLAY restarted"]
     try:
         assert "QMP" in json.loads(qmp.readline())
         qmp.write(b'{"execute":"qmp_capabilities"}\n')
@@ -319,9 +408,11 @@ def test_live_usb_source_select_browse_and_load(tmp_path):
 
         sel = selectors.DefaultSelector()
         sel.register(p.stderr, selectors.EVENT_READ)
-        deadline = time.monotonic() + 60.0
+        deadline = time.monotonic() + 180.0
         buf = ""
-        milestones = [False, False, False, False]
+        milestones = [False] * len(names)
+        presses = 0
+        first_index = None
         eof = False
         while time.monotonic() < deadline and not all(milestones) and not eof:
             for key, _ in sel.select(timeout=0.3):
@@ -332,9 +423,11 @@ def test_live_usb_source_select_browse_and_load(tmp_path):
                 buf += chunk
                 while "\n" in buf:
                     ln, buf = buf.split("\n", 1)
-                    if "cdj850-panel: display " not in ln:
+                    if "cdj850-panel:" not in ln:
                         continue
                     display_lines.append(ln)
+                    if "input press play" in ln:
+                        presses += 1
                     if not milestones[0] and "[.FOLDER.] | [] | []" in ln:
                         milestones[0] = True
                     elif (milestones[0] and not milestones[1] and
@@ -348,8 +441,23 @@ def test_live_usb_source_select_browse_and_load(tmp_path):
                     elif (milestones[2] and not milestones[3] and
                           "mode=0x0a" in ln and "[BETA.wav] | [] | []" in ln):
                         milestones[3] = True
-        assert all(milestones), (
-            f"Missing USB browse/load milestones {milestones}; display log:\n" +
+            if not milestones[3]:
+                continue
+            state = _qmp_read(qmp, PLAYER_STATE)
+            if presses == 0 and not milestones[4] and state == 3:
+                index = _qmp_read(qmp, READ_INDEX, "h")
+                if first_index is None:
+                    first_index = index
+                elif index > first_index + 4:
+                    milestones[4] = True      # the read index advances
+            elif presses == 1 and milestones[4] and not milestones[5]:
+                milestones[5] = state == 5 and _qmp_read(qmp, SPEED, "w") == 0
+            elif presses >= 2 and milestones[5] and not milestones[6]:
+                milestones[6] = (state == 3 and
+                                 _qmp_read(qmp, SPEED, "w") == 0x080000)
+        missing = [n for n, ok in zip(names, milestones) if not ok]
+        assert not missing, (
+            f"Missing milestones {missing}; display log:\n" +
             "\n".join(display_lines)
         )
     finally:

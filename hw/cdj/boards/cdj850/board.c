@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "cdj_common.h"
+#include "dsp56300.h"
 #include "dsp56371.h"
 #include "xc/adc.h"
 #include "xc/cmt.h"
@@ -369,6 +370,7 @@ static void cdj850_init(MachineState *machine)
     cdj850_intc_init(sysmem, cpu);
     cdj850_adc_init(sysmem, cpu);
     cdj850_dsp_init();
+    dsp56300_init();
     cdj850_port_init(sysmem, cpu);
     cdj850_mtu2_init(sysmem, cpu);
     /* CD loader mechanism: reads PDDRL (port) and TIOC3C duty (mtu2). */

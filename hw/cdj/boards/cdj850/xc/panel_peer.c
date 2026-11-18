@@ -198,6 +198,7 @@ static struct {
     uint32_t disp_updates;
 
     /* Last logged display state (for change-only info_report) */
+    uint8_t logged_status[4];
     bool disp_logged;
     uint8_t logged_hdr[PANEL_FRAME_LEN];
     uint8_t logged_tag[PANEL_DISP_ROWS];
@@ -554,6 +555,7 @@ static bool panel_try_decode_display(void)
     panel.disp_next_sub = 0;
     panel.disp_hdr_pending = false;
     panel.disp_hdr_wait = 0;
+    vfd_note_panel_tags(panel.disp_tag);
     vfd_note_panel_text(panel.disp_mode, panel.disp_line[0],
                         panel.disp_line[1], panel.disp_line[2]);
 
@@ -695,6 +697,15 @@ static void panel_end_transaction(void)
         unsigned i;
 
         panel.transactions++;
+        /* Log MAIN's status changes independently of the text display. */
+        if (panel.cur_tx[0][0] == 0x01 &&
+            memcmp(panel.logged_status, panel.cur_tx[0], 4)) {
+            info_report("cdj850-panel: MAIN status %02x %02x %02x %02x "
+                        "(%" PRIu64 " ms)", panel.cur_tx[0][0],
+                        panel.cur_tx[0][1], panel.cur_tx[0][2],
+                        panel.cur_tx[0][3], cdj850_vms());
+            memcpy(panel.logged_status, panel.cur_tx[0], 4);
+        }
         memcpy(panel.last_tx, panel.cur_tx, sizeof(panel.last_tx));
         for (i = 0; i < panel.frame; i++) {
             cdj850_panel_peer_feed_display_tx(panel.cur_tx[i]);

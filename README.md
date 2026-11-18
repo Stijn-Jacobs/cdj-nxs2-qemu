@@ -11,7 +11,7 @@ Pioneer DJ players on your computer, from the CDJ-2000 to the NXS2 and XDJ famil
 [![QEMU 11.1](https://img.shields.io/badge/QEMU-11.1-orange.svg)](https://www.qemu.org/)
 [![Firmware not included](https://img.shields.io/badge/firmware-not%20included-red.svg)](#not-included)
 
-[Supported players](#supported-players) · [Quick start](#quick-start) · [Documentation](#documentation) · [Mods](docs/mods.md) · [How it works](docs/how-it-works.md)
+[Supported players](#supported-players) · [CDJ-850](#cdj-850) · [Quick start](#quick-start) · [Documentation](#documentation) · [Mods](docs/mods.md) · [How it works](docs/how-it-works.md)
 
 <table>
   <tr>
@@ -36,9 +36,14 @@ player's own DSP program on an emulated DSP. Start two and they find each other
 on an emulated Pro DJ Link network, where MASTER and SYNC work between them.
 Plug in a MIDI controller and it plays them, or use the [virtual deck](docs/using-the-deck.md#virtual-deck).
 
-Seven older players have experimental emulation, with further models in
-development. The [status table](#supported-players) separates usable features
-from ongoing work.
+Seven older players have experimental emulation. The **CDJ-850** is in
+active bring-up in this fork: it boots its own firmware, browses and loads
+from USB, and its emulated DSP56371 plays the audio correctly, though not
+yet in real time (see [CDJ-850](#cdj-850)). The [status table](#supported-players)
+separates usable features from ongoing work.
+
+> This is a fork of [Stijn-Jacobs/cdj-nxs2-qemu](https://github.com/Stijn-Jacobs/cdj-nxs2-qemu)
+> focused on the CDJ-850. Everything about the other players comes from upstream.
 
 ## Features
 
@@ -101,7 +106,7 @@ show the firmware interface, not a claim of feature parity.
 | **CDJ-2000NXS** | 🧪 Experimental | Loads and plays from USB in real time with the DSP module setup builds. PLAY, CUE, tempo and jog work. Two decks link. |
 | **CDJ-900** | 🧪 Experimental | Loads and plays from USB; its display shows the overview, playhead and time. |
 | **CDJ-2000** | 🧪 Experimental | Loads and plays from USB in real time with the DSP module setup builds. PLAY, CUE, tempo and jog work. Two decks link. |
-| **CDJ-850** | 🧪 Experimental (bring-up) | Boots the real firmware into RTOS init (panel serial, DSP bootstrap); parks at a task barrier waiting on DSP56371 reply bytes — no USB, display content, or sound yet. |
+| **CDJ-850** | 🧪 Experimental (bring-up) | Boots the real firmware, browses and loads from USB, plays, pauses and restarts (VINYL brake). The emulated DSP56371 outputs the correct audio, but its interpreter runs well below real time. DATA FL display reconstructed; input is scripted panel events. See [CDJ-850](#cdj-850). |
 
 <!-- feature-matrix:start -->
 <details>
@@ -112,16 +117,16 @@ show the firmware interface, not a claim of feature parity.
 | | CDJ-2000NXS2 | XDJ-1000MK2 | XDJ-700 | XDJ-1000 | CDJ-900NXS | CDJ-2000NXS | CDJ-900 | CDJ-2000 | CDJ-850 |
 |---|---|---|---|---|---|---|---|---|---|
 | **Media** | | | | | | | | |
-| USB | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| USB | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Playback** | | | | | | | | |
-| Sound | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | ❌ |
-| Real time with the setup DSP module | ✅ | ✅ | ⚠️<sup>1</sup> | ✅ | ⚠️<sup>2</sup> | ✅ | · | ✅ | · |
+| Sound | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | ⚠️<sup>10</sup> |
+| Real time with the setup DSP module | ✅ | ✅ | ⚠️<sup>1</sup> | ✅ | ⚠️<sup>2</sup> | ✅ | · | ✅ | ❌<sup>10</sup> |
 | **Display** | | | | | | | | |
 | Waveform / overview | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
 | Tempo and BPM readout | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
 | **Transport** | | | | | | | | |
-| PLAY / pause | ✅ | ✅ | ⚠️<sup>3</sup> | ✅ | ⚠️<sup>3</sup> | ✅ | ✅ | ✅ | ❌ |
-| CUE | ✅ | ✅ | · | ✅ | · | ✅ | · | ✅ | ❌ |
+| PLAY / pause | ✅ | ✅ | ⚠️<sup>3</sup> | ✅ | ⚠️<sup>3</sup> | ✅ | ✅ | ✅ | ✅ |
+| CUE | ✅ | ✅ | · | ✅ | · | ✅ | · | ✅ | · |
 | **Tempo** | | | | | | | | |
 | Tempo fader | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | · |
 | MASTER TEMPO | ⚠️<sup>4</sup> | ⚠️<sup>5</sup> | ⚠️<sup>5</sup> | ⚠️<sup>5</sup> | ⚠️<sup>5</sup> | · | · | · | · |
@@ -150,9 +155,80 @@ Firmware: CDJ-2000NXS2 1.87, XDJ-1000MK2 1.45, XDJ-700 1.15, XDJ-1000 1.13, CDJ-
 7. Loops engage in only some runs.
 8. The slipped playback is not checked yet.
 9. The CDJ-850 has no Ethernet port.
+10. The DSP output is correct (checked under `-icount`), but the DSP56300 interpreter runs at about 46 MIPS where real time needs about 66.
 
 </details>
 <!-- feature-matrix:end -->
+
+<a id="cdj-850"></a>
+
+## CDJ-850
+
+The CDJ-850 (firmware 1.13, `C850MAIN.UPD`) is a different machine from the
+rest: an SH7263 (SH-2A) MAIN CPU, a Freescale DSP56371 for audio, and a
+separate panel CPU that drives the FL displays. The emulator runs MAIN's own
+code and the DSP program MAIN uploads at boot, on a DSP56300 core written for
+this project (`hw/cdj/boards/cdj850/dsp56300.c`).
+
+**What works, measured:**
+
+- Boot through the bootloader in flash, RTOS start, panel link and DSP upload.
+- USB stick: mount, browse, move the cursor and load a track.
+- Playback: the firmware auto-plays a freshly loaded track. In VINYL mode
+  (the default) PLAY brakes the deck to a stop and PLAY again spins it back to
+  1.0×. The DSP's output is a clean, correctly pitched signal. In CDJ mode a
+  pause keeps replaying a short window around the pause point, as the real
+  unit does.
+- DATA FL display: a dot-matrix reconstruction of the glass, calibrated from
+  photos of a real unit (no Pioneer font ROM is used), showing the browser text
+  and selection highlight that MAIN sends.
+
+**Not yet:** real-time audio (the DSP interpreter runs at about 70 % of the
+speed it needs), the waveform overview, BPM and time readouts, CUE, the tempo
+fader and the jog. There is no keyboard mapping yet; the panel is driven by
+scripted events.
+
+**Run it:**
+
+```sh
+./setup.sh --model cdj850 --firmware path/to/C850MAIN.UPD
+./start.sh --model cdj850
+```
+
+Drive the panel with `CDJ850_PANEL_SCRIPT`, a comma-separated list of
+`<ms>:<button>[:<hold_ms>]` presses and `<ms>:rot+N` / `<ms>:rot-N` turns of
+the browse encoder, in virtual milliseconds. This one inserts the stick,
+opens it, moves down one entry, loads the track, and presses PLAY twice
+(brake, restart):
+
+```sh
+CDJ850_PANEL_SCRIPT=6000:usb,9000:enter,11000:rot+1,13000:enter,19000:play,24000:play \
+  ./start.sh --model cdj850
+```
+
+Button names include `play`, `cue`, `usb`, `enter`, `back`, `browse`,
+`vinyl`, `master_tempo`, `eject`, the loop and beat buttons and the
+track/search keys; the full list is in `hw/cdj/boards/cdj850/xc/panel_peer.c`.
+
+**For firmware modding**, two things make runs repeatable:
+
+- Run under `-icount shift=2,sleep=off`. Without it the virtual clock follows
+  the host, so a busy host shifts when things happen (the USB mount moved from
+  2.9 s to 26.7 s in testing). Under icount the mount lands at 2875 ms every
+  time. `start.sh` does not add it; launch `qemu-system-sh4eb` the way
+  `tests/test_cdj850_usb.py` does.
+- With icount, `CDJ850_DSP_IPS=2048` gives the DSP enough instructions per
+  sample to produce the exact audio. `CDJ850_DSP_DEBUG=1` prints the DSP's
+  state every 500 ms of virtual time.
+
+**Tests:** `python3 -m pytest tests/test_cdj850_*.py`. The live test boots
+the firmware under icount with the script above and checks each step from MAIN's
+RAM (browse, load, auto-play, brake to a stop, restart); the DSP opcode tests
+use real firmware encodings. Tests that need the firmware or a built emulator
+skip without them.
+
+The bring-up log, with every address, decoded handler and environment knob, is
+[`notes/cdj850-bringup.md`](notes/cdj850-bringup.md).
 
 <a id="not-included"></a>
 
@@ -191,7 +267,7 @@ file for your player, and your own music. For the CDJ-2000NXS2 that is
 **2. Clone and run setup** (the same on every system):
 
 ```sh
-git clone https://github.com/Stijn-Jacobs/cdj-nxs2-qemu.git cdj-nxs2
+git clone https://github.com/FruityLemonade/cdj-850-qemu.git cdj-nxs2
 cd cdj-nxs2
 ./setup.sh
 ```

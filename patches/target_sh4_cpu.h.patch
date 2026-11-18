@@ -1,5 +1,5 @@
 diff --git a/target/sh4/cpu.h b/target/sh4/cpu.h
-index 6984bb46..18a66327 100644
+index 6984bb4..a1988cf 100644
 --- a/target/sh4/cpu.h
 +++ b/target/sh4/cpu.h
 @@ -32,6 +32,7 @@
@@ -24,7 +24,7 @@ index 6984bb46..18a66327 100644
  };
  
  typedef struct memory_content {
-@@ -198,12 +206,72 @@ typedef struct CPUArchState {
+@@ -198,12 +206,80 @@ typedef struct CPUArchState {
      /* The features that we should emulate. See sh_features above.  */
      uint32_t features;
  
@@ -36,6 +36,14 @@ index 6984bb46..18a66327 100644
 +     */
 +    uint32_t sh2a_irq_vector;
 +    uint32_t sh2a_irq_level;   /* priority; delivered only when > SR.IMASK */
++    /*
++     * Optional board hook, called right after an SH-2A interrupt has been
++     * accepted (request cleared, SR.IMASK raised). A board that presents one
++     * vector at a time uses it to present the next pending one at once, so
++     * the CPU takes it on the handler's RTE instead of after the board's
++     * next timer slice. Not migrated: the board sets it again at init.
++     */
++    void (*sh2a_irq_taken)(struct CPUArchState *env);
 +
 +    /*
 +     * SH-2A fast-interrupt register banks. LDBANK/STBANK address one as
@@ -97,7 +105,7 @@ index 6984bb46..18a66327 100644
  /**
   * SuperHCPU:
   * @env: #CPUSH4State
-@@ -369,15 +437,66 @@ static inline uint32_t cpu_read_sr(CPUSH4State *env)
+@@ -369,15 +445,66 @@ static inline uint32_t cpu_read_sr(CPUSH4State *env)
                       (env->sr_t << SR_T);
  }
  

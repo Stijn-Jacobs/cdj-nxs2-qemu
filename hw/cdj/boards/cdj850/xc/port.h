@@ -16,4 +16,10 @@ uint16_t cdj850_port_pddrl(void);
 /* PBDRL (0xFFFE3882) as last written; bit 10 = PB10 = USB_ABSEL (high =
  * USB-A host port), bit 11 = PB11 = USB_VBUSON (high = VBUS on). */
 uint16_t cdj850_port_pbdrl(void);
+
+/* PFDRH (0xFFFE3A80) as last written; bit 0 = PF16 = PLAY (to DSP PF10). */
+uint16_t cdj850_port_pfdrh(void);
+
+/* PFDRL (0xFFFE3A82) as last written; bit 3 = PF3 = DSPCS (active low). */
+uint16_t cdj850_port_pfdrl(void);
 #endif

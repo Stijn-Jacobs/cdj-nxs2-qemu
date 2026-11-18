@@ -200,11 +200,27 @@ static void cdj850_irq_pump(void *opaque)
     }
 }
 
+/*
+ * Called by the CPU right after it accepts an interrupt (SR.IMASK is now
+ * raised). Present the next pending vector immediately: it stands while the
+ * handler runs and is taken on its RTE. Without this, a request that lost
+ * to a higher level waited for the pump timer, which only fires between TCG
+ * slices (~1 ms): the IRQ7 (DSPDREQ) audio feed lost to the CMT tick for
+ * several milliseconds per block and the DSP starved.
+ */
+static void cdj850_irq_taken(CPUSH4State *env)
+{
+    (void)env;
+    cdj850_irq.cur_valid = false;
+    cdj850_irq_pump(NULL);
+}
+
 static void cdj850_raise(SuperHCPU *cpu, uint16_t vec, uint8_t level)
 {
     unsigned next, i;
 
     cdj850_irq.cpu = cpu;
+    cpu->env.sh2a_irq_taken = cdj850_irq_taken;
 
     /* Coalesce: hardware has one pending bit per source, not a FIFO. */
     for (i = cdj850_irq.head; i != cdj850_irq.tail;

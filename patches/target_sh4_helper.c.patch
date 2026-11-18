@@ -1,5 +1,5 @@
 diff --git a/target/sh4/helper.c b/target/sh4/helper.c
-index b6b057f..3711300 100644
+index b6b057f..3e31ec0 100644
 --- a/target/sh4/helper.c
 +++ b/target/sh4/helper.c
 @@ -21,11 +21,14 @@
@@ -70,7 +70,7 @@ index b6b057f..3711300 100644
          }
      }
  
-@@ -145,6 +179,118 @@ void superh_cpu_do_interrupt(CPUState *cs)
+@@ -145,6 +179,121 @@ void superh_cpu_do_interrupt(CPUState *cs)
          log_cpu_state(cs, 0);
      }
  
@@ -182,6 +182,9 @@ index b6b057f..3711300 100644
 +             * SR is on the stack and RTE restores the interrupted level.
 +             */
 +            env->sr |= 0xf << 4;
++            if (env->sh2a_irq_taken) {
++                env->sh2a_irq_taken(env);
++            }
 +        }
 +        return;
 +    }
@@ -189,7 +192,7 @@ index b6b057f..3711300 100644
      env->ssr = cpu_read_sr(env);
      env->spc = env->pc;
      env->sgr = env->gregs[15];
-@@ -184,8 +330,24 @@ void superh_cpu_do_interrupt(CPUState *cs)
+@@ -184,8 +333,24 @@ void superh_cpu_do_interrupt(CPUState *cs)
      }
  
      if (do_irq) {
@@ -214,7 +217,7 @@ index b6b057f..3711300 100644
          qemu_plugin_vcpu_interrupt_cb(cs, last_pc);
          return;
      }
-@@ -787,13 +949,43 @@ int cpu_sh4_is_cached(CPUSH4State *env, uint32_t addr)
+@@ -787,13 +952,43 @@ int cpu_sh4_is_cached(CPUSH4State *env, uint32_t addr)
  bool superh_cpu_exec_interrupt(CPUState *cs, int interrupt_request)
  {
      if (interrupt_request & CPU_INTERRUPT_HARD) {
@@ -223,8 +226,11 @@ index b6b057f..3711300 100644
          /* Delay slots are indivisible, ignore interrupts */
 -        if (cpu_env(cs)->flags & TB_FLAG_DELAY_SLOT_MASK) {
 +        if (env->flags & TB_FLAG_DELAY_SLOT_MASK) {
-+            return false;
-+        }
+             return false;
+-        } else {
+-            superh_cpu_do_interrupt(cs);
+-            return true;
+         }
 +
 +        /*
 +         * Only claim the interrupt if it will actually be delivered.
@@ -251,11 +257,8 @@ index b6b057f..3711300 100644
 +        } else if (env->intc_handle &&
 +                   sh_intc_get_pending_vector(env->intc_handle,
 +                                              (env->sr >> 4) & 0xf) == -1) {
-             return false;
--        } else {
--            superh_cpu_do_interrupt(cs);
--            return true;
-         }
++            return false;
++        }
 +
 +        superh_cpu_do_interrupt(cs);
 +        return true;
