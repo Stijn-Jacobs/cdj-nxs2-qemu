@@ -18,9 +18,19 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import leds  # noqa: E402
 
 
+def _lamp_word(frame, names, lit_fn):
+    return " ".join(f"{name}={'#' if lit_fn(frame, name) else '.'}"
+                    for name in names)
+
+
 def lamp_word(frame):
-    return " ".join(f"{name}={'#' if leds.lamp_lit(frame, name) else '.'}"
-                    for name in leds.ROLE_NAMES)
+    """Format NXS2 page-1 lamp bits for console diagnostics."""
+    return _lamp_word(frame, leds.ROLE_NAMES, leds.lamp_lit)
+
+
+def lamp_word_page2(frame):
+    """Format CDJ-850 page-2 lamp bits for console diagnostics."""
+    return _lamp_word(frame, leds.CDJ850_ROLE_NAMES, leds.lamp_lit_page2)
 
 
 def main():
@@ -48,6 +58,8 @@ def main():
             kind, value = leds.parse_state(state)
             if kind == "pnl":
                 word = lamp_word(value)
+            elif kind == "pnl2":
+                word = lamp_word_page2(value)
             elif kind == "frm":
                 word = f"beat={value.get('beat')} bars={value.get('bars')}"
             else:

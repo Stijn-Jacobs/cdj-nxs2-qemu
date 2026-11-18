@@ -189,3 +189,110 @@ def test_state_watch_lamp_word():
     assert word == ("play=# cue=. slip=. master_tempo=# ring=. "
                     "source_sd=. source_link=. source_pc=. source_disc=. "
                     "tempo_reset=. usb_indicator=.")
+
+
+
+def _cdj850_page2(byte_vals):
+    frame = bytearray(16)
+    frame[0] = 0x02
+    for idx, val in byte_vals.items():
+        frame[idx] = val
+    return bytes(frame)
+
+
+class _StubLedSurface:
+    def __init__(self):
+        self.state = {}
+
+    def set(self, name, lit):
+        self.state[name] = bool(lit)
+
+
+def test_parse_state_pnl2():
+    raw = _cdj850_page2({5: 0x90, 6: 0x32, 7: 0x15, 8: 0x01})
+    kind, parsed = leds.parse_state(f"pnl2 {raw.hex()}")
+    assert (kind, parsed) == ("pnl2", raw)
+    assert leds.parse_state("pnl2 zzzz") == (None, None)
+
+
+def test_cdj850_lamp_lit_page2_and_short_bounds():
+    expected_on = {
+        "play": (5, 0x10),
+        "cue": (5, 0x08),
+        "master_tempo": (6, 0x10),
+        "source_usb": (5, 0x80),
+        "source_pc": (5, 0x04),
+        "source_disc": (6, 0x02),
+        "usb_indicator": (5, 0x02),
+        "vinyl": (6, 0x20),
+        "browse": (7, 0x10),
+        "standby": (8, 0x01),
+    }
+    for role, (byte_idx, mask) in expected_on.items():
+        frame = _cdj850_page2({byte_idx: mask})
+        assert leds.lamp_lit_page2(frame, role) is True
+        other = [r for r in leds.CDJ850_ROLE_NAMES if r != role]
+        assert all(not leds.lamp_lit_page2(frame, r) for r in other)
+
+    assert leds.lamp_lit_page2(b"\x02\x00\xff", "play") is False
+    assert leds.lamp_lit_page2(b"\x02\x00\xff", "standby") is False
+    assert "source_usb" not in leds.LAMPS
+    assert "source_usb" in leds.CDJ850_LAMPS
+
+
+def test_deck_leds_page2_beats_page1_collision_and_stale():
+    surface = _StubLedSurface()
+    roles = {
+        "play": "L/play",
+        "cue": "L/cue",
+        "master_tempo": "L/mt",
+        "source_usb": "L/usb",
+        "vinyl": "L/vinyl",
+        "slip": "L/slip",
+        "ring": "L/ring",
+    }
+    deck = leds.DeckLeds("left", "A", roles, surface, [])
+    # CDJ-850 frame 1 starts with type 0x01 at byte 0 (same bit as NXS2 play),
+    # while page 2 carries the actual lamps with play off.
+    pnl1 = bytes([0x01]) + bytes(15)
+    pnl2 = _cdj850_page2({5: 0x80, 6: 0x10})
+    deck.update("pnl", pnl1)
+    deck.update("pnl2", pnl2)
+    deck.render(deck.seen)
+    assert surface.state["L/usb"] is True
+    assert surface.state["L/mt"] is True
+    assert surface.state["L/play"] is False
+    assert surface.state["L/cue"] is False
+    assert surface.state["L/vinyl"] is False
+    assert surface.state["L/slip"] is False
+    assert surface.state["L/ring"] is False
+
+    deck.render(deck.seen + leds.STALE_S + 0.5)
+    assert all(not lit for lit in surface.state.values())
+
+
+def test_leds_feed_pnl2_routes_page2():
+    mapping = {
+        "decks": {"left": "A"},
+        "bindings": {},
+        "leds": {"left": {"play": "A/play", "source_usb": "A/usb"}},
+    }
+    controls = {"A/play": {"led": True}, "A/usb": {"led": True}}
+    obj = leds.Leds(controls, mapping, "", dry_run=True)
+    surface = _StubLedSurface()
+    obj.by_tag["A"].surface = surface
+    pnl2 = _cdj850_page2({5: 0x10 | 0x80})
+    obj.feed("A", f"pnl2 {pnl2.hex()}")
+    obj.render()
+    assert surface.state == {"A/play": True, "A/usb": True}
+
+
+def test_state_watch_lamp_word_page2():
+    frame = _cdj850_page2({5: 0x10 | 0x80, 8: 0x01})
+    tokens = state_watch.lamp_word_page2(frame).split()
+    assert len(tokens) == len(leds.CDJ850_ROLE_NAMES)
+    assert "play=#" in tokens
+    assert "source_usb=#" in tokens
+    assert "standby=#" in tokens
+    assert "cue=." in tokens
+    assert "master_tempo=." in tokens

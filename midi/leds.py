@@ -109,6 +109,37 @@ LAMPS = {
 # (the port indicator next to the slot, not the source-select key) and does
 # have a measured bit.
 ROLE_NAMES = tuple(LAMPS)
+# Page-2 (pnl2) lamps reported by the CDJ-850 panel status packet, verified
+# against app/faces/cdj850.json. Kept separate from NXS2 LAMPS/ROLE_NAMES so
+# NXS2 mappings and byte-0 checks never collide with CDJ-850's frame-1 type byte.
+CDJ850_LAMPS = {
+    "play": (0x05, 0x10),
+    "cue": (0x05, 0x08),
+    "master_tempo": (0x06, 0x10),
+    "vinyl": (0x06, 0x20),
+    "loop_in": (0x05, 0x20),
+    "loop_out": (0x05, 0x40),
+    "reloop": (0x06, 0x01),
+    "rev": (0x06, 0x08),
+    "beat_1": (0x07, 0x01),
+    "beat_2": (0x07, 0x02),
+    "beat_4": (0x07, 0x04),
+    "beat_8": (0x07, 0x08),
+    "browse": (0x07, 0x10),
+    "tag_list": (0x07, 0x20),
+    "info": (0x07, 0x40),
+    "menu": (0x07, 0x80),
+    "eject": (0x06, 0x40),
+    "standby": (0x08, 0x01),
+    "source_pc": (0x05, 0x04),
+    "source_usb": (0x05, 0x80),
+    "source_disc": (0x06, 0x02),
+    "usb_indicator": (0x05, 0x02),
+}
+CDJ850_ROLE_NAMES = tuple(CDJ850_LAMPS)
+ALL_ROLE_NAMES = ROLE_NAMES + tuple(
+    r for r in CDJ850_ROLE_NAMES if r not in LAMPS
+)
 STALE_S = 3.0           # no state for this long: the deck is gone, go dark
 
 
@@ -118,10 +149,16 @@ def lamp_lit(frame, name):
     return bool(frame[byte] & mask)
 
 
+def lamp_lit_page2(frame, name):
+    """True while a CDJ-850 page-2 `pnl2` frame lights the named lamp."""
+    byte, mask = CDJ850_LAMPS[name]
+    return byte < len(frame) and bool(frame[byte] & mask)
+
+
 def parse_state(payload):
-    """'frm beat=3 bpm=1280' -> ('frm', {'beat': 3, 'bpm': 1280}); 'pnl <hex>' -> bytes."""
+    """'frm beat=3 bpm=1280' -> ('frm', {'beat': 3, 'bpm': 1280}); 'pnl <hex>' / 'pnl2 <hex>' -> bytes."""
     kind, _, rest = payload.partition(" ")
-    if kind == "pnl":
+    if kind in ("pnl", "pnl2"):
         try:
             return kind, bytes.fromhex(rest.strip())
         except ValueError:
@@ -192,6 +229,7 @@ class DeckLeds:
         self.pads = pads
         self.frm = {}
         self.pnl = None
+        self.pnl2 = None
         self.seen = float("-inf")
         self.announced = False
 
@@ -204,17 +242,23 @@ class DeckLeds:
             self.frm = value
         elif kind == "pnl":
             if panel_diff and self.pnl is not None:
-                self._print_panel_diff(value)
+                self._print_panel_diff(value, self.pnl, "pnl")
             self.pnl = value
+        elif kind == "pnl2":
+            if panel_diff and self.pnl2 is not None:
+                self._print_panel_diff(value, self.pnl2, "pnl2")
+            self.pnl2 = value
 
     def lamp(self, name):
-        return self.pnl is not None and lamp_lit(self.pnl, name)
+        if self.pnl2 is not None:
+            return name in CDJ850_LAMPS and lamp_lit_page2(self.pnl2, name)
+        return self.pnl is not None and name in LAMPS and lamp_lit(self.pnl, name)
 
-    def _print_panel_diff(self, new):
+    def _print_panel_diff(self, new, old, label):
         changes = [f"[{i:02x}] {a:02x}->{b:02x}"
-                   for i, (a, b) in enumerate(zip(self.pnl, new)) if a != b]
+                   for i, (a, b) in enumerate(zip(old, new)) if a != b]
         if changes:
-            print(f"pnl {self.deck}: {'  '.join(changes)}")
+            print(f"{label} {self.deck}: {'  '.join(changes)}")
 
     def render(self, now):
         live = now - self.seen < STALE_S
@@ -230,7 +274,7 @@ class DeckLeds:
         for i, name in enumerate(beat_leds, start=1):
             self.surface.set(name, in_bar and (i <= beat if fill else i == beat))
 
-        for role in ROLE_NAMES:
+        for role in ALL_ROLE_NAMES:
             if role in self.roles:
                 self.surface.set(self.roles[role], live and self.lamp(role))
         for name in self.pads:
