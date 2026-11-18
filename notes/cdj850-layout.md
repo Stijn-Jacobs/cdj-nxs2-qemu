@@ -109,33 +109,61 @@ words) to `0x0DDEFA20` and jumps there via `[0x49C]`):
 
 **Updater in MAIN** (not the bootloader):
 - `0x0C08F3C2` (USB): `sprintf("%s%s","C:/","C850MAIN.UPD")`, fill the
-  4 MB buffer `0x0C1E8E5C` with `0xFF`, read the file into it, set
-  flash-task mode 5. `0x0C08F450` is the CD twin (2048-B sectors via
-  `0x0C060AA8`), mode 6.
+  4 MB buffer `0x0C1E8E5C` with `0xFF`, read the file into it, then
+  pick flash-task mode 5 or 6 from a state nibble. `0x0C08F450` is the
+  CD twin (2048-B sectors via `0x0C060AA8`).
 - Flash task `0x0C08E92C` → queue dispatcher `0x0C08EB80` → modes 5/6
   → **`0x0C08EC44`**:
-  - mode 5 (USB): flash `0x000000`, 63 sectors × 64 KB
-    (`0x000000–0x3EFFFF`) from buffer offset 0, **boot region
-    included**;
-  - mode 6 (CD): flash `0x060000`, 57 sectors (`0x060000–0x3EFFFF`);
-    copies `buf[0x60010..]` (`"1.13"`) and skips if it equals the
-    running version (CD only);
+  - mode 6: flash `0x060000`, 57 sectors × 64 KB
+    (`0x060000–0x3EFFFF`). Copies `buf[0x60010..]` (the version) and
+    **skips the write when it equals the running version** (shows
+    `COMPLETE!` with nothing written).
+  - mode 5: flash `0x000000`, 63 sectors (`0x000000–0x3EFFFF`) from
+    buffer offset 0, boot region included. Not reached by the
+    service-mode USB update (see below); entry unknown.
   - per sector: erase `0x0C08E842` (`AA/55/80/AA/55/30` at
-    `0x20000AAA`/`0x20000554`, uncached CS0), 0x8000 word programs
-    `0x0C08E8AE` (`AA/55/A0`), read-back compare `0x0C08EBF0`; on a
-    mismatch it sets an error and stops (-1).
+    `0x20000AAA`/`0x20000554`, the uncached CS0 mirror), 0x8000 word
+    programs `0x0C08E8AE` (`AA/55/A0`), read-back compare
+    `0x0C08EBF0`; on a mismatch it shows `Firmware update failed.` and
+    stops (-1). After each erase and program it waits for **RY/BY# on
+    PC2** (`0xFFFE391E` bit 2 = 1, ready); the old bring-up notes took
+    that pin for a panel handshake.
   - **No checksum, label, model or size check.** The only integrity
     gate is the bootloader's sum at the next power-on. The last 64 KB
     (`0x3F0000–0x3FFFFF`, settings/log at `0x3F8000`) are never
     written by an update.
 - The `CDJ-850 MAIN` label string does not occur in MAIN; only the
-  version bytes at `0x60010` are read (CD path).
+  version bytes at `0x60010` are read.
+
+**Service-mode USB update in the emulator** (service manual §8.3:
+power on holding USB SELECT + RELOOP). Panel script
+`0:+usb,0:+reloop,8000:-usb,8000:-reloop`, FAT16 stick with
+`C850MAIN.UPD`, live RSP breakpoints:
+- MAIN (not the recovery image) shows `Connect USB storage device
+  into top USB port.`, loads the file, and calls `0x0C08EC44` with
+  **mode 6**: the boot region is left alone.
+- Same version on the stick (`1.13 > 1.13`): `COMPLETE!` within 1 s,
+  nothing written.
+- Before 2026-11-18 a newer version failed (`Firmware update failed.`):
+  the port model strapped PC2 ready, so the first word program after
+  each erase landed while QEMU's CFI02 erase timer was still running
+  and was dropped (verify fails at `0x60000`: `0xFFFF` vs `0x4344`).
+  `xc/port.c` now drives PC2 from the flash: ready in read-array (ROMD)
+  mode, otherwise the toggle-bit test (two status reads, DQ6 in either
+  byte lane) decides. The stored latch bit is ignored.
+  `CDJ850_FLASH_RYBY=0` restores the old strap.
+- Result (patched `REPACK!` image packed with version `1.14`, stock
+  flash): `NOW UPDATING 1.13 > 1.14` → `COMPLETE! Turn power off.` at
+  3694 ms virtual (95 s wall). Flash `0x060000–0x3EFFFF` equals the file
+  padded with `0xFF`, and `0x0–0x5FFFF` is unchanged. A normal boot of
+  that flash shows `[REPACK!]` at 1505 ms. CDJ-850 tests: 67 passed,
+  1 skipped (pre-existing).
 
 **What a valid file is** (all reproduced by `c850_repack.py pack`):
 - `0x000000–0x05FFFF` copied unchanged (boot, recovery, erased). The
-  USB updater rewrites this region, so a broken copy can brick the
-  deck beyond USB recovery; the tool refuses a base whose
-  `0x0–0x40000` is not the shipped one.
+  service-mode USB update doesn't write it (mode 6), but mode 5 would,
+  so the tool still refuses a base whose `0x0–0x40000` is not the
+  shipped one.
 - `0x060000` 32-B label, `0x060020` BE32 len, stream, BE16
   `sum16(0x60020..end)`, then `0x10000` zero bytes (file length =
   `0x60024 + len + 2 + 0x10000`).

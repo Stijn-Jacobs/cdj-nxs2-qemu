@@ -136,3 +136,20 @@ def test_stock_repack_is_byte_identical():
     out = build_upd(upd, unpack_main(upd))
     assert hashlib.sha256(out).hexdigest() == STOCK_SHA
     assert out == upd
+
+
+def test_version_option_rewrites_only_the_label_version():
+    from c850_repack import PACKED_OFF, build_upd, check_upd
+    base = _fake_base()
+    out = build_upd(base, b"v" * 300, check_boot=False, version="1.14")
+    assert out[0x60010:0x60020] == b"1.14".ljust(16, b"\0")
+    assert out[:0x60010] == base[:0x60010]
+    assert out[0x60020:PACKED_OFF] == base[0x60020:PACKED_OFF]
+    assert check_upd(out, check_boot=False) == []
+
+
+@pytest.mark.parametrize("bad", ["1.2", "11.13", "v1.13", "1.13a", ""])
+def test_version_option_rejects_other_shapes(bad):
+    from c850_repack import build_upd
+    with pytest.raises(ValueError, match="D.DD"):
+        build_upd(_fake_base(), b"v" * 10, check_boot=False, version=bad)
