@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "cdj_common.h"
+#include "cdj_usbf.h"
 #include "usb_r8a66597.h"
 #include "qemu/timer.h"
 #include "qemu/bswap.h"
@@ -123,11 +124,14 @@
 
 typedef struct {
     MemoryRegion iomem;
-    MemoryRegion *model;                   /* the cdj.usb register file */
+    MemoryRegion *model;                   /* the cdj.usb host register file */
+    CdjUsbfState *usbf;                    /* USB-B R8A66597 function device */
+    MemoryRegion *usbf_mmio;               /* cdj.usbf register file */
     SuperHCPU *cpu;
     QEMUTimer *poll;
     Notifier exit;
-    bool level;                            /* model's interrupt output */
+    bool level;                            /* host model's interrupt output */
+    bool usbf_level;                       /* function model's interrupt output */
     uint16_t loc[CDJ850_USB_SIZE / 2];     /* SH7263-only registers */
     uint8_t unimp_logged[CDJ850_USB_SIZE / 2];
     unsigned raised;                       /* vector 140 requests queued */
@@ -171,19 +175,39 @@ static int usb_map(hwaddr off)
     return -1;
 }
 
-static uint64_t model_rd(Cdj850Usb *s, hwaddr moff, unsigned size)
+static uint64_t mr_rd(MemoryRegion *mr, hwaddr moff, unsigned size)
 {
     uint64_t v = 0;
 
-    memory_region_dispatch_read(s->model, moff, &v, size_memop(size) | MO_LE,
+    memory_region_dispatch_read(mr, moff, &v, size_memop(size) | MO_LE,
                                 MEMTXATTRS_UNSPECIFIED);
     return v;
 }
 
-static void model_wr(Cdj850Usb *s, hwaddr moff, uint64_t v, unsigned size)
+static void mr_wr(MemoryRegion *mr, hwaddr moff, uint64_t v, unsigned size)
 {
-    memory_region_dispatch_write(s->model, moff, v, size_memop(size) | MO_LE,
+    memory_region_dispatch_write(mr, moff, v, size_memop(size) | MO_LE,
                                  MEMTXATTRS_UNSPECIFIED);
+}
+
+static bool usb_func_mode(const Cdj850Usb *s)
+{
+    return s->usbf_mmio && !(mr_rd(s->model, CDJ_USB_SYSCFG, 2) & 0x0040);
+}
+
+static MemoryRegion *active_mr(Cdj850Usb *s)
+{
+    return usb_func_mode(s) ? s->usbf_mmio : s->model;
+}
+
+static uint64_t active_rd(Cdj850Usb *s, hwaddr moff, unsigned size)
+{
+    return mr_rd(active_mr(s), moff, size);
+}
+
+static void active_wr(Cdj850Usb *s, hwaddr moff, uint64_t v, unsigned size)
+{
+    mr_wr(active_mr(s), moff, v, size);
 }
 
 /* The model updates its interrupt output on writes only; a FIFO read can
@@ -194,7 +218,7 @@ static void model_wr(Cdj850Usb *s, hwaddr moff, uint64_t v, unsigned size)
 
 static void model_sync_irq(Cdj850Usb *s)
 {
-    model_wr(s, MODEL_SCRATCH, 0, 2);
+    mr_wr(s->model, MODEL_SCRATCH, 0, 2);
 }
 
 /* DEVSEL: SH7263 bits 15:14, model bits 15:12. */
@@ -212,16 +236,20 @@ static uint16_t maxp_from_model(uint16_t v)
  * pipe the port names (n = 1 or 2). */
 static void usb_sync_trn(Cdj850Usb *s, unsigned n)
 {
-    uint16_t sel = model_rd(s, n == 1 ? CDJ_USB_D0FIFOSEL : CDJ_USB_D1FIFOSEL,
-                            2);
-    unsigned pipe = sel & 7;
+    uint16_t sel;
+    unsigned pipe;
     unsigned trn_off = n == 1 ? U_D0FIFOTRN : U_D1FIFOTRN;
 
+    if (usb_func_mode(s)) {
+        return;
+    }
+    sel = mr_rd(s->model, n == 1 ? CDJ_USB_D0FIFOSEL : CDJ_USB_D1FIFOSEL, 2);
+    pipe = sel & 7;
     if (pipe < 1 || pipe > 5) {
         return;
     }
-    model_wr(s, CDJ_USB_PIPETRN(pipe), s->loc[trn_off / 2], 2);
-    model_wr(s, CDJ_USB_PIPETRE(pipe), (sel & U_TRENB) ? 0x0200 : 0, 2);
+    mr_wr(s->model, CDJ_USB_PIPETRN(pipe), s->loc[trn_off / 2], 2);
+    mr_wr(s->model, CDJ_USB_PIPETRE(pipe), (sel & U_TRENB) ? 0x0200 : 0, 2);
 }
 
 /*
@@ -242,7 +270,7 @@ bool cdj850_usb_dma_request(unsigned n)
     if (!s || (n != 1 && n != 2)) {
         return false;
     }
-    sel = model_rd(s, n == 1 ? CDJ_USB_D0FIFOSEL : CDJ_USB_D1FIFOSEL, 2);
+    sel = active_rd(s, n == 1 ? CDJ_USB_D0FIFOSEL : CDJ_USB_D1FIFOSEL, 2);
     pipe = sel & 7;
     if (!(sel & 0x1000) || !pipe) {
         return false;
@@ -250,16 +278,16 @@ bool cdj850_usb_dma_request(unsigned n)
     if (s->pipecfg[pipe] & CDJ_USB_DIR) {
         return s->tx_dreq[n];
     }
-    if (model_rd(s, n == 1 ? CDJ_USB_D0FIFOCTR : CDJ_USB_D1FIFOCTR, 2) &
+    if (active_rd(s, n == 1 ? CDJ_USB_D0FIFOCTR : CDJ_USB_D1FIFOCTR, 2) &
         CDJ_USB_DTLN) {
         return true;
     }
-    return pipe <= 5 &&
-           (model_rd(s, CDJ_USB_PIPECTR(pipe), 2) & CDJ_USB_PID_MASK) ==
+    return !usb_func_mode(s) && pipe <= 5 &&
+           (mr_rd(s->model, CDJ_USB_PIPECTR(pipe), 2) & CDJ_USB_PID_MASK) ==
                CDJ_USB_PID_BUF &&
-           (model_rd(s, CDJ_USB_PIPETRE(pipe), 2) & 0x0200) &&
-           model_rd(s, CDJ_USB_PIPETRN(pipe), 2) != 0 &&
-           !(model_rd(s, CDJ_USB_NRDYSTS, 2) & (1u << pipe));
+           (mr_rd(s->model, CDJ_USB_PIPETRE(pipe), 2) & 0x0200) &&
+           mr_rd(s->model, CDJ_USB_PIPETRN(pipe), 2) != 0 &&
+           !(mr_rd(s->model, CDJ_USB_NRDYSTS, 2) & (1u << pipe));
 }
 
 /*
@@ -279,8 +307,8 @@ static void usb_tx_dma(Cdj850Usb *s, unsigned pipe)
         return;
     }
     for (n = 1; n <= 2; n++) {
-        uint16_t sel = model_rd(s, n == 1 ? CDJ_USB_D0FIFOSEL
-                                          : CDJ_USB_D1FIFOSEL, 2);
+        uint16_t sel = active_rd(s, n == 1 ? CDJ_USB_D0FIFOSEL
+                                           : CDJ_USB_D1FIFOSEL, 2);
 
         if ((sel & 0x1000) && (sel & 7) == pipe) {
             s->tx_dreq[n] = true;
@@ -310,8 +338,9 @@ static unsigned usb_prio(void)
 static void usb_irq_eval(Cdj850Usb *s)
 {
     unsigned prio = usb_prio();
+    bool lvl = usb_func_mode(s) ? s->usbf_level : s->level;
 
-    if (!s->level) {
+    if (!lvl) {
         cdj850_irq_withdraw(s->cpu, CDJ850_USBI_VECTOR);
         return;
     }
@@ -340,6 +369,23 @@ static void usb_irq_in(void *opaque, int n, int level)
 
     s->level = level != 0;
     usb_irq_eval(s);
+}
+
+static void usb_usbf_irq_in(void *opaque, int n, int level)
+{
+    Cdj850Usb *s = opaque;
+
+    s->usbf_level = level != 0;
+    usb_irq_eval(s);
+}
+
+void cdj850_usb_mux(uint16_t pbdrl)
+{
+    Cdj850Usb *s = cdj850_usb;
+
+    if (s && s->usbf) {
+        cdj_usbf_set_cable(s->usbf, !(pbdrl & U_PB10_ABSEL));
+    }
 }
 
 static void usb_log_unimp(Cdj850Usb *s, hwaddr off, bool write)
@@ -374,16 +420,18 @@ static uint16_t usb_reg_read(Cdj850Usb *s, hwaddr off)
         usb_log_unimp(s, off, false);
         return s->loc[off / 2];
     }
-    v = model_rd(s, moff, 2);
+    v = active_rd(s, moff, 2);
     switch (off) {
     case U_INTSTS0:
         v &= ~U_VBSTS;
         if (cdj850_port_pbdrl() & U_PB10_ABSEL) {
             v |= U_VBSTS;
+        } else if (s->usbf && cdj_usbf_has_vbus(s->usbf)) {
+            v |= U_VBSTS;
         }
         break;
     case U_INTSTS1:
-        v |= model_rd(s, CDJ_USB_INTSTS0, 2) &
+        v |= active_rd(s, CDJ_USB_INTSTS0, 2) &
              (CDJ_USB_BRDY | CDJ_USB_NRDY | CDJ_USB_BEMP);
         break;
     case U_DCPMAXP:
@@ -401,6 +449,16 @@ static void usb_reg_write(Cdj850Usb *s, hwaddr off, uint16_t v)
     int moff = usb_map(off);
 
     switch (off) {
+    case U_SYSCFG:
+        /* SYSCFG is shared across the Host/Function role bit (DCFM): keep both
+         * halves updated so FUN_0c002c02 / FUN_0c0d19f8 read-modify-writes carry
+         * USBE/HSE across the DCFM flip cleanly. */
+        mr_wr(s->model, CDJ_USB_SYSCFG, v, 2);
+        if (s->usbf_mmio) {
+            mr_wr(s->usbf_mmio, CDJ_USB_SYSCFG, v, 2);
+        }
+        usb_irq_eval(s);
+        return;
     case U_TESTMODE:
     case U_CFBCFG:
     case U_D0FBCFG:
@@ -419,7 +477,7 @@ static void usb_reg_write(Cdj850Usb *s, hwaddr off, uint16_t v)
         v = maxp_to_model(v);
         break;
     case U_PIPECFG:
-        s->pipecfg[model_rd(s, CDJ_USB_PIPESEL, 2) % CDJ_USB_NR_PIPES] = v;
+        s->pipecfg[active_rd(s, CDJ_USB_PIPESEL, 2) % CDJ_USB_NR_PIPES] = v;
         break;
     default:
         break;
@@ -441,11 +499,11 @@ static void usb_reg_write(Cdj850Usb *s, hwaddr off, uint16_t v)
              * model's remaining count from that unchanged preset. */
             v &= ~U_TRCLR;
         }
-        model_wr(s, moff, v, 2);
+        active_wr(s, moff, v, 2);
         usb_sync_trn(s, n);
         return;
     }
-    model_wr(s, moff, v, 2);
+    active_wr(s, moff, v, 2);
 }
 
 static uint64_t usb_fifo_access(Cdj850Usb *s, hwaddr off, uint64_t val,
@@ -459,11 +517,13 @@ static uint64_t usb_fifo_access(Cdj850Usb *s, hwaddr off, uint64_t val,
         if (!fend) {
             val = size == 4 ? bswap32(val) : size == 2 ? bswap16(val) : val;
         }
-        model_wr(s, moff, val, size);
+        active_wr(s, moff, val, size);
         return 0;
     }
-    val = model_rd(s, moff, size);
-    model_sync_irq(s);
+    val = active_rd(s, moff, size);
+    if (!usb_func_mode(s)) {
+        model_sync_irq(s);
+    }
     if (!fend) {
         val = size == 4 ? bswap32(val) : size == 2 ? bswap16(val) : val;
     }
@@ -552,13 +612,21 @@ static void cdj850_usb_dump(Notifier *n, void *unused)
                 usb_reg_read(s, U_D1FIFOSEL));
 }
 
+static int usb_post_load(void *opaque, int version_id)
+{
+    cdj850_usb_mux(cdj850_port_pbdrl());
+    return 0;
+}
+
 static const VMStateDescription vmstate_cdj850_usb = {
     .name = "cdj850-usb",
-    .version_id = 1,
+    .version_id = 2,
     .minimum_version_id = 1,
+    .post_load = usb_post_load,
     .fields = (const VMStateField[]) {
         VMSTATE_TIMER_PTR(poll, Cdj850Usb),
         VMSTATE_BOOL(level, Cdj850Usb),
+        VMSTATE_BOOL_V(usbf_level, Cdj850Usb, 2),
         VMSTATE_UINT16_ARRAY(loc, Cdj850Usb, CDJ850_USB_SIZE / 2),
         VMSTATE_UINT32(raised, Cdj850Usb),
         VMSTATE_UINT16_ARRAY(pipecfg, Cdj850Usb, CDJ_USB_NR_PIPES),
@@ -595,6 +663,14 @@ void cdj850_usb_init(MemoryRegion *sysmem, SuperHCPU *cpu)
      * it is not mapped into the address space. */
     s->model = sysbus_mmio_get_region(sbd, 0);
     sysbus_connect_irq(sbd, 0, qemu_allocate_irq(usb_irq_in, s, 0));
+
+    s->usbf = cdj_usbf_init(NULL, qemu_allocate_irq(usb_usbf_irq_in, s, 0));
+    s->usbf_mmio = sysbus_mmio_get_region(SYS_BUS_DEVICE(s->usbf), 0);
+    if (getenv("CDJ_USBF_HOST")) {
+        cdj_usbf_host_init(s->usbf);
+    }
+    cdj850_usb_mux(cdj850_port_pbdrl());
+
     s->poll = timer_new_ns(QEMU_CLOCK_VIRTUAL, usb_irq_poll, s);
     vmstate_register_any(NULL, &vmstate_cdj850_usb, s);
 

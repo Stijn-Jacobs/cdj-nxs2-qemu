@@ -5,6 +5,7 @@
 #include "cdj_common.h"
 
 void cdj850_usb_init(MemoryRegion *sysmem, SuperHCPU *cpu);
+void cdj850_usb_mux(uint16_t pbdrl);
 
 /* USB_DMA0 (n = 1, D0FIFO) / USB_DMA1 (n = 2, D1FIFO) request state, for
  * the DMAC (xc/dmac.c). */

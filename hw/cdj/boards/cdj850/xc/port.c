@@ -8,6 +8,7 @@
 #include "loader.h"
 #include "port.h"
 #include "trace.h"
+#include "usb.h"
 
 /*
  * Ports/PFC at 0xFFFE3800: plain storage so configuration readbacks and
@@ -314,6 +315,9 @@ static void cdj850_port_write(void *opaque, hwaddr off, uint64_t val,
     }
     if (off <= CDJ850_PFDRL_OFF + 1 && off + size > CDJ850_PFDRL_OFF) {
         dsp56300_shi_cs(!(cdj850_port_pfdrl() & (1u << 3)));
+    }
+    if (off <= CDJ850_PBDRL_OFF + 1 && off + size > CDJ850_PBDRL_OFF) {
+        cdj850_usb_mux(cdj850_port_pbdrl());
     }
     if (cdj850_trace()) {
         info_report("cdj850: port write +0x%x size %u = 0x%x at pc=0x%08x "

@@ -85,6 +85,7 @@ struct CdjUsbfState {
     MemoryRegion iomem;
     qemu_irq irq;
     Notifier exit;
+    bool cable_blocked;
 
     bool vbus;
     unsigned dvsq, ctsq;
@@ -353,14 +354,38 @@ static int cdj_usbf_dcp_out(CdjUsbfState *s, const uint8_t *buf, unsigned len)
 bool cdj_usbf_attached(CdjUsbfState *s)
 {
     uint16_t need = CDJ_USBF_USBE | CDJ_USBF_DPRPU;
+    uint16_t syscfg = s->reg[CDJ_USB_SYSCFG / 2];
 
-    return s->vbus && (s->reg[CDJ_USB_SYSCFG / 2] & need) == need;
+    return !s->cable_blocked && s->vbus && !(syscfg & 0x0040) &&
+           (syscfg & need) == need;
 }
 
 void cdj_usbf_vbus(CdjUsbfState *s, bool on)
 {
     s->vbus = on;
     s->reg[CDJ_USB_INTSTS0 / 2] |= CDJ_USBF_VBINT;
+    cdj_usbf_update_irq(s);
+}
+
+bool cdj_usbf_has_vbus(CdjUsbfState *s)
+{
+    return s->vbus;
+}
+
+void cdj_usbf_set_cable(CdjUsbfState *s, bool connected)
+{
+    bool blocked = !connected;
+
+    if (s->cable_blocked == blocked) {
+        return;
+    }
+    s->cable_blocked = blocked;
+    if (!cdj_usbf_attached(s)) {
+        s->dvsq = DVSQ_POWERED;
+    }
+    if (connected && s->vbus) {
+        s->reg[CDJ_USB_INTSTS0 / 2] |= CDJ_USBF_VBINT;
+    }
     cdj_usbf_update_irq(s);
 }
 
@@ -748,7 +773,9 @@ CdjUsbfState *cdj_usbf_init(MemoryRegion *sysmem, qemu_irq irq)
     s->exit.notify = cdj_usbf_dump;
     qemu_add_exit_notifier(&s->exit);
     sysbus_connect_irq(sbd, 0, irq);
-    memory_region_add_subregion_overlap(sysmem, CDJ_USBF_BASE,
-                                        sysbus_mmio_get_region(sbd, 0), 1);
+    if (sysmem) {
+        memory_region_add_subregion_overlap(sysmem, CDJ_USBF_BASE,
+                                            sysbus_mmio_get_region(sbd, 0), 1);
+    }
     return s;
 }
