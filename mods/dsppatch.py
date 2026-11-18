@@ -49,6 +49,13 @@ DspProfile = collections.namedtuple('DspProfile', 'load length head free')
 #          program reaches, which code may be placed in
 DspTable = collections.namedtuple('DspTable', 'head length cave')
 
+# CDJ-850 DSP56371 4-stage SHI bootstrap sequence embedded in MAIN: contiguous
+# segments of [3B BE word count, 3B BE load addr, count * 3B BE words].
+DspShiProfile = collections.namedtuple(
+    'DspShiProfile', 'head length seg_count free',
+    defaults=(4, None),
+)
+
 # what          human name, printed by --list
 # target        'dsp'
 # fw_versions   the MAIN version strings the addresses were read from
@@ -67,13 +74,72 @@ PAIR_WINDOW = 16
 
 def find_blob(data, profile):
     """File offset of the DSP program in MAIN."""
-    probe = struct.pack('<%dI' % len(profile.head), *profile.head)
+    if isinstance(profile, DspShiProfile):
+        probe = b''.join(w.to_bytes(3, 'big') for w in profile.head)
+    else:
+        probe = struct.pack('<%dI' % len(profile.head), *profile.head)
     hits = list(sigpatch.all_finds(data, probe))
     if len(hits) != 1:
         raise sigpatch.NotApplied('the DSP program was found %d times' % len(hits))
     if hits[0] + profile.length > len(data):
         raise sigpatch.NotApplied('the DSP program runs past the end of MAIN')
     return hits[0]
+
+
+def shi_segments(blob, seg_count=4):
+    """[(seg_idx, count, load_addr, data_off, end_off)] for a DSP56371 SHI sequence."""
+    segs = []
+    pos = 0
+    for idx in range(seg_count):
+        if pos + 6 > len(blob):
+            raise sigpatch.NotApplied('DSP SHI segment %d header is truncated' % (idx + 1))
+        count = int.from_bytes(blob[pos:pos + 3], 'big')
+        load = int.from_bytes(blob[pos + 3:pos + 6], 'big')
+        data_off = pos + 6
+        end_off = data_off + 3 * count
+        if count == 0 or end_off > len(blob):
+            raise sigpatch.NotApplied('DSP SHI segment %d (count %d) overflows container' % (idx + 1, count))
+        segs.append((idx, count, load, data_off, end_off))
+        pos = end_off
+    if pos != len(blob):
+        raise sigpatch.NotApplied('DSP SHI sequence ended at %#x, expected %#x' % (pos, len(blob)))
+    return segs
+
+
+def shi_words(blob, data_off, count):
+    return [int.from_bytes(blob[data_off + 3 * i:data_off + 3 * (i + 1)], 'big')
+            for i in range(count)]
+
+
+def shi_references(words, lo, hi):
+    """Addresses in `words` (DSP56371 24-bit P words) that jump/call into [lo, hi)."""
+    hits = []
+    for i, w in enumerate(words):
+        if (w & 0xFFF000) in (0x0C0000, 0x0D0000) and lo <= (w & 0xFFF) < hi:
+            hits.append(i)
+        if i > 0 and words[i - 1] in (0x0AF080, 0x0BF080) and lo <= w < hi:
+            hits.append(i - 1)
+    return sorted(set(hits))
+
+
+def verify_shi_boot(blob, profile):
+    """Verify the 4 DSP56371 SHI segments still pass bootloader re-entry and reset checks."""
+    try:
+        segs = shi_segments(blob, profile.seg_count)
+    except sigpatch.NotApplied as e:
+        return [str(e)]
+    errors = []
+    for idx, count, load, data_off, _ in segs:
+        words = shi_words(blob, data_off, count)
+        if idx < profile.seg_count - 1:
+            if count < 2 or words[-2:] != [0x0AF080, 0xFF0000]:
+                errors.append('segment %d does not end with JMP $FF0000 to re-enter bootstrap ROM' % (idx + 1))
+        else:
+            if count < 0x102:
+                errors.append('segment %d app is unexpectedly short (%d words)' % (idx + 1, count))
+            elif words[0] == 0:
+                errors.append('segment %d reset vector P:0000 is zeroed' % (idx + 1))
+    return errors
 
 
 def sections(blob):
@@ -89,7 +155,15 @@ def sections(blob):
 
 def program_offset(profile, blob, addr, size=4):
     """Offset in the program found in MAIN of the `size` bytes at DSP address `addr`."""
-    if isinstance(profile, DspTable):
+    if isinstance(profile, DspShiProfile):
+        seg_idx = profile.seg_count - 1
+        if isinstance(addr, tuple):
+            seg_idx, addr = addr
+        segs = shi_segments(blob, profile.seg_count)
+        _, count, load, data_off, _ = segs[seg_idx]
+        if load <= addr and addr * 3 + size <= (load + count) * 3:
+            return data_off + (addr - load) * 3
+    elif isinstance(profile, DspTable):
         for load, at, length in sections(blob):
             if load <= addr and addr + size <= load + length:
                 return at + addr - load
@@ -100,6 +174,11 @@ def program_offset(profile, blob, addr, size=4):
 
 def program_address(profile, blob, offset):
     """The DSP address of the byte at `offset` of the program found in MAIN."""
+    if isinstance(profile, DspShiProfile):
+        for seg_idx, _, load, data_off, end_off in shi_segments(blob, profile.seg_count):
+            if data_off <= offset < end_off:
+                return load + (offset - data_off) // 3
+        raise sigpatch.NotApplied('offset %#x is outside any DSP SHI segment' % offset)
     if not isinstance(profile, DspTable):
         return profile.load + offset
     for load, at, size in sections(blob):
@@ -110,6 +189,9 @@ def program_address(profile, blob, offset):
 
 def program_references(profile, blob, lo, hi):
     """references() over the whole program, for a boot table each section with its own load address."""
+    if isinstance(profile, DspShiProfile):
+        _, count, _, data_off, _ = shi_segments(blob, profile.seg_count)[-1]
+        return shi_references(shi_words(blob, data_off, count), lo, hi)
     if not isinstance(profile, DspTable):
         return references(blob, profile.load, lo, hi)
     return sorted(set(ref for load, at, size in sections(blob)
@@ -206,38 +288,53 @@ def patch(profile, data, mods, names, tag='dsppatch', report=None, spans=None, b
     blob = bytes(data[start:start + profile.length])
     taken = []
 
-    def offset(addr):
-        return start + program_offset(profile, blob, addr)
+    def offset(addr, size=4):
+        return start + program_offset(profile, blob, addr, size)
 
     def word(addr):
+        if isinstance(profile, DspShiProfile):
+            off = offset(addr, 3)
+            return int.from_bytes(out[off:off + 3], 'big')
         return struct.unpack_from('<I', out, offset(addr))[0]
+
+    def write_word(addr, val):
+        if isinstance(profile, DspShiProfile):
+            off = offset(addr, 3)
+            out[off:off + 3] = val.to_bytes(3, 'big')
+            return off, 3
+        off = offset(addr)
+        struct.pack_into('<I', out, off, val)
+        return off, 4
 
     def plan(mod):
         """(edits to write, pieces of code to write, whether it is all there
         already); NotApplied when the mod cannot go in."""
+        shi = isinstance(profile, DspShiProfile)
         table = isinstance(profile, DspTable)
-        low, high = profile.cave[:2] if table else (profile.free[0] + EDGE, profile.free[1] - EDGE)
+        low, high = (profile.free if shi else
+                     profile.cave[:2] if table else (profile.free[0] + EDGE, profile.free[1] - EDGE))
         writes, pieces, here = [], [], 0
-        for addr, old, new in mod.edits:
+        for edit in mod.edits:
+            addr, old, new = (edit[0], edit[1], edit[2]) if len(edit) == 3 else ((edit[0], edit[1]), edit[2], edit[3])
             if word(addr) == new:
                 here += 1
             elif word(addr) == old:
                 writes.append((addr, new))
             else:
                 raise sigpatch.NotApplied('the word at %#x is %#x, neither the stock %#x nor %#x'
-                                          % (addr, word(addr), old, new))
+                                          % (addr[1] if isinstance(addr, tuple) else addr, word(addr), old, new))
         for addr, code in mod.code:
             if isinstance(code, str):
                 with open(blob_path(code), 'rb') as f:
-                    code = words_of(f.read())
-            end = addr + 4 * len(code)
-            if not (low <= addr and end <= high):
-                raise sigpatch.NotApplied('code at %#x is not inside the %s %#x-%#x'
-                                          % (addr, 'cave' if table else 'free run', low, high))
-            now = [word(addr + 4 * k) for k in range(len(code))]
+                    raw = f.read()
+                    code = [int.from_bytes(raw[k:k + 3], 'big') for k in range(0, len(raw), 3)] if shi else words_of(raw)
+            end = addr + (len(code) if shi else 4 * len(code))
+            if low is None or not (low <= addr and end <= high):
+                raise sigpatch.NotApplied('code at %#x is not inside the %s' % (addr, 'cave' if table else 'free run'))
+            now = [word(addr + (k if shi else 4 * k)) for k in range(len(code))]
             if tuple(now) == tuple(code):
                 here += 1
-            elif cave_is_stock(profile, blob) if table else set(now) == {ERASED}:
+            elif (set(now) == {0} if shi else cave_is_stock(profile, blob) if table else set(now) == {ERASED}):
                 if program_references(profile, blob, addr, end):
                     raise sigpatch.NotApplied('the DSP program points into %#x-%#x' % (addr, end))
                 pieces.append((addr, code))
@@ -251,7 +348,9 @@ def patch(profile, data, mods, names, tag='dsppatch', report=None, spans=None, b
         mod = mods[name]
         try:
             writes, pieces, present = plan(mod)
-            ranges = [(a, a + 4) for a, _ in writes] + [(a, a + 4 * len(c)) for a, c in pieces]
+            step = 1 if isinstance(profile, DspShiProfile) else 4
+            ranges = [(a[1] if isinstance(a, tuple) else a, (a[1] if isinstance(a, tuple) else a) + step)
+                      for a, _ in writes] + [(a, a + step * len(c)) for a, c in pieces]
             clash = [r for r in ranges for t in taken if r[0] < t[1] and t[0] < r[1]]
             if clash:
                 raise sigpatch.NotApplied('it overlaps an earlier mod at %#x' % clash[0][0])
@@ -263,14 +362,23 @@ def patch(profile, data, mods, names, tag='dsppatch', report=None, spans=None, b
             print('%s: %s already applied' % (tag, mod.what))
             continue
         for addr, new in writes:
-            struct.pack_into('<I', out, offset(addr), new)
-            spans.setdefault(name, []).append((offset(addr), 4, 'dsp'))
+            off, sz = write_word(addr, new)
+            spans.setdefault(name, []).append((off, sz, 'dsp'))
         for addr, code in pieces:
-            struct.pack_into('<%dI' % len(code), out, offset(addr), *code)
-            kind = 'dspcave' if isinstance(profile, DspTable) else 'dspfree'
-            spans.setdefault(name, []).append((offset(addr), 4 * len(code), kind))
+            kind = ('dspfree' if isinstance(profile, DspShiProfile)
+                    else 'dspcave' if isinstance(profile, DspTable) else 'dspfree')
+            for k, val in enumerate(code):
+                step_addr = addr + (k if isinstance(profile, DspShiProfile) else 4 * k)
+                off, sz = write_word(step_addr, val)
+                if k == 0:
+                    start_off = off
+            spans.setdefault(name, []).append((start_off, len(code) * (3 if isinstance(profile, DspShiProfile) else 4), kind))
         taken += ranges
         report[name] = ('applied', '')
         print('%s: %s, %d words changed and %d placed' % (tag, mod.what, len(writes),
                                                          sum(len(c) for _, c in pieces)))
+    if isinstance(profile, DspShiProfile):
+        errs = verify_shi_boot(bytes(out[start:start + profile.length]), profile)
+        if errs:
+            raise SystemExit('%s: edited DSP segments fail boot check: %s' % (tag, '; '.join(errs)))
     return bytes(out)

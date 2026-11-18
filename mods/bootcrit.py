@@ -37,7 +37,9 @@ import modelfw
 # stick need. A model that has no task of a name simply lacks that root.
 TASK_ROOTS = ('root', 'Idle', 'UpDtae_TASK', 'PnlCom_SndTASK', 'PnlCom_RcvTASK',
               'gui_comm', 'gui_task', 'GuiCom_SndTASK', 'GuiCom_RcvTASK',
-              'RdMngRcv_TASK', 'RdMngExeUSB_TASK')
+              'RdMngRcv_TASK', 'RdMngExeUSB_TASK',
+              'initTask', 'idleTASK', 'FlashTask', 'serialTask', 'usbTask',
+              'DjControlTask', 'DisplayTask')
 
 VECTORS = (0x100, 0x400, 0x600, 0x800)      # exception entries and _start, from the image base
 VECTOR_AREA = 0x800
@@ -86,7 +88,7 @@ class Closure:
         return (best, self.entries[best]) if best is not None else None
 
 
-def find_roots(img, base):
+def find_roots(img, base, byteorder='<'):
     """{task name: descriptor offset} for the TASK_ROOTS this image has."""
     roots = {}
     for name in TASK_ROOTS:
@@ -95,30 +97,30 @@ def find_roots(img, base):
         while pos >= 0:
             phys = base + pos
             for alias in (0xA0000000 | (phys & 0x1FFFFFFF), phys):
-                ref = img.find(struct.pack('<I', alias))
+                ref = img.find(struct.pack(byteorder + 'I', alias))
                 while ref >= 0:
                     desc = ref - 0x10
-                    if desc >= 0 and ref % 4 == 0 and _plausible_descriptor(img, base, desc):
+                    if desc >= 0 and ref % 4 == 0 and _plausible_descriptor(img, base, desc, byteorder):
                         roots.setdefault(name, desc)
-                    ref = img.find(struct.pack('<I', alias), ref + 1)
+                    ref = img.find(struct.pack(byteorder + 'I', alias), ref + 1)
             pos = img.find(string, pos + 1)
     return roots
 
 
-def _plausible_descriptor(img, base, desc):
-    entry, prio, stack_size = struct.unpack_from('<III', img, desc)
+def _plausible_descriptor(img, base, desc, byteorder='<'):
+    entry, prio, stack_size = struct.unpack_from(byteorder + 'III', img, desc)
     return (base <= entry < base + len(img) and entry % 2 == 0
             and 0 < prio <= 0x100 and stack_size % 4 == 0 and 0x80 <= stack_size <= 0x100000)
 
 
-def find_all_roots(img, base):
+def find_all_roots(img, base, byteorder='<'):
     """{task name@descriptor: descriptor offset} for every entry of the task
     table: a descriptor whose last word points at a task name."""
     roots = {}
     for desc in range(0, len(img) - DESCRIPTOR_BYTES, 4):
-        if not _plausible_descriptor(img, base, desc):
+        if not _plausible_descriptor(img, base, desc, byteorder):
             continue
-        pointer = struct.unpack_from('<I', img, desc + 0x10)[0]
+        pointer = struct.unpack_from(byteorder + 'I', img, desc + 0x10)[0]
         string = (pointer & 0x1FFFFFFF) - (base & 0x1FFFFFFF)
         named = NAME.match(img, string) if 0 <= string < len(img) else None
         if named:
@@ -126,7 +128,7 @@ def find_all_roots(img, base):
     return roots
 
 
-def closure(img, base, every_task=False):
+def closure(img, base, every_task=False, byteorder='<'):
     """The Closure of `img`, a MAIN image that starts at address `base` (its
     model's MODEL_MAIN_BASE).
     With every_task the walk starts from every task of the table, not only
@@ -148,13 +150,15 @@ def closure(img, base, every_task=False):
         # A pool word is a code pointer only if it points at a routine
         # prologue; the rest are tables and strings, and walking them as code
         # would swallow the image.
-        op = struct.unpack_from('<H', img, off)[0]
+        op = struct.unpack_from(byteorder + 'H', img, off)[0]
         if op == 0x4F22 or op & 0xFF0F == 0x2F06 or op >> 8 == 0x7F:
             return True
         # a leaf routine: the instruction pair before it is a return or jump
         # and its delay slot
-        end = struct.unpack_from('<H', img, off - 4)[0] if off >= 4 else 0
-        return end == 0x000B or end & 0xF0FF == 0x402B or end >> 12 == 0xA
+        end = struct.unpack_from(byteorder + 'H', img, off - 4)[0] if off >= 4 else 0
+        prev = struct.unpack_from(byteorder + 'H', img, off - 2)[0] if off >= 2 else 0
+        return (op & 0xFF0F == 0x48F0 or prev == 0x006B
+                or end == 0x000B or end & 0xF0FF == 0x402B or end >> 12 == 0xA)
 
     def mark(off, n):
         covered[off:off + n] = b'\x01' * n
@@ -173,7 +177,7 @@ def closure(img, base, every_task=False):
             while 0 <= a < size - 1 and a not in seen and len(seen) < MAX_INSNS:
                 seen.add(a)
                 mark(a, 2)
-                op = struct.unpack_from('<H', img, a)[0]
+                op = struct.unpack_from(byteorder + 'H', img, a)[0]
                 for reg in loaded:
                     loaded[reg] += 1
                 pool(a, op, loaded)
@@ -188,12 +192,14 @@ def closure(img, base, every_task=False):
                     if (op >> 8) & 0xF in (0xD, 0xF):
                         slot(a + 2, loaded)
                     todo.append(a + 4 + sext(lo8, 8) * 2)
-                elif op in (0x000B, 0x002B):                    # rts, rte
-                    slot(a + 2, loaded)
+                elif op in (0x000B, 0x002B, 0x006B):            # rts, rte, sh2a rts/n
+                    if op != 0x006B:
+                        slot(a + 2, loaded)
                     break
-                elif hi == 0x4 and lo8 in (0x0B, 0x2B):         # jsr @rn, jmp @rn
+                elif hi == 0x4 and lo8 in (0x0B, 0x2B, 0x4B):   # jsr, jmp, sh2a jsr/n
                     reg = (op >> 8) & 0xF
-                    slot(a + 2, loaded)
+                    if lo8 != 0x4B:
+                        slot(a + 2, loaded)
                     if loaded.get(reg, 99) > 8:
                         state['unresolved'] += 1
                     if lo8 == 0x2B:
@@ -214,7 +220,7 @@ def closure(img, base, every_task=False):
             if lit + 4 <= size:
                 mark(lit, 4)
                 loaded[(op >> 8) & 0xF] = 0
-                target = code_target(struct.unpack_from('<I', img, lit)[0])
+                target = code_target(struct.unpack_from(byteorder + 'I', img, lit)[0])
                 if target is not None and entry_like(target):
                     calls.append((target, current[0]))
         elif hi == 0x9:                                         # mov.w @(disp,pc),rn
@@ -225,18 +231,18 @@ def closure(img, base, every_task=False):
     def slot(a, loaded):
         if a + 2 <= size:
             mark(a, 2)
-            pool(a, struct.unpack_from('<H', img, a)[0], loaded)
+            pool(a, struct.unpack_from(byteorder + 'H', img, a)[0], loaded)
 
     calls, current, span = [], [''], [0, 0]
-    roots = find_all_roots(img, base) if every_task else find_roots(img, base)
+    roots = find_all_roots(img, base, byteorder) if every_task else find_roots(img, base, byteorder)
     seeds = [(base_off, 'vector %#x' % (base + base_off)) for base_off in VECTORS]
     for name, desc in roots.items():
-        seeds.append((struct.unpack_from('<I', img, desc)[0] - base, name))
+        seeds.append((struct.unpack_from(byteorder + 'I', img, desc)[0] - base, name))
 
     fixed = [(0, min(VECTOR_AREA, size))]
     for name, desc in roots.items():
         fixed.append((desc, desc + DESCRIPTOR_BYTES))
-        pointer = struct.unpack_from('<I', img, desc + 0x10)[0]
+        pointer = struct.unpack_from(byteorder + 'I', img, desc + 0x10)[0]
         string = (pointer & 0x1FFFFFFF) - (base & 0x1FFFFFFF)
         if 0 <= string < size:
             fixed.append((string, string + len(name.split('@')[0]) + 1))
@@ -273,7 +279,8 @@ def main():
     with open(args[0], 'rb') as f:
         img = f.read()
     base = int(args[1], 0) if len(args) == 2 else modelfw.main_base(model)
-    c = closure(img, base)
+    byteorder = '>' if modelfw.cdj_model.load(model).main_is_eb else '<'
+    c = closure(img, base, byteorder=byteorder)
     print('%s MAIN %s at %#x' % (model, args[0], base))
     print('roots: %s' % ', '.join('%s %#x' % (n, base + d) for n, d in sorted(c.roots.items())))
     print('%d routines, %d bytes, %d ranges, %d indirect calls not followed'

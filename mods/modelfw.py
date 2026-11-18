@@ -31,7 +31,7 @@ def update_window_end(model):
     return cdj_model.load(model).update_window_end
 
 
-Firmware = collections.namedtuple('Firmware', 'sections main_off bare', defaults=(False,))
+Firmware = collections.namedtuple('Firmware', 'sections main_off bare container', defaults=(False, 'srec'))
 
 
 def parse_manifest(data):
@@ -88,6 +88,8 @@ def load(model):
         m = cdj_model.load(model)
     except cdj_model.ModelError as e:
         raise SystemExit(str(e))
+    if m.boots_flash:
+        return Firmware({'main': 1}, int(m.main_lzss, 0) - 4, bare=True, container='c850')
     if len(m.upd) > 1:
         return Firmware({'main': 1}, int(m.main_lzss, 0) - 4, bare=True)
     sections = {'main': int(m.main_section)}
