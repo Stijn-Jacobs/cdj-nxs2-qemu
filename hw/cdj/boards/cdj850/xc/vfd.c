@@ -21,8 +21,8 @@ static struct {
     bool has_panel_text;
     bool synced;
     uint8_t frame[VFD_FRAME_LEN];
-    unsigned nframe;
-    unsigned long frames;
+    uint32_t nframe;
+    uint64_t frames;
 } vfd;
 
 static void vfd_draw(DisplaySurface *ds)
@@ -57,6 +57,31 @@ static const GraphicHwOps vfd_ops = {
     .gfx_update = vfd_gfx_update,
 };
 
+static int vfd_post_load(void *opaque, int version_id)
+{
+    (void)opaque;
+    (void)version_id;
+    vfd.dirty = true;
+    return 0;
+}
+
+static const VMStateDescription vmstate_cdj850_vfd = {
+    .name = "cdj850-vfd",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .post_load = vfd_post_load,
+    .fields = (const VMStateField[]) {
+        VMSTATE_BUFFER_UNSAFE(display, typeof(vfd), 0, sizeof(vfd.display)),
+        VMSTATE_BUFFER_UNSAFE(line, typeof(vfd), 0, sizeof(vfd.line)),
+        VMSTATE_BOOL(has_panel_text, typeof(vfd)),
+        VMSTATE_BOOL(synced, typeof(vfd)),
+        VMSTATE_UINT8_ARRAY(frame, typeof(vfd), VFD_FRAME_LEN),
+        VMSTATE_UINT32(nframe, typeof(vfd)),
+        VMSTATE_UINT64(frames, typeof(vfd)),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 void vfd_init(void)
 {
     if (vfd.con) {
@@ -70,6 +95,7 @@ void vfd_init(void)
     qemu_console_set_surface(vfd.con,
                              qemu_create_displaysurface(VFD_W, VFD_H));
     qemu_console_resize(vfd.con, VFD_W, VFD_H);
+    vmstate_register_any(NULL, &vmstate_cdj850_vfd, &vfd);
     vfd.dirty = true;
 }
 
@@ -113,6 +139,74 @@ void vfd_note_panel_text(uint8_t mode, const char *l0, const char *l1,
     vfd.dirty = true;
 }
 
+void vfd_note_track_number(bool known, uint8_t number)
+{
+    vfd.display.track_known = known;
+    vfd.display.track_number = number;
+    vfd.dirty = true;
+}
+
+void vfd_note_time(const Cdj850Time *time)
+{
+    vfd.display.time = *time;
+    vfd.dirty = true;
+}
+
+void vfd_note_bpm(bool known, uint16_t bpm)
+{
+    vfd.display.bpm_known = known;
+    vfd.display.bpm = bpm;
+    vfd.dirty = true;
+}
+
+void vfd_note_pitch(const Cdj850Pitch *pitch)
+{
+    vfd.display.pitch = *pitch;
+    vfd.dirty = true;
+}
+
+void vfd_note_master_tempo(bool enabled)
+{
+    vfd.display.master_tempo = enabled;
+    vfd.dirty = true;
+}
+
+void vfd_note_auto_cue(bool enabled)
+{
+    vfd.display.auto_cue = enabled;
+    vfd.dirty = true;
+}
+
+void vfd_note_info(bool enabled)
+{
+    vfd.display.info_lamp = enabled;
+    vfd.dirty = true;
+}
+
+void vfd_note_browse(bool enabled)
+{
+    vfd.display.browse_lamp = enabled;
+    vfd.dirty = true;
+}
+
+void vfd_note_menu(bool enabled)
+{
+    vfd.display.menu_lamp = enabled;
+    vfd.dirty = true;
+}
+
+void vfd_note_tag_list(bool enabled)
+{
+    vfd.display.tag_list_lamp = enabled;
+    vfd.dirty = true;
+}
+
+void vfd_note_playing(const Cdj850Playing *playing)
+{
+    vfd.display.playing = *playing;
+    vfd.dirty = true;
+}
+
 void vfd_note_panel_tags(const uint8_t tags[3])
 {
     memcpy(vfd.display.tags, tags, sizeof(vfd.display.tags));
@@ -143,7 +237,7 @@ void vfd_note_tx(uint8_t b)
         vfd.frames++;
         if (!vfd.has_panel_text) {
             snprintf(vfd.line[1], sizeof(vfd.line[1]),
-                     "TX %02X %02X %02X %02X %02X %02X #%lu",
+                     "TX %02X %02X %02X %02X %02X %02X #%" PRIu64,
                      vfd.frame[0], vfd.frame[1], vfd.frame[2],
                      vfd.frame[3], vfd.frame[4], vfd.frame[5], vfd.frames);
             vfd.dirty = true;

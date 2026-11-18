@@ -416,6 +416,8 @@ class Setup:
             main, gui = self.lay.qemu_binaries()
             return main, gui, os.path.join(self.lay.runtime, "qemu", "libc66x.so")
         if not self.model.is_rig:
+            if self.model.main_is_eb:
+                return os.path.join(host.native(self.c["QEMU_EB_BUILD"]), "qemu-system-sh4eb" + sfx), "", ""
             return os.path.join(host.native(self.c["QEMU_BUILD"]), "qemu-system-sh4" + sfx), "", ""
         return (os.path.join(host.native(self.c["QEMU_BUILD"]), "qemu-system-sh4" + sfx),
                 os.path.join(host.native(self.c["QEMU_EB_BUILD"]), "qemu-system-sh4eb" + sfx),
@@ -428,8 +430,13 @@ class Setup:
         if lay.packaged:
             con.good("prebuilt: %s" % os.path.dirname(main))
             return
-        con.info("build trees: %s%s" % (self.c["QEMU_BUILD"],
-                                         ", " + self.c["QEMU_EB_BUILD"] if self.model.is_rig else ""))
+        if self.model.is_rig:
+            trees = "%s, %s" % (self.c["QEMU_BUILD"], self.c["QEMU_EB_BUILD"])
+        elif self.model.main_is_eb:
+            trees = self.c["QEMU_EB_BUILD"]
+        else:
+            trees = self.c["QEMU_BUILD"]
+        con.info("build trees: %s" % trees)
         if o.skip_build:
             con.dim("skipped (--skip-build)")
             return
@@ -441,18 +448,23 @@ class Setup:
             (2, "patches", "",
              "a patch that does not apply means qemu-src/ is not a clean v11.1.2: delete it and re-run",
              "this project's patches to QEMU"),
-            (3, "main", main,
+            (3, "main", main if not self.model.main_is_eb else "",
              "a missing library shows as a meson 'Dependency ... not found' above; step 1 lists the package",
              "the MAIN emulator (SH-4 + the player boards; the long one, 10-40 min)"),
-            (4, "display", gui,
+            (4, "display", gui or (main if self.model.main_is_eb else ""),
              "same toolchain as 2.3; if that worked, look for a disk-full or gtk3 error above",
-             "the display-board emulator (SH-2A)"),
+             "the display-board / SH-2A emulator (sh4eb)"),
             (5, "dsp", dsp, "the DSP library needs only gcc and make",
              "the DSP core library for the run-time JIT"),
         )
         for n, name, artifact, hint, label in phases:
-            if not self.model.is_rig and name in ("display", "dsp"):
-                continue
+            if not self.model.is_rig:
+                if name == "dsp":
+                    continue
+                if self.model.main_is_eb and name == "main":
+                    continue
+                if not self.model.main_is_eb and name == "display":
+                    continue
             if artifact and os.path.exists(artifact) and not o.rebuild:
                 con.good("%s  %s(already built: %s)%s" % (label, con.D, artifact, con.N))
                 continue

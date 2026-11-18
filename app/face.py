@@ -86,6 +86,7 @@ class Face:
     frame: tuple | None = None      # the LCD's pixels as the board draws them
     jog_counter: dict | None = None # the platter's report scale, where the jog counter has been measured
     slider_off: int | None = None   # the report byte of the tempo slider's position word, where it has been measured
+    slider_invert: bool = False     # True when high word means '-' (slower) and low word means '+' (faster)
 
     @property
     def lcd(self):
@@ -149,6 +150,7 @@ def load(model):
         slider=_units([sl["x"], sl["top"], sl["bottom"]] + sl["cap"]),
         slider_pad=_units(sl["pad"]) if "pad" in sl else None, zero_mark=sl.get("zero_mark", True),
         slider_off=int(sl["report"], 16) if "report" in sl else None,
+        slider_invert=bool(sl.get("invert", False)),
         keys=keys,
         slots=[_units(box) for box in d["slots"]],
         printed=[_units(t[:2]) + (t[2], t[3]) for t in d["print"]],

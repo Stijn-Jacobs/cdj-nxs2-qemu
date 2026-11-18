@@ -107,3 +107,18 @@ void cdj850_dsp_shi_tx(uint8_t b)
         break;
     }
 }
+
+static const VMStateDescription vmstate_cdj850_dsp_shi = {
+    .name = "cdj850-dsp-shi",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        CDJ_VMSTATE_SPAN(typeof(shi), acc, segs),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
+void cdj850_dsp_shi_init(void)
+{
+    vmstate_register_any(NULL, &vmstate_cdj850_dsp_shi, &shi);
+}

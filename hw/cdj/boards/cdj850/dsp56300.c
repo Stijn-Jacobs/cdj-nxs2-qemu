@@ -3299,7 +3299,53 @@ static void dsp_vm_state_cb(void *opaque, bool running, RunState state)
 
     (void)state;
     qatomic_set(&d->paused, !running);
+    if (!running && d->threaded) {
+        /* Wait until the worker exits any in-flight slot before savevm. */
+        qemu_mutex_lock(&d->lock);
+        qemu_mutex_unlock(&d->lock);
+    }
 }
+
+static int dsp_post_load(void *opaque, int version_id)
+{
+    Dsp56300 *d = opaque;
+
+    (void)version_id;
+    memset(d->icache, 0, sizeof(d->icache));
+    return 0;
+}
+
+static bool dsp_has_timer(void *opaque, int version_id)
+{
+    Dsp56300 *d = opaque;
+
+    (void)version_id;
+    return d->audio_timer != NULL;
+}
+
+static const VMStateDescription vmstate_cdj850_dsp56300 = {
+    .name = "cdj850-dsp56300",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .post_load = dsp_post_load,
+    .fields = (const VMStateField[]) {
+        CDJ_VMSTATE_SPAN(Dsp56300, a, ssi_rx),
+        VMSTATE_TIMER_PTR_TEST(audio_timer, Dsp56300, dsp_has_timer),
+        CDJ_VMSTATE_SPAN(Dsp56300, audio_tick, shi_tx_logged),
+        VMSTATE_BOOL(dspdreq_pin, Dsp56300),
+        VMSTATE_UINT32(main_pfdr, Dsp56300),
+        VMSTATE_UINT8_ARRAY(irq7_q, Dsp56300, 32),
+        VMSTATE_UINT32(irq7_head, Dsp56300),
+        VMSTATE_UINT32(irq7_tail, Dsp56300),
+        VMSTATE_UINT32(irq7_count, Dsp56300),
+        VMSTATE_UINT32_ARRAY(p, Dsp56300, DSP_PRAM_SIZE),
+        VMSTATE_UINT32_ARRAY(x, Dsp56300, DSP_DRAM_SIZE),
+        VMSTATE_UINT32_ARRAY(y, Dsp56300, DSP_DRAM_SIZE),
+        VMSTATE_UINT32_ARRAY(x_io, Dsp56300, DSP_IO_SIZE),
+        VMSTATE_UINT32_ARRAY(y_io, Dsp56300, DSP_IO_SIZE),
+        VMSTATE_END_OF_LIST()
+    }
+};
 
 static void dsp_exit_cb(Notifier *n, void *data)
 {
@@ -3506,6 +3552,7 @@ void dsp56300_init(void)
     qemu_mutex_init(&d->lock);
     qemu_mutex_init(&d->rx_lock);
     qemu_mutex_init(&d->irq_lock);
+    vmstate_register_any(NULL, &vmstate_cdj850_dsp56300, d);
     d->threaded = !icount_enabled();
     if (d->threaded) {
         d->irq_bh = qemu_bh_new(dsp_irq_bh, d);

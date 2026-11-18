@@ -72,6 +72,8 @@ STEPS = {
     "make_settings": lambda m: ("make_settings.py", ["extract/settings.bin"]),
     "make_flash": lambda m: ("make_flash.py", ["extract/flash.bin", "extract/settings.bin",
                                                 "extract/section%s.bin" % m.main_section]),
+    "make_flash_cdj850": lambda m: ("make_flash_cdj850.py", ["extract/" + m.main_flash, "extract"]),
+    "c850_unpack": lambda m: ("c850_unpack.py", ["extract/main_flat.bin", "extract/main_unpacked.bin"]),
 }
 
 

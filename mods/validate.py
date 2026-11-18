@@ -64,6 +64,7 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, '..', 'scripts', 'firmware'))
 
 import bootcrit
+import c850_repack
 import dsppatch
 import gui_decode
 import main_decode
@@ -276,9 +277,11 @@ def check_untouched(stock, out, fw, targets, rep):
         return
     rep.ok('section table: %d sections, %s bytes of header' % (len(out.sections), out.header))
     allowed = {fw.sections[t] - 1 for t in fw.sections if targets is None or t in targets}
+    lbl_slice = (slice(c850_repack.LABEL_OFF, c850_repack.PACKED_OFF)
+                 if fw.container == 'c850' else slice(0, LABEL_SIZE))
     for i, (a, b) in enumerate(zip(stock.sections, out.sections)):
-        label = a[:LABEL_SIZE].decode('latin1').rstrip()
-        if a[:LABEL_SIZE] != b[:LABEL_SIZE]:
+        label = a[lbl_slice].decode('latin1').rstrip('\x00 ')
+        if a[lbl_slice] != b[lbl_slice]:
             rep.fail('section %d (%s): label changed' % (i + 1, label))
         if i not in allowed:
             if a == b:
@@ -391,6 +394,31 @@ def check_blob_section(i, stock_sec, out_sec, rep):
     return gui_decode.decode(out_sec)[3], gui_decode.decode(stock_sec)[3]
 
 
+def check_c850_section(i, stock_sec, out_sec, model, rep):
+    name = 'section %d (%s)' % (i + 1, out_sec[c850_repack.LABEL_OFF:c850_repack.PACKED_OFF]
+                                .decode('latin1').rstrip('\x00 '))
+    problems = c850_repack.check_upd(out_sec, check_boot=True)
+    if problems:
+        for p in problems:
+            rep.fail('%s: %s' % (name, p))
+        return None
+    rep.ok('%s: boot SHA-256, packed length and sum16 verify' % name)
+    if stock_sec is not None:
+        if stock_sec[:c850_repack.PACKED_OFF] == out_sec[:c850_repack.PACKED_OFF]:
+            rep.ok('%s: bytes 0-%#x (boot, recovery, label) identical' % (name, c850_repack.PACKED_OFF))
+        else:
+            rep.fail('%s: bytes below %#x differ' % (name, c850_repack.PACKED_OFF))
+    stream, _, _ = c850_repack.read_packed(out_sec)
+    end = c850_repack.STREAM_OFF + len(stream) + 2
+    window_end = modelfw.update_window_end(model) or c850_repack.MAIN_END
+    if end > window_end:
+        rep.fail('%s: packed MAIN ends at %#x, past %#x' % (name, end, window_end))
+    else:
+        rep.ok('%s: packed MAIN ends at %#x, inside %#x' % (name, end, window_end))
+    return (c850_repack.unpack_main(out_sec),
+            c850_repack.unpack_main(stock_sec) if stock_sec else None)
+
+
 def decode_pair(stock, out, fw, model, targets, rep):
     """{target: (stock image, output image)} for every changed target section,
     after the structure checks on it."""
@@ -399,16 +427,19 @@ def decode_pair(stock, out, fw, model, targets, rep):
         i = number - 1
         if (targets is not None and target not in targets) or i >= len(out.sections):
             continue
-        kind = section_kind(out.sections[i])
-        if kind == 'srec':
-            pair = check_srec_section(i, stock.sections[i], out.sections[i], fw, model, rep)
-        elif kind == 'blob':
-            pair = check_blob_section(i, stock.sections[i], out.sections[i], rep)
-        elif stock.sections[i] != out.sections[i]:
-            rep.fail('section %d changed but is neither S-records nor a length + stream blob' % number)
-            continue
+        if fw.container == 'c850' and target == 'main':
+            pair = check_c850_section(i, stock.sections[i], out.sections[i], model, rep)
         else:
-            continue
+            kind = section_kind(out.sections[i])
+            if kind == 'srec':
+                pair = check_srec_section(i, stock.sections[i], out.sections[i], fw, model, rep)
+            elif kind == 'blob':
+                pair = check_blob_section(i, stock.sections[i], out.sections[i], rep)
+            elif stock.sections[i] != out.sections[i]:
+                rep.fail('section %d changed but is neither S-records nor a length + stream blob' % number)
+                continue
+            else:
+                continue
         if pair is None:
             continue
         out_img, stock_img = pair
@@ -474,11 +505,12 @@ def check_writes(target, stock_img, out_img, profile, spans, rep, table=None, ds
     flat = flat_spans(spans, changed, stock_img, table, cave, dsp)
     if spans is not None:
         declared = bootcrit.merge([(lo, hi) for _, _, lo, hi in flat])
-        stray = [r for r in changed if not any(lo <= r[0] and r[1] <= hi for lo, hi in declared)]
+        exact = changed_ranges(stock_img, out_img, gap=1)
+        stray = [r for r in exact if not any(lo <= r[0] and r[1] <= hi for lo, hi in declared)]
         if stray:
             rep.fail('%s: %d changed ranges no mod declared, first at offset %#x' % (target, len(stray), stray[0][0]))
         else:
-            rep.ok('%s: all %d changed ranges are writes a mod declared' % (target, len(changed)))
+            rep.ok('%s: all %d changed ranges are writes a mod declared' % (target, len(exact)))
     for mod, kind, lo, hi in flat:
         if kind == 'free' and not profile.cave and set(stock_img[lo:hi]) != {0xFF}:
             rep.fail('%s: %s claims %#x-%#x as free space, but it is not erased' % (target, mod, lo, hi))
@@ -502,7 +534,7 @@ def check_writes(target, stock_img, out_img, profile, spans, rep, table=None, ds
     return flat
 
 
-def check_free_unreached(stock_img, flat, base, rep, cave=None):
+def check_free_unreached(stock_img, flat, base, rep, cave=None, byteorder='<'):
     """No code reachable from any task of the table enters a span a mod claims
     as free space. The table holds every task, not only the boot-critical ones.
     A profile's named cave `cave` is proven by its hash instead."""
@@ -510,7 +542,10 @@ def check_free_unreached(stock_img, flat, base, rep, cave=None):
             if kind == 'free' and not (cave and cave[0] <= lo and hi <= cave[1])]
     if cave and not free:
         return
-    reach = bootcrit.closure(stock_img, base, every_task=True)
+    if byteorder == '<':
+        reach = bootcrit.closure(stock_img, base, every_task=True)
+    else:
+        reach = bootcrit.closure(stock_img, base, every_task=True, byteorder=byteorder)
     entered = [(mod, lo, hi) for mod, lo, hi in free if reach.hit(lo, hi)]
     for mod, lo, hi in entered[:SHOWN]:
         rep.fail('main: %s free space %#x-%#x is entered by code the tasks reach' % (mod, base + lo, base + hi))
@@ -531,7 +566,7 @@ def dsp_range(stock_img, dsp):
     return start, start + dsp.length
 
 
-def check_dsp_writes(stock_img, flat, dsp, start, rep):
+def check_dsp_writes(stock_img, flat, dsp, start, rep, out_img=None):
     """The DSP program is data to MAIN, so nothing here is boot-critical code;
     what has to hold is that the code a mod placed in its erased run was
     erased, is away from the run's ends and is not pointed at by the program,
@@ -539,12 +574,26 @@ def check_dsp_writes(stock_img, flat, dsp, start, rep):
     code, and that the program does not point into it."""
     placed = [(mod, lo, hi) for mod, kind, lo, hi in flat if kind in ('dspfree', 'dspcave')]
     blob = bytes(stock_img[start:start + dsp.length])
+    out_blob = bytes((out_img if out_img is not None else stock_img)[start:start + dsp.length])
+    shi = isinstance(dsp, dsppatch.DspShiProfile)
     table = isinstance(dsp, dsppatch.DspTable)
     failed = False
+    if shi:
+        for err in dsppatch.verify_shi_boot(out_blob, dsp):
+            failed = True
+            rep.fail('dsp: %s' % err)
     for mod, lo, hi in placed:
         a = dsppatch.program_address(dsp, blob, lo - start)
-        b = a + hi - lo
-        if table and not (dsp.cave[0] <= a and b <= dsp.cave[1]):
+        b = a + ((hi - lo) // 3 if shi else hi - lo)
+        if shi:
+            if dsp.free is None or not (dsp.free[0] <= a and b <= dsp.free[1]):
+                why = 'not inside the free range %#x-%#x' % (dsp.free or (0, 0))
+            elif set(stock_img[lo:hi]) != {0}:
+                why = 'not zero-erased in stock'
+            else:
+                refs = dsppatch.program_references(dsp, blob, a, b)
+                why = 'the program points into it, at P:%04x' % refs[0] if refs else None
+        elif table and not (dsp.cave[0] <= a and b <= dsp.cave[1]):
             why = 'not inside the cave %#x-%#x' % dsp.cave[:2]
         elif table and not dsppatch.cave_is_stock(dsp, blob):
             why = 'in a cave that does not hold the code of the firmware it was found in'
@@ -560,9 +609,10 @@ def check_dsp_writes(stock_img, flat, dsp, start, rep):
             rep.fail('dsp: %s places code at %#x-%#x, but it is %s' % (mod, a, b, why))
     edits = sum(1 for _, kind, _, _ in flat if kind == 'dsp')
     if (edits or placed) and not failed:
-        rep.ok('dsp: %d words of the DSP program edited, %d bytes of code placed in its %s, which '
-               'nothing in the program points into' % (edits, sum(hi - lo for _, lo, hi in placed),
-                                                       'cave' if table else 'erased run'))
+        rep.ok('dsp: %d words of the DSP program edited, %d bytes of code placed in its %s%s'
+               % (edits, sum(hi - lo for _, lo, hi in placed),
+                  'SHI vector gap' if shi else 'cave' if table else 'erased run',
+                  ', boot check passed' if shi else ', which nothing in the program points into'))
 
 
 def check_main_image(stock_img, out_img, profile, spans, rep, dsp=None):
@@ -570,7 +620,7 @@ def check_main_image(stock_img, out_img, profile, spans, rep, dsp=None):
     span = dsp_range(stock_img, dsp)
     flat = check_writes('main', stock_img, out_img, profile, spans, rep, dsp=span)
     if span:
-        check_dsp_writes(stock_img, flat, dsp, span[0], rep)
+        check_dsp_writes(stock_img, flat, dsp, span[0], rep, out_img=out_img)
     cave = None
     if profile.cave:
         try:
@@ -579,15 +629,18 @@ def check_main_image(stock_img, out_img, profile, spans, rep, dsp=None):
             pass
     if spans is None:
         summarize_writes('main', flat, base, rep)
-    closure = bootcrit.closure(stock_img, base)
-    if 'UpDtae_TASK' not in closure.roots:
+    if profile.byteorder == '<':
+        closure = bootcrit.closure(stock_img, base)
+    else:
+        closure = bootcrit.closure(stock_img, base, byteorder=profile.byteorder)
+    if not any(t in closure.roots for t in ('UpDtae_TASK', 'FlashTask')):
         if spans is not None:
             rep.fail('main: the update task is not in the image, so the boot-critical set cannot be built')
             return
         if any(kind != 'free' for _, kind, _, _ in flat):
             rep.unproven('main: no update task found in this image, so a write to existing code cannot be placed '
                          'inside or outside the boot-critical set')
-        check_free_unreached(stock_img, flat, base, rep, cave)
+        check_free_unreached(stock_img, flat, base, rep, cave, byteorder=profile.byteorder)
         rep.not_checked.append('the boot-critical set: this image has no task of the names it is built from')
         return
     rep.ok('main: boot-critical set built from %s: %d routines, %d bytes, %d ranges'
@@ -602,7 +655,7 @@ def check_main_image(stock_img, out_img, profile, spans, rep, dsp=None):
         rep.fail('main: %d more overlaps' % (len(bad) - SHOWN))
     if not bad:
         rep.ok('main: %d declared writes, none in boot-critical code' % len(flat))
-    check_free_unreached(stock_img, flat, base, rep, cave)
+    check_free_unreached(stock_img, flat, base, rep, cave, byteorder=profile.byteorder)
     rep.not_checked.append('%d indirect calls and jumps in the walked code are not followed, so the boot-critical set '
                            'is a lower bound' % closure.unresolved)
     missing = [n for n in bootcrit.TASK_ROOTS if n not in closure.roots]
@@ -643,8 +696,9 @@ def default_main_profile(model):
     """The profile of a MAIN image nobody wrote patches for: where it is
     loaded, and nothing about free space, so only erased bytes that nothing
     points into and no task reaches count as free."""
+    byteorder = '>' if modelfw.cdj_model.load(model).main_is_eb else '<'
     return sigpatch.ImageProfile(flash_base=modelfw.main_base(model), loadtab_off=0, loadtab_n=0,
-                                 ram_base=None, ram_end=None, byteorder='<')
+                                 ram_base=None, ram_end=None, byteorder=byteorder)
 
 
 def summarize_writes(target, flat, base, rep):
@@ -789,8 +843,11 @@ def verify(stock_data, out_data, model, targets=None, spans=None, profiles=None)
     for target, (stock_img, out_img) in images.items():
         profile = profiles.get(target)
         if spans.get(target) is None:
-            label = stock.sections[fw.sections[target] - 1][:LABEL_SIZE].decode('latin1')
-            match_known_mods(target, stock_img, out_img, model, label_version(label), rep)
+            sec = stock.sections[fw.sections[target] - 1]
+            lbl = (sec[c850_repack.LABEL_OFF:c850_repack.PACKED_OFF]
+                   if fw.container == 'c850' else sec[:LABEL_SIZE]).decode('latin1')
+            m = re.search(r'(\d+\.\d+)', lbl)
+            match_known_mods(target, stock_img, out_img, model, label_version(lbl) or (m.group(1) if m else None), rep)
         if target == 'main':
             profile = profile or default_main_profile(model)
             check_main_image(stock_img, out_img, profile, spans.get('main'), rep, modelfw.dsp_profile(model))
@@ -822,6 +879,11 @@ def identify(data):
     """(player id, section role, version) from the section labels of a file, or
     None. The MAIN label names the player; the CDJ-2000 and CDJ-900 files hold
     one section each, so whichever of the four it is names it."""
+    if (len(data) >= c850_repack.PACKED_OFF and
+            data[c850_repack.LABEL_OFF:c850_repack.LABEL_OFF + 12] == b'CDJ-850 MAIN'):
+        lbl = data[c850_repack.LABEL_OFF:c850_repack.PACKED_OFF].decode('latin1', errors='replace')
+        m = re.search(r'(\d+\.\d+)', lbl)
+        return 'cdj850', 'MAIN', (m.group(1) if m else None)
     sizes, pos = modelfw.parse_manifest(data)
     labels, at = [], pos
     for size in sizes or [len(data)]:
@@ -866,6 +928,9 @@ def check_alone(data, model, rep):
     rep.ok('section table: %d sections, %d bytes of header, %d after the last section'
            % (len(upd.sections), upd.header, len(upd.trailer)))
     for i, section in enumerate(upd.sections):
+        if fw.container == 'c850':
+            check_c850_section(i, None, section, model, rep)
+            continue
         name = 'section %d (%s)' % (i + 1, section[:LABEL_SIZE].decode('latin1').rstrip())
         kind = section_kind(section)
         if i == fw.sections['main'] - 1:

@@ -11,10 +11,14 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
+#include "vfd_legends.h"
+#include "vfd_pitch.h"
+#include "vfd_playing.h"
+#include "vfd_time.h"
 
 #define FL_WIDTH 1280
 #define FL_HEIGHT 480
-#define FL_COLS 100
+#define FL_COLS CDJ850_OVERVIEW_COLUMNS
 #define FL_ROWS 27
 #define FL_MATRIX_X 174
 #define FL_MATRIX_Y 164
@@ -31,24 +35,24 @@
 #define FL_OFF 0xff0a121bu
 #define FL_BG 0xff060b10u
 
-/* Explicit data for future protocol mapping. These fields are only populated
- * by offline fixtures until the corresponding panel commands are decoded. */
-typedef struct FlPlaying {
-    bool artist_known;
-    char artist[256];
-    bool waveform_known;
-    uint8_t waveform[FL_COLS]; /* overview heights; renderer clamps to 5 */
-    bool strips_known;
-    uint8_t memory[FL_COLS], position[FL_COLS], cue[FL_COLS];
-    bool memory_lamp, cue_lamp;
-} FlPlaying;
-
 typedef struct FlState {
     char rows[3][256];
-    FlPlaying playing;
+    Cdj850Playing playing;
     uint8_t tags[3];
     uint8_t mode;
     bool has_text;
+    Cdj850Time time;
+    Cdj850Pitch pitch;
+    uint16_t bpm;
+    bool bpm_known;
+    bool master_tempo;
+    bool auto_cue;
+    bool info_lamp;
+    bool browse_lamp;
+    bool tag_list_lamp;
+    bool menu_lamp;
+    bool track_known;
+    uint8_t track_number;
     /* Synthetic all-on inspection fixture; never enabled by firmware bytes. */
     bool all_on;
 } FlState;
@@ -93,18 +97,18 @@ static const uint8_t fl_alphabet[][7] = {
  * hand-drawn in the same cell and remain provisional. */
 static const uint8_t fl_lowercase[26][7] = {
     {0,0,14,1,15,17,15}, {16,16,30,17,17,17,30},
-    {0,0,14,16,16,17,14}, {1,1,15,17,17,17,15},
+    {0,0,14,16,16,16,14}, {1,1,15,17,17,17,15},
     {0,0,14,17,31,16,14}, {6,9,8,28,8,8,8},
     {0,14,17,17,15,1,14}, {16,16,30,17,17,17,17},
     {4,0,12,4,4,4,14}, {2,0,6,2,2,18,12},
     {16,16,18,20,24,20,18}, {12,4,4,4,4,4,14},
     {0,0,26,21,21,21,21}, {0,0,30,17,17,17,17},
-    {0,0,14,17,17,17,14}, {0,30,17,17,30,16,16},
+    {0,0,14,17,17,17,14}, {0,0,30,17,30,16,16},
     {0,15,17,17,15,1,1}, {0,0,22,25,16,16,16},
-    {0,0,15,16,14,1,30}, {8,8,28,8,8,9,6},
+    {0,0,14,16,14,1,30}, {8,8,28,8,8,9,6},
     {0,0,17,17,17,19,13}, {0,0,17,17,17,10,4},
     {0,0,17,17,21,21,10}, {0,0,17,10,4,10,17},
-    {0,17,17,17,15,1,14}, {0,0,31,2,4,8,31},
+    {0,0,17,17,15,1,14}, {0,0,31,2,4,8,31},
 };
 
 static uint8_t fl_glyph(unsigned char ch, int row)
@@ -212,9 +216,65 @@ static void fl_stroke(FlCanvas *c, int x0, int y0, int x1, int y1,
     }
 }
 
+/* Static legends have individual glass letterforms, not a shared stick
+ * alphabet. The masks contain only source-photo letter coverage. Preserve
+ * their aspect ratio inside the requested legend rectangle. */
+static bool fl_label_mask(FlCanvas *c, int x, int y, const char *text,
+                          int width, int height, uint32_t color)
+{
+    const FlLegendMask *mask = NULL;
+    for (unsigned i = 0; i < sizeof(fl_legend_masks)/sizeof(fl_legend_masks[0]); i++) {
+        if (!strcmp(text, fl_legend_masks[i].text)) {
+            mask = &fl_legend_masks[i];
+            break;
+        }
+    }
+    if (!mask) return false;
+    if (width <= 0 || height <= 0) return true;
+    uint8_t coverage[40][160] = {{0}};
+    for (unsigned i = 0; i < mask->count; i++) {
+        const uint8_t *run = mask->runs + i*4;
+        memset(&coverage[run[0]][run[1]], run[3], run[2]);
+    }
+    int dw = width, dh = (width * mask->height + mask->width/2) / mask->width;
+    if (dh > height) {
+        dh = height;
+        dw = (height * mask->width + mask->height/2) / mask->height;
+    }
+    if (!dw || !dh) return true;
+    x += (width-dw)/2; y += (height-dh)/2;
+    for (int py = 0; py < dh; py++) {
+        if (y+py < 0 || y+py >= c->height) continue;
+        int sy = dh > 1 ? py * (mask->height-1) * 256 / (dh-1) : 0;
+        int iy = sy/256, fy = sy%256;
+        int iy1 = iy+1 < mask->height ? iy+1 : iy;
+        for (int px = 0; px < dw; px++) {
+            if (x+px < 0 || x+px >= c->width) continue;
+            int sx = dw > 1 ? px * (mask->width-1) * 256 / (dw-1) : 0;
+            int ix = sx/256, fx = sx%256;
+            int ix1 = ix+1 < mask->width ? ix+1 : ix;
+            int alpha = (coverage[iy][ix]*(256-fx)*(256-fy) +
+                         coverage[iy][ix1]*fx*(256-fy) +
+                         coverage[iy1][ix]*(256-fx)*fy +
+                         coverage[iy1][ix1]*fx*fy + 32768) / 65536;
+            if (!alpha) continue;
+            uint32_t base, result = 0xff000000u;
+            memcpy(&base, c->pixels+(y+py)*c->stride+(x+px)*4, 4);
+            for (int shift = 0; shift <= 16; shift += 8) {
+                unsigned v = (((base >> shift)&255)*(255-alpha) +
+                              ((color >> shift)&255)*alpha + 127) / 255;
+                result |= v << shift;
+            }
+            fl_rect(c, x+px, y+py, 1, 1, result);
+        }
+    }
+    return true;
+}
+
 static void fl_label_fit(FlCanvas *c, int x, int y, const char *text,
                          int width, int height, uint32_t color)
 {
+    if (fl_label_mask(c, x, y, text, width, height, color)) return;
     int len = (int)strlen(text);
     if (!len) return;
     int radius = height >= 10 ? 1 : 0;
@@ -239,7 +299,8 @@ static void fl_label_fit(FlCanvas *c, int x, int y, const char *text,
 static void fl_label_xy(FlCanvas *c, int x, int y, const char *text,
                         int sx, int sy, uint32_t color)
 {
-    fl_label_fit(c, x, y, text, (int)strlen(text) * 6 * sx, 7 * sy, color);
+    int height = !strcmp(text, "REMAIN") ? 24 : 7 * sy;
+    fl_label_fit(c, x, y, text, (int)strlen(text) * 6 * sx, height, color);
 }
 
 static void fl_box(FlCanvas *c, int x, int y, int w, int h,
@@ -256,12 +317,16 @@ static void fl_box(FlCanvas *c, int x, int y, int w, int h,
         fl_rect(c, x + w - 4 + i, y + h - 1 - i, 2, 1, color);
     }
     if (!strcmp(label, "TAG LIST")) {
-        fl_label_xy(c, x + (w - 34) / 2, y + 7, "TAG", 2, 3, color);
-        fl_label_xy(c, x + (w - 46) / 2, y + 35, "LIST", 2, 3, color);
+        fl_label_fit(c, x + (w - 48) / 2, y + 7, "TAG", 48, 23, color);
+        fl_label_fit(c, x + (w - 52) / 2, y + 35, "LIST", 52, 23, color);
     } else {
         int height = h >= 40 ? 28 : 21;
-        fl_label_fit(c, x + 8, y + (h - height) / 2, label,
-                     w - 12, height, color);
+        int width = w - 12;
+        if (!strcmp(label, "INFO")) { width = 56; height = 24; }
+        if (!strcmp(label, "MT")) { width = 74; height = 27; }
+        if (!strcmp(label, "A.CUE")) { width = 126; height = 24; }
+        fl_label_fit(c, x + (w - width) / 2, y + (h - height) / 2,
+                     label, width, height, color);
     }
 }
 
@@ -488,7 +553,7 @@ static int fl_glyph_left(unsigned char ch)
 static int fl_glyph_width(unsigned char ch)
 {
     switch (ch) {
-    case '[': case ']': return 4;
+    case '[': case ']': case 'c': return 4;
     case 'I': case 'i': case 'l': return 3;
     case ' ': return 2;
     case '.': case ':': return 1;
@@ -521,41 +586,7 @@ static void fl_matrix_text(uint8_t dots[FL_ROWS][FL_COLS], int x, int y,
 }
 
 /* Loaded-track layout: inverted title/note band, artist line and a short
- * bottom-aligned overview. Unmapped data stays absent, rather than borrowing
- * browser rows as metadata or synthesizing a waveform. */
-static void fl_playing_text(uint8_t dots[FL_ROWS][FL_COLS], int x, int y,
-                            const char *text, bool inverse)
-{
-    for (; *text; text++) {
-        unsigned char ch = (unsigned char)*text;
-        int width = fl_glyph_width(ch), left = fl_glyph_left(ch);
-        if (x + width > FL_COLS) break;
-        for (int r = 0; r < 8 && y+r < FL_ROWS; r++) {
-            uint8_t bits = r < 7 ? fl_glyph(ch, r) : 0;
-            /* Descenders share the normal baseline and extend one dot below. */
-            if (ch == 'p') {
-                static const uint8_t p[] = {0,0,30,17,17,30,16,16};
-                bits = p[r];
-            } else if (ch == 'y') {
-                static const uint8_t y[] = {0,0,17,17,17,15,1,14};
-                bits = y[r];
-            } else if (ch == 'g') {
-                static const uint8_t g[] = {0,0,14,17,17,15,1,14};
-                bits = g[r];
-            } else if (ch == 'q') {
-                static const uint8_t q[] = {0,0,14,17,17,15,1,1};
-                bits = q[r];
-            } else if (ch == 'j') {
-                static const uint8_t j[] = {2,0,6,2,2,2,18,12};
-                bits = j[r];
-            }
-            for (int col = 0; col < width; col++)
-                dots[y+r][x+col] = !!(bits & (16 >> (left+col))) ^ inverse;
-        }
-        x += width + 1;
-    }
-}
-
+ * bottom-aligned overview. The artist and waveform start blank. */
 static void fl_playing_matrix(uint8_t dots[FL_ROWS][FL_COLS], const FlState *s)
 {
     static const uint8_t note[] = {12,10,10,10,24,56,48};
@@ -565,18 +596,18 @@ static void fl_playing_matrix(uint8_t dots[FL_ROWS][FL_COLS], const FlState *s)
         for (int y = 0; y < 7; y++)
             for (int x = 0; x < 7; x++)
                 dots[y+1][x] = !(note[y] & (64 >> x));
-        fl_playing_text(dots, 8, 1, s->rows[0], true);
+        fl_matrix_text(dots, 8, 1, s->rows[0], true);
     }
     if (s->playing.artist_known) {
         for (int y = 0; y < 6; y++)
             for (int x = 0; x < 5; x++)
                 dots[y+12][x+1] = !!(person[y] & (16 >> x));
-        fl_playing_text(dots, 8, 11, s->playing.artist, false);
+        fl_matrix_text(dots, 8, 11, s->playing.artist, false);
     }
     if (s->playing.waveform_known) {
         for (int x = 0; x < FL_COLS; x++) {
             unsigned height = s->playing.waveform[x];
-            if (height > 5) height = 5;
+            if (height > CDJ850_OVERVIEW_ROWS) height = CDJ850_OVERVIEW_ROWS;
             for (unsigned y = 0; y < height; y++) dots[FL_ROWS-1-y][x] = 1;
         }
     }
@@ -588,31 +619,58 @@ static void fl_render(FlCanvas *c, const FlState *s)
     fl_rect(c, 0, 0, c->width, c->height, FL_BG);
     /* Numeric positions are calibrated against the all-on reference.
      * Unknown fixed fields stay unlit until their protocol is mapped. */
-    uint32_t blue = s->all_on ? FL_BLUE : FL_OFF;
-    fl_digit(c, 35, 40, 44, 86, s->all_on ? 8 : -1);
-    fl_digit(c, 101, 40, 44, 86, s->all_on ? 8 : -1);
-    fl_label_xy(c, 157, 40, "REMAIN", 4, 3, blue);
-    fl_box(c, 157, 77, 142, 49, "A.CUE", s->all_on ? FL_RED : FL_OFF);
+    bool track_known = s->track_known && s->track_number <= 99;
+    fl_digit(c, 35, 40, 44, 86,
+             s->all_on ? 8 : track_known ? s->track_number / 10 : -1);
+    fl_digit(c, 101, 40, 44, 86,
+             s->all_on ? 8 : track_known ? s->track_number % 10 : -1);
+    bool remain = s->time.remain_known && s->time.remain;
+    fl_label_xy(c, 157, 40, "REMAIN", 4, 3, s->all_on || remain ? FL_BLUE : FL_OFF);
+    fl_box(c, 157, 77, 142, 49, "A.CUE",
+           s->all_on || s->auto_cue ? FL_RED : FL_OFF);
     const int time_x[] = {316, 381, 479, 542, 632, 695};
-    for (int i = 0; i < 6; i++) {
-        fl_digit(c, time_x[i], 40, 44, 86, s->all_on ? 8 : -1);
-    }
-    fl_rect(c, 449, 65, 6, 6, blue);
-    fl_rect(c, 449, 95, 6, 6, blue);
-    fl_label_xy(c, 430, 110, "M", 3, 2, blue);
-    fl_label_xy(c, 590, 110, "S", 3, 2, blue);
-    fl_label_xy(c, 742, 110, "F", 3, 2, blue);
-    const FlPitch all_pitch = {{8,8,8}, true, true, true, 3};
-    fl_pitch(c, s->all_on ? &all_pitch : NULL);
-    fl_box(c, 1050, 35, 150, 86, "", FL_BLUE);
+    const int time_parts[] = {s->time.minutes, s->time.seconds, s->time.frames};
+    bool time_known = s->time.known && cdj850_time_in_range(&s->time);
     for (int i = 0; i < 3; i++) {
-        fl_digit(c, 1061 + i * 46, 47, 36, 64, s->all_on ? 8 : -1);
+        fl_digit(c, time_x[2 * i], 40, 44, 86,
+                 s->all_on ? 8 : time_known ? time_parts[i] / 10 : -1);
+        fl_digit(c, time_x[2 * i + 1], 40, 44, 86,
+                 s->all_on ? 8 : time_known ? time_parts[i] % 10 : -1);
+    }
+    uint32_t time_labels = s->all_on || time_known ? FL_BLUE : FL_OFF;
+    fl_rect(c, 449, 65, 6, 6, time_labels);
+    fl_rect(c, 449, 95, 6, 6, time_labels);
+    fl_label_xy(c, 430, 110, "M", 3, 2, time_labels);
+    fl_label_xy(c, 590, 110, "S", 3, 2, time_labels);
+    fl_label_xy(c, 742, 110, "F", 3, 2, time_labels);
+    const FlPitch all_pitch = {{8,8,8}, true, true, true, 3};
+    const Cdj850Pitch *pitch = &s->pitch;
+    unsigned magnitude = pitch->value < 0 ? -pitch->value : pitch->value;
+    bool wide = pitch->decimals == 1;
+    FlPitch readout = {
+        .digits = {wide && magnitude < 100 ? -1 : (int)(magnitude / 100 % 10),
+                   magnitude / 10 % 10, magnitude % 10},
+        .leading_one = magnitude >= 1000,
+        .plus = pitch->value > 0,
+        .minus = pitch->value < 0,
+        .decimals = wide ? 2 : 1,
+    };
+
+    fl_pitch(c, s->all_on ? &all_pitch : pitch->decimals ? &readout : NULL);
+    fl_box(c, 1050, 35, 150, 86, "", FL_BLUE);
+    bool bpm_known = s->bpm_known && s->bpm > 0 && s->bpm <= 999;
+    const int bpm_place[] = {100, 10, 1};
+    for (int i = 0; i < 3; i++) {
+        int digit = bpm_known && s->bpm >= bpm_place[i] ?
+                    (s->bpm / bpm_place[i]) % 10 : -1;
+
+        fl_digit(c, 1061 + i * 46, 47, 36, 64, s->all_on ? 8 : digit);
     }
     fl_label_xy(c, 1120, 134, "BPM", 4, 3, FL_BLUE);
     const char *left[] = {"BROWSE", "TAG LIST", "INFO"};
+    const bool left_on[] = {s->browse_lamp, s->tag_list_lamp, s->info_lamp};
     for (int i = 0; i < 3; i++) {
-        bool on = s->all_on || (s->has_text &&
-                   (s->mode == 0x0a ? i == 2 : i == 0));
+        bool on = s->all_on || left_on[i];
         fl_box(c, 35, 164 + i * 75, 108, 66, left[i], on ? FL_BLUE : FL_OFF);
     }
     /* MEMORY and CUE have opposite angled right edges. */
@@ -627,13 +685,20 @@ static void fl_render(FlCanvas *c, const FlState *s)
         for (int dy = 0; dy < 30; dy++) {
             fl_rect(c, 135 + (i ? dy : 29 - dy) / 2, y + dy, 2, 1, color);
         }
-        fl_label_xy(c, i ? 66 : 40, y + 5, i ? "CUE" : "MEMORY", 2, 3, color);
+        fl_label_fit(c, i ? 60 : 40, y + 5, i ? "CUE" : "MEMORY",
+                     i ? 54 : 78, 21, color);
     }
-    fl_box(c, 1110, 164, 98, 44, "MT", s->all_on ? FL_RED : FL_OFF);
-    fl_label_xy(c, 1110, 227, "WIDE", 4, 5, s->all_on ? FL_RED : FL_OFF);
-    fl_pitch_range(c, 16, s->all_on);
-    fl_pitch_range(c, 10, s->all_on);
-    fl_pitch_range(c, 6, s->all_on);
+    fl_box(c, 1110, 164, 98, 44, "MT",
+           s->all_on || s->master_tempo ? FL_RED : FL_OFF);
+    fl_label_xy(c, 1110, 227, "WIDE", 4, 5,
+                s->all_on || pitch->range == CDJ850_PITCH_WIDE ? FL_RED : FL_OFF);
+    fl_pitch_range(c, 16, s->all_on || pitch->range == 16);
+    fl_pitch_range(c, 10, s->all_on || pitch->range == 10);
+    fl_pitch_range(c, 6, s->all_on || pitch->range == 6);
+    /* MENU is a panel button lamp. Put its virtual indicator below the glass. */
+    if (s->menu_lamp) {
+        fl_box(c, 1110, 452, 98, 26, "MENU", FL_BLUE);
+    }
     if (s->all_on) {
         memset(dots, 1, sizeof(dots));
     } else if (s->mode == 0x0a) {
@@ -667,6 +732,17 @@ static void fl_render(FlCanvas *c, const FlState *s)
         }
     }
 
+    /* A small halo joins the apertures optically without changing the font
+     * mask. Inverse and ordinary text share the same luminous glass model. */
+    for (int y = 0; y < FL_ROWS; y++) {
+        for (int x = 0; x < FL_COLS; x++) {
+            if (dots[y][x]) {
+                fl_rect(c, FL_MATRIX_X + x * FL_PITCH_X - 1,
+                        FL_MATRIX_Y + y * FL_PITCH_Y - 1,
+                        FL_DOT_W + 2, FL_DOT_H + 2, 0xff234251u);
+            }
+        }
+    }
     for (int y = 0; y < FL_ROWS; y++) {
         for (int x = 0; x < FL_COLS; x++) {
             int px = FL_MATRIX_X + x * FL_PITCH_X;

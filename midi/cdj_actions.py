@@ -150,13 +150,25 @@ class Platter:
 
     POS = 0x08
     PERIOD = 0x0A
+    BITS_OFF = 0x0F
+    TOUCH_OFF = 0x0F
+    TOUCH_MASK = 0x20
     NOMINAL_PERIOD = 27778 / 100
     WINDOW_S = 0.08
     STOP_S = 0.1
 
-    def __init__(self, nominal_tps=160.0, pulses_per_tick=48):
+    def __init__(self, nominal_tps=160.0, pulses_per_tick=48,
+                 pos_off=POS, period_off=PERIOD, bits_off=BITS_OFF,
+                 touch_off=TOUCH_OFF, touch_mask=TOUCH_MASK,
+                 nominal_period=NOMINAL_PERIOD):
         self.nominal_tps = nominal_tps
         self.pulses_per_tick = pulses_per_tick
+        self.pos_off = int(pos_off, 0) if isinstance(pos_off, str) else pos_off
+        self.period_off = int(period_off, 0) if isinstance(period_off, str) else period_off
+        self.bits_off = int(bits_off, 0) if isinstance(bits_off, str) else bits_off
+        self.touch_off = int(touch_off, 0) if isinstance(touch_off, str) else touch_off
+        self.touch_mask = int(touch_mask, 0) if isinstance(touch_mask, str) else touch_mask
+        self.nominal_period = nominal_period
         self.count = 0
         self.ticks = []            # (time, delta) inside WINDOW_S
         self.moving = False
@@ -173,19 +185,20 @@ class Platter:
             if not self.moving:
                 return []
             self.moving = False
-            return [f"0x{self.PERIOD:02x}:0:0:lvl", f"0x{self.PERIOD + 1:02x}:0:0:lvl"]
+            return [f"0x{self.period_off:02x}:0:0:lvl",
+                    f"0x{self.period_off + 1:02x}:0:0:lvl"]
         self.moving = True
         net = sum(d for _, d in self.ticks)
         rate = sum(abs(d) for _, d in self.ticks) / self.WINDOW_S
-        period = int(round(self.NOMINAL_PERIOD * self.nominal_tps / max(rate, 1e-3)))
+        period = int(round(self.nominal_period * self.nominal_tps / max(rate, 1e-3)))
         period = max(1, min(0xFFFE, period))
         self.last_rate, self.last_period = rate, period
         bits = JogAction.MOV | (JogAction.ROUND_FWD if net >= 0 else 0)
-        return [f"0x{self.POS:02x}:{self.count >> 8}:0:lvl",
-                f"0x{self.POS + 1:02x}:{self.count & 0xFF}:0:lvl",
-                f"0x{self.PERIOD:02x}:{period >> 8}:0:lvl",
-                f"0x{self.PERIOD + 1:02x}:{period & 0xFF}:0:lvl",
-                f"0x{JogAction.OFF:02x}:{bits}:{dur_ms}:or"]
+        return [f"0x{self.pos_off:02x}:{self.count >> 8}:0:lvl",
+                f"0x{self.pos_off + 1:02x}:{self.count & 0xFF}:0:lvl",
+                f"0x{self.period_off:02x}:{period >> 8}:0:lvl",
+                f"0x{self.period_off + 1:02x}:{period & 0xFF}:0:lvl",
+                f"0x{self.bits_off:02x}:{bits}:{dur_ms}:or"]
 
 
 class LevelAction(Action):

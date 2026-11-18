@@ -99,6 +99,22 @@ int main(void) {
     s.mode = 1; /* stale playback fields cannot leak into browser mode */
     draw(&s);
     assert(pixels[FL_RED_Y][FL_MATRIX_X] == FL_OFF);
+    s.mode = 0x0a;
+    draw(&s);
+    assert(pixels[314][89] == FL_OFF); /* Loaded text alone lights no INFO lamp. */
+    s.mode = 0x07;
+    s.info_lamp = true;
+    draw(&s);
+    assert(pixels[314][89] == FL_BLUE); /* INFO can stay on over a dialog. */
+    assert(pixels[164][89] == FL_OFF);
+    s.mode = 1;
+    s.info_lamp = false;
+    draw(&s);
+    assert(pixels[164][89] == FL_OFF); /* Browser text alone leaves BROWSE dark. */
+    s.browse_lamp = true;
+    s.mode = 0x07;
+    draw(&s);
+    assert(pixels[164][89] == FL_BLUE); /* BROWSE can stay on over a dialog. */
     /* Pitch uses independent physical decimal apertures and a split one. */
     FlPitch zero = {{0,0,0}, false, false, false, 1};
     fl_pitch(&((FlCanvas){(uint8_t *)pixels, FL_WIDTH, FL_HEIGHT, FL_WIDTH*4}), &zero);
@@ -113,6 +129,24 @@ int main(void) {
     assert(pixels[119][960] == FL_BLUE);
     assert(pixels[73][813] == FL_BLUE); /* upper positive-sign stroke */
     assert(pixels[85][837] != FL_BLUE); /* seam in leading one */
+    /* Traced legend resources must remain bounded and retain coverage
+     * detail instead of silently falling back to the old stick alphabet. */
+    bool remain_found = false, info_found = false;
+    for (unsigned i = 0; i < sizeof(fl_legend_masks)/sizeof(fl_legend_masks[0]); i++) {
+        const FlLegendMask *mask = &fl_legend_masks[i];
+        assert(mask->width > 0 && mask->width <= 160);
+        assert(mask->height > 0 && mask->height <= 40);
+        assert(mask->count > 0);
+        for (unsigned r = 0; r < mask->count; r++) {
+            const uint8_t *span = mask->runs + 4*r;
+            assert(span[0] < mask->height);
+            assert(span[1] + span[2] <= mask->width);
+            assert(span[2] > 0 && span[3] > 0);
+        }
+        remain_found |= !strcmp(mask->text, "REMAIN");
+        info_found |= !strcmp(mask->text, "INFO");
+    }
+    assert(remain_found && info_found);
     /* Respect clipped surfaces and padded strides, even with long text. */
     struct { uint8_t before[32], data[12 * 16], after[32]; } guard;
     memset(&guard, 0xa5, sizeof(guard));
@@ -146,11 +180,12 @@ def test_display_rasterizer(tmp_path):
     assert "render checks passed" in result.stdout
 
 
-def test_browser_font_against_photo_measurements(tmp_path):
+@pytest.mark.parametrize("fixture_name", ["cdj850-browser-font.json", "cdj850-playing-font.json"])
+def test_matrix_font_against_photo_measurements(tmp_path, fixture_name):
     """Compare logical dots with independently transcribed photo glyph masks."""
     import json
 
-    with open(path("tests", "fixtures", "cdj850-browser-font.json")) as reference:
+    with open(path("tests", "fixtures", fixture_name)) as reference:
         fixture = json.load(reference)
     cc = shutil.which("cc")
     if not cc:
@@ -158,11 +193,12 @@ def test_browser_font_against_photo_measurements(tmp_path):
     # Generate assertions from measured masks, including each character's exact
     # location. Selected rows must be exact inverses and retain all padding.
     checks = []
-    for row in fixture["browser_rows"]:
+    start_column = fixture["geometry"]["text_column"]
+    for row in fixture["text_rows"]:
         text = row["text"]
         for inverse in (0, 1):
             checks.append(f"memset(dots, {inverse}, sizeof(dots));")
-            checks.append(f"fl_matrix_text(dots, 7, 1, {json.dumps(text)}, {inverse});")
+            checks.append(f"fl_matrix_text(dots, {start_column}, 1, {json.dumps(text)}, {inverse});")
             expected = [[inverse] * 100 for _ in range(9)]
             for ch, start in zip(text, row["glyph_columns"]):
                 glyph = fixture["glyphs"][ch]
@@ -173,7 +209,7 @@ def test_browser_font_against_photo_measurements(tmp_path):
             for y, dots_row in enumerate(expected):
                 for x, bit in enumerate(dots_row):
                     checks.append(f"assert(dots[{y}][{x}] == {bit});")
-            checks.append(f"assert(fl_text_width({json.dumps(text)}) == {row['last_column'] - 6});")
+            checks.append(f"assert(fl_text_width({json.dumps(text)}) == {row['last_column'] - start_column + 1});")
     source = tmp_path / "browser.c"
     source.write_text('#include <assert.h>\n#include "vfd_render.h"\n'
                       'int main(void) { uint8_t dots[FL_ROWS][FL_COLS];\n' +

@@ -122,8 +122,8 @@ class Jog:
         if on == self.touched:
             return
         self.touched = on
-        key = A.ACTIONS["jog_touch"]
-        self.send(key.hold_datagram() if on else key.release_datagram())
+        op = "hold" if on else "rel"
+        self.send(f"0x{self.platter.touch_off:02x}:{self.platter.touch_mask}:0:{op}")
 
     def turn(self, degrees, now):
         """The hand moved the platter by `degrees` since its last move."""
@@ -225,9 +225,10 @@ class WordSlider:
     DETENT = 0.015
     CENTRE = 0x8000
 
-    def __init__(self, send, off):
+    def __init__(self, send, off, invert=False):
         self.send = send
         self.off = off
+        self.invert = invert
         self.pos = 0.5
         self.sent = None
 
@@ -236,7 +237,8 @@ class WordSlider:
         if abs(pos - 0.5) < self.DETENT:
             pos = 0.5
         self.pos = pos
-        word = round(pos * 0xFFFF)
+        eff = 1.0 - pos if self.invert else pos
+        word = round(eff * 0xFFFF)
         if word == self.sent:
             return
         if self.sent is None:

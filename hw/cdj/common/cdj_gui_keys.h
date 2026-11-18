@@ -18,6 +18,18 @@ typedef struct {
     bool confirmed;
 } CdjGuiKey;
 
+typedef struct {
+    unsigned rot_off;
+    unsigned jog_pos_off;
+    unsigned jog_per_off;
+    unsigned jog_bits_off;
+    unsigned nudge_period;
+    unsigned nudge_hard;
+} CdjGuiLayout;
+
+/* Override the default NXS2 rotary / jog report offsets and nudge periods. */
+void cdj_gui_keys_set_layout(const CdjGuiLayout *layout);
+
 /* Register the keyboard handler when CDJ_PANEL_KEYSOCK is set. */
 void cdj_gui_keys_init(const CdjGuiKey *keys, size_t count, const char *board);
 

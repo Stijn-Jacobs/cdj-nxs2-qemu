@@ -56,6 +56,7 @@ sys.path.insert(0, FIRMWARE)
 import dsppatch
 import modelfw
 import sigpatch
+import c850_repack
 import main_decode
 import main_encode
 
@@ -113,10 +114,20 @@ def patch(data, names, model=modelfw.DEFAULT_MODEL, report=None, spans=None):
 def patch_flash(flash, names, model=modelfw.DEFAULT_MODEL, report=None):
     """Patch the packed MAIN application directly inside a flat flash image
     (flash.bin's own bytes, not the unpacked one -kernel loads)."""
-    off = modelfw.load(model).main_off
+    fw = modelfw.load(model)
+    off = fw.main_off
     window_end = modelfw.update_window_end(model)
     if window_end is None:
         raise SystemExit('patch_main: the update window of %s is not known' % model)
+    if fw.container == 'c850':
+        image = c850_repack.unpack_main(flash)
+        patched = patch(image, names, model, report)
+        upd = c850_repack.build_upd(flash, patched, check_boot=True)
+        lo = c850_repack.LABEL_OFF
+        out = bytearray(flash)
+        out[lo:window_end] = b'\xff' * (window_end - lo)
+        out[lo:len(upd)] = upd[lo:]
+        return bytes(out)
     _, image = main_decode.decode_image(flash, off)
     patched = patch(image, names, model, report)
     packed = main_encode.encode_image(patched)
@@ -133,9 +144,10 @@ def patch_flash(flash, names, model=modelfw.DEFAULT_MODEL, report=None):
 def assemble():
     with tempfile.TemporaryDirectory() as tmp:
         for model, patches in PATCH_SETS.items():
+            endian = '-big' if patches.profile.byteorder == '>' else '-little'
             for name in patches.mods:
                 obj = os.path.join(tmp, name + '.o')
-                subprocess.run(['sh4-linux-gnu-as', '--isa=sh4', '-little',
+                subprocess.run(['sh4-linux-gnu-as', '--isa=sh4', endian,
                                 '-I', os.path.dirname(source(name, model)),
                                 '-o', obj, source(name, model)], check=True)
                 subprocess.run(['sh4-linux-gnu-objcopy', '-O', 'binary',
