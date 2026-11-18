@@ -159,8 +159,8 @@ Firmware: CDJ-2000NXS2 1.87, XDJ-1000MK2 1.45, XDJ-700 1.15, XDJ-1000 1.13, CDJ-
 8. The slipped playback is not checked yet.
 9. The CDJ-850 has no Ethernet port.
 10. The DSP output is correct (checked under `-icount` with `CDJ850_DSP_IPS=2048`). Real-time playback (`CDJ850_DSP_IPS=750`, ~66.2 MIPS) runs the DSP on a worker thread; the predecoded interpreter reaches ~95 MIPS on unthrottled CPUs (~53 MIPS at a 1.9 GHz thermal cap), while default `CDJ850_DSP_IPS=256` avoids host overload.
-11. The playing overview, artist line, cue/memory strips, and cue/memory lamps decode and render in SCIF1 replay (`test_cdj850_scif1_replay.py`). Live rekordbox export playback still needs automated coverage.
-12. Tempo pitch percentage and range (`±6`/`±10`/`±16`/`WIDE`) are verified live (`test_cdj850_usb.py`); BPM decoding and rendering are verified on SCIF1 captures in replay tests.
+11. The playing overview, artist line, cue/memory strips, and cue/memory lamps are verified both in SCIF1 replay (`test_cdj850_scif1_replay.py`) and live rekordbox export playback (`test_cdj850_usb.py`); scrolling cadence, panel-side blinks, and unobserved glyphs still need hardware/panel-CPU evidence.
+12. Tempo pitch percentage and range (`±6`/`±10`/`±16`/`WIDE`) and whole-BPM decoding/rendering are verified live against SCIF1 replay (`test_cdj850_usb.py`).
 13. MASTER TEMPO key toggle and lamp are tested live (`test_cdj850_usb.py`); audio throughput with MASTER TEMPO active is not measured yet.
 
 </details>
@@ -181,6 +181,7 @@ this project (`hw/cdj/boards/cdj850/dsp56300.c`).
 - Boot through the bootloader in flash, RTOS start, panel link and DSP upload;
   service USB updater tested against flash `RY/BY#` (`PC2`).
 - USB stick: mount, browse, move the cursor and load a track.
+- USB-B (`PC` mode): R8A66597 function controller switched via `PB10` (`USB_ABSEL`) mux (`CDJ_USBF_HOST`), enumerating PID `0x08e4:0x0157` with MIDI + HID reports and mode-switch round-trip (`test_cdj850_usbb.py`).
 - Transport and deck controls: PLAY/pause (VINYL brake & spin-up, CDJ pause loop),
   CUE, LOOP IN / OUT / RELOOP, MEMORY / CALL / DELETE, pitch fader (`±6`/`±10`/`±16`/`WIDE`),
   CDJ jog pitch bend, and VINYL top touch + scratch direction.
@@ -258,7 +259,7 @@ python3 mods/validate.py --model cdj850 --stock path/to/C850MAIN.UPD C850MAIN_MO
 **Tests:** `python3 -m pytest tests/test_cdj850_*.py`. The CDJ-850 suite covers
 unit/C-harness tests (`panel_peer`, `panel_link`, `vfd`, `vfd_render`, `scif1_replay`,
 `dsp56300`, `c850_repack`) alongside live QEMU `-icount` end-to-end tests (`usb`,
-`controls`, `snapshot`, `mods`). Tests that need `C850MAIN.UPD` or a built emulator
+`usbb`, `controls`, `snapshot`, `mods`). Tests that need `C850MAIN.UPD` or a built emulator
 skip without them.
 
 The bring-up log, with every address, decoded handler and environment knob, is
