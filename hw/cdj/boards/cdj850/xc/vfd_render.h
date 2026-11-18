@@ -11,6 +11,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
+#include "vfd_legends.h"
 
 #define FL_WIDTH 1280
 #define FL_HEIGHT 480
@@ -93,18 +94,18 @@ static const uint8_t fl_alphabet[][7] = {
  * hand-drawn in the same cell and remain provisional. */
 static const uint8_t fl_lowercase[26][7] = {
     {0,0,14,1,15,17,15}, {16,16,30,17,17,17,30},
-    {0,0,14,16,16,17,14}, {1,1,15,17,17,17,15},
+    {0,0,14,16,16,16,14}, {1,1,15,17,17,17,15},
     {0,0,14,17,31,16,14}, {6,9,8,28,8,8,8},
     {0,14,17,17,15,1,14}, {16,16,30,17,17,17,17},
     {4,0,12,4,4,4,14}, {2,0,6,2,2,18,12},
     {16,16,18,20,24,20,18}, {12,4,4,4,4,4,14},
     {0,0,26,21,21,21,21}, {0,0,30,17,17,17,17},
-    {0,0,14,17,17,17,14}, {0,30,17,17,30,16,16},
+    {0,0,14,17,17,17,14}, {0,0,30,17,30,16,16},
     {0,15,17,17,15,1,1}, {0,0,22,25,16,16,16},
-    {0,0,15,16,14,1,30}, {8,8,28,8,8,9,6},
+    {0,0,14,16,14,1,30}, {8,8,28,8,8,9,6},
     {0,0,17,17,17,19,13}, {0,0,17,17,17,10,4},
     {0,0,17,17,21,21,10}, {0,0,17,10,4,10,17},
-    {0,17,17,17,15,1,14}, {0,0,31,2,4,8,31},
+    {0,0,17,17,15,1,14}, {0,0,31,2,4,8,31},
 };
 
 static uint8_t fl_glyph(unsigned char ch, int row)
@@ -212,9 +213,65 @@ static void fl_stroke(FlCanvas *c, int x0, int y0, int x1, int y1,
     }
 }
 
+/* Static legends have individual glass letterforms, not a shared stick
+ * alphabet. The masks contain only source-photo letter coverage. Preserve
+ * their aspect ratio inside the requested legend rectangle. */
+static bool fl_label_mask(FlCanvas *c, int x, int y, const char *text,
+                          int width, int height, uint32_t color)
+{
+    const FlLegendMask *mask = NULL;
+    for (unsigned i = 0; i < sizeof(fl_legend_masks)/sizeof(fl_legend_masks[0]); i++) {
+        if (!strcmp(text, fl_legend_masks[i].text)) {
+            mask = &fl_legend_masks[i];
+            break;
+        }
+    }
+    if (!mask) return false;
+    if (width <= 0 || height <= 0) return true;
+    uint8_t coverage[40][160] = {{0}};
+    for (unsigned i = 0; i < mask->count; i++) {
+        const uint8_t *run = mask->runs + i*4;
+        memset(&coverage[run[0]][run[1]], run[3], run[2]);
+    }
+    int dw = width, dh = (width * mask->height + mask->width/2) / mask->width;
+    if (dh > height) {
+        dh = height;
+        dw = (height * mask->width + mask->height/2) / mask->height;
+    }
+    if (!dw || !dh) return true;
+    x += (width-dw)/2; y += (height-dh)/2;
+    for (int py = 0; py < dh; py++) {
+        if (y+py < 0 || y+py >= c->height) continue;
+        int sy = dh > 1 ? py * (mask->height-1) * 256 / (dh-1) : 0;
+        int iy = sy/256, fy = sy%256;
+        int iy1 = iy+1 < mask->height ? iy+1 : iy;
+        for (int px = 0; px < dw; px++) {
+            if (x+px < 0 || x+px >= c->width) continue;
+            int sx = dw > 1 ? px * (mask->width-1) * 256 / (dw-1) : 0;
+            int ix = sx/256, fx = sx%256;
+            int ix1 = ix+1 < mask->width ? ix+1 : ix;
+            int alpha = (coverage[iy][ix]*(256-fx)*(256-fy) +
+                         coverage[iy][ix1]*fx*(256-fy) +
+                         coverage[iy1][ix]*(256-fx)*fy +
+                         coverage[iy1][ix1]*fx*fy + 32768) / 65536;
+            if (!alpha) continue;
+            uint32_t base, result = 0xff000000u;
+            memcpy(&base, c->pixels+(y+py)*c->stride+(x+px)*4, 4);
+            for (int shift = 0; shift <= 16; shift += 8) {
+                unsigned v = (((base >> shift)&255)*(255-alpha) +
+                              ((color >> shift)&255)*alpha + 127) / 255;
+                result |= v << shift;
+            }
+            fl_rect(c, x+px, y+py, 1, 1, result);
+        }
+    }
+    return true;
+}
+
 static void fl_label_fit(FlCanvas *c, int x, int y, const char *text,
                          int width, int height, uint32_t color)
 {
+    if (fl_label_mask(c, x, y, text, width, height, color)) return;
     int len = (int)strlen(text);
     if (!len) return;
     int radius = height >= 10 ? 1 : 0;
@@ -239,7 +296,8 @@ static void fl_label_fit(FlCanvas *c, int x, int y, const char *text,
 static void fl_label_xy(FlCanvas *c, int x, int y, const char *text,
                         int sx, int sy, uint32_t color)
 {
-    fl_label_fit(c, x, y, text, (int)strlen(text) * 6 * sx, 7 * sy, color);
+    int height = !strcmp(text, "REMAIN") ? 24 : 7 * sy;
+    fl_label_fit(c, x, y, text, (int)strlen(text) * 6 * sx, height, color);
 }
 
 static void fl_box(FlCanvas *c, int x, int y, int w, int h,
@@ -256,12 +314,16 @@ static void fl_box(FlCanvas *c, int x, int y, int w, int h,
         fl_rect(c, x + w - 4 + i, y + h - 1 - i, 2, 1, color);
     }
     if (!strcmp(label, "TAG LIST")) {
-        fl_label_xy(c, x + (w - 34) / 2, y + 7, "TAG", 2, 3, color);
-        fl_label_xy(c, x + (w - 46) / 2, y + 35, "LIST", 2, 3, color);
+        fl_label_fit(c, x + (w - 48) / 2, y + 7, "TAG", 48, 23, color);
+        fl_label_fit(c, x + (w - 52) / 2, y + 35, "LIST", 52, 23, color);
     } else {
         int height = h >= 40 ? 28 : 21;
-        fl_label_fit(c, x + 8, y + (h - height) / 2, label,
-                     w - 12, height, color);
+        int width = w - 12;
+        if (!strcmp(label, "INFO")) { width = 56; height = 24; }
+        if (!strcmp(label, "MT")) { width = 74; height = 27; }
+        if (!strcmp(label, "A.CUE")) { width = 126; height = 24; }
+        fl_label_fit(c, x + (w - width) / 2, y + (h - height) / 2,
+                     label, width, height, color);
     }
 }
 
@@ -488,7 +550,7 @@ static int fl_glyph_left(unsigned char ch)
 static int fl_glyph_width(unsigned char ch)
 {
     switch (ch) {
-    case '[': case ']': return 4;
+    case '[': case ']': case 'c': return 4;
     case 'I': case 'i': case 'l': return 3;
     case ' ': return 2;
     case '.': case ':': return 1;
@@ -523,39 +585,6 @@ static void fl_matrix_text(uint8_t dots[FL_ROWS][FL_COLS], int x, int y,
 /* Loaded-track layout: inverted title/note band, artist line and a short
  * bottom-aligned overview. Unmapped data stays absent, rather than borrowing
  * browser rows as metadata or synthesizing a waveform. */
-static void fl_playing_text(uint8_t dots[FL_ROWS][FL_COLS], int x, int y,
-                            const char *text, bool inverse)
-{
-    for (; *text; text++) {
-        unsigned char ch = (unsigned char)*text;
-        int width = fl_glyph_width(ch), left = fl_glyph_left(ch);
-        if (x + width > FL_COLS) break;
-        for (int r = 0; r < 8 && y+r < FL_ROWS; r++) {
-            uint8_t bits = r < 7 ? fl_glyph(ch, r) : 0;
-            /* Descenders share the normal baseline and extend one dot below. */
-            if (ch == 'p') {
-                static const uint8_t p[] = {0,0,30,17,17,30,16,16};
-                bits = p[r];
-            } else if (ch == 'y') {
-                static const uint8_t y[] = {0,0,17,17,17,15,1,14};
-                bits = y[r];
-            } else if (ch == 'g') {
-                static const uint8_t g[] = {0,0,14,17,17,15,1,14};
-                bits = g[r];
-            } else if (ch == 'q') {
-                static const uint8_t q[] = {0,0,14,17,17,15,1,1};
-                bits = q[r];
-            } else if (ch == 'j') {
-                static const uint8_t j[] = {2,0,6,2,2,2,18,12};
-                bits = j[r];
-            }
-            for (int col = 0; col < width; col++)
-                dots[y+r][x+col] = !!(bits & (16 >> (left+col))) ^ inverse;
-        }
-        x += width + 1;
-    }
-}
-
 static void fl_playing_matrix(uint8_t dots[FL_ROWS][FL_COLS], const FlState *s)
 {
     static const uint8_t note[] = {12,10,10,10,24,56,48};
@@ -565,13 +594,13 @@ static void fl_playing_matrix(uint8_t dots[FL_ROWS][FL_COLS], const FlState *s)
         for (int y = 0; y < 7; y++)
             for (int x = 0; x < 7; x++)
                 dots[y+1][x] = !(note[y] & (64 >> x));
-        fl_playing_text(dots, 8, 1, s->rows[0], true);
+        fl_matrix_text(dots, 8, 1, s->rows[0], true);
     }
     if (s->playing.artist_known) {
         for (int y = 0; y < 6; y++)
             for (int x = 0; x < 5; x++)
                 dots[y+12][x+1] = !!(person[y] & (16 >> x));
-        fl_playing_text(dots, 8, 11, s->playing.artist, false);
+        fl_matrix_text(dots, 8, 11, s->playing.artist, false);
     }
     if (s->playing.waveform_known) {
         for (int x = 0; x < FL_COLS; x++) {
@@ -627,7 +656,8 @@ static void fl_render(FlCanvas *c, const FlState *s)
         for (int dy = 0; dy < 30; dy++) {
             fl_rect(c, 135 + (i ? dy : 29 - dy) / 2, y + dy, 2, 1, color);
         }
-        fl_label_xy(c, i ? 66 : 40, y + 5, i ? "CUE" : "MEMORY", 2, 3, color);
+        fl_label_fit(c, i ? 60 : 40, y + 5, i ? "CUE" : "MEMORY",
+                     i ? 54 : 78, 21, color);
     }
     fl_box(c, 1110, 164, 98, 44, "MT", s->all_on ? FL_RED : FL_OFF);
     fl_label_xy(c, 1110, 227, "WIDE", 4, 5, s->all_on ? FL_RED : FL_OFF);
@@ -667,6 +697,17 @@ static void fl_render(FlCanvas *c, const FlState *s)
         }
     }
 
+    /* A small halo joins the apertures optically without changing the font
+     * mask. Inverse and ordinary text share the same luminous glass model. */
+    for (int y = 0; y < FL_ROWS; y++) {
+        for (int x = 0; x < FL_COLS; x++) {
+            if (dots[y][x]) {
+                fl_rect(c, FL_MATRIX_X + x * FL_PITCH_X - 1,
+                        FL_MATRIX_Y + y * FL_PITCH_Y - 1,
+                        FL_DOT_W + 2, FL_DOT_H + 2, 0xff234251u);
+            }
+        }
+    }
     for (int y = 0; y < FL_ROWS; y++) {
         for (int x = 0; x < FL_COLS; x++) {
             int px = FL_MATRIX_X + x * FL_PITCH_X;

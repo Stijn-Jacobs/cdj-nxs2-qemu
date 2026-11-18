@@ -1,0 +1,99 @@
+{
+  "reference": "IMG_2293.heic, inverted Escape title; manually reviewed dot masks, not a font ROM",
+  "caveat": "The bottom of p is obscured in the photo and is reconstructed as a continuous stem; unseen glyphs remain provisional.",
+  "geometry": {
+    "matrix_columns": 100,
+    "matrix_rows": 27,
+    "text_column": 8,
+    "row_pitch": 9,
+    "letter_gap": 1
+  },
+  "glyphs": {
+    "E": {
+      "width": 5,
+      "rows": [
+        31,
+        16,
+        16,
+        30,
+        16,
+        16,
+        31
+      ]
+    },
+    "s": {
+      "width": 5,
+      "rows": [
+        0,
+        0,
+        14,
+        16,
+        14,
+        1,
+        30
+      ]
+    },
+    "c": {
+      "width": 4,
+      "rows": [
+        0,
+        0,
+        7,
+        8,
+        8,
+        8,
+        7
+      ]
+    },
+    "a": {
+      "width": 5,
+      "rows": [
+        0,
+        0,
+        14,
+        1,
+        15,
+        17,
+        15
+      ]
+    },
+    "p": {
+      "width": 5,
+      "rows": [
+        0,
+        0,
+        30,
+        17,
+        30,
+        16,
+        16
+      ]
+    },
+    "e": {
+      "width": 5,
+      "rows": [
+        0,
+        0,
+        14,
+        17,
+        31,
+        16,
+        14
+      ]
+    }
+  },
+  "text_rows": [
+    {
+      "text": "Escape",
+      "glyph_columns": [
+        8,
+        14,
+        20,
+        25,
+        31,
+        37
+      ],
+      "last_column": 41
+    }
+  ]
+}
