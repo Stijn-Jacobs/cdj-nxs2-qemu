@@ -139,6 +139,74 @@ void vfd_note_panel_text(uint8_t mode, const char *l0, const char *l1,
     vfd.dirty = true;
 }
 
+void vfd_note_track_number(bool known, uint8_t number)
+{
+    vfd.display.track_known = known;
+    vfd.display.track_number = number;
+    vfd.dirty = true;
+}
+
+void vfd_note_time(const Cdj850Time *time)
+{
+    vfd.display.time = *time;
+    vfd.dirty = true;
+}
+
+void vfd_note_bpm(bool known, uint16_t bpm)
+{
+    vfd.display.bpm_known = known;
+    vfd.display.bpm = bpm;
+    vfd.dirty = true;
+}
+
+void vfd_note_pitch(const Cdj850Pitch *pitch)
+{
+    vfd.display.pitch = *pitch;
+    vfd.dirty = true;
+}
+
+void vfd_note_master_tempo(bool enabled)
+{
+    vfd.display.master_tempo = enabled;
+    vfd.dirty = true;
+}
+
+void vfd_note_auto_cue(bool enabled)
+{
+    vfd.display.auto_cue = enabled;
+    vfd.dirty = true;
+}
+
+void vfd_note_info(bool enabled)
+{
+    vfd.display.info_lamp = enabled;
+    vfd.dirty = true;
+}
+
+void vfd_note_browse(bool enabled)
+{
+    vfd.display.browse_lamp = enabled;
+    vfd.dirty = true;
+}
+
+void vfd_note_menu(bool enabled)
+{
+    vfd.display.menu_lamp = enabled;
+    vfd.dirty = true;
+}
+
+void vfd_note_tag_list(bool enabled)
+{
+    vfd.display.tag_list_lamp = enabled;
+    vfd.dirty = true;
+}
+
+void vfd_note_playing(const Cdj850Playing *playing)
+{
+    vfd.display.playing = *playing;
+    vfd.dirty = true;
+}
+
 void vfd_note_panel_tags(const uint8_t tags[3])
 {
     memcpy(vfd.display.tags, tags, sizeof(vfd.display.tags));

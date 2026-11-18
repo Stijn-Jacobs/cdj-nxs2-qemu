@@ -1,24 +1,210 @@
 {
   "reference": "IMG_2292.heic, supplied by the user; photo-derived dot masks, not a font ROM",
-  "geometry": {"matrix_columns": 100, "matrix_rows": 27, "row_pitch": 9, "text_column": 7, "letter_gap": 1},
-  "glyphs": {
-    "[": {"width": 4, "rows": [15,14,12,12,12,14,15]},
-    "]": {"width": 4, "rows": [15,7,3,3,3,7,15]},
-    "A": {"width": 5, "rows": [14,17,17,17,31,17,17]},
-    "R": {"width": 5, "rows": [30,17,17,30,20,18,17]},
-    "T": {"width": 5, "rows": [31,4,4,4,4,4,4]},
-    "I": {"width": 3, "rows": [7,2,2,2,2,2,7]},
-    "S": {"width": 5, "rows": [15,16,16,14,1,1,30]},
-    "L": {"width": 5, "rows": [16,16,16,16,16,16,31]},
-    "B": {"width": 5, "rows": [30,17,17,30,17,17,30]},
-    "U": {"width": 5, "rows": [17,17,17,17,17,17,14]},
-    "M": {"width": 5, "rows": [17,27,21,21,17,17,17]},
-    "C": {"width": 5, "rows": [14,17,16,16,16,17,14]},
-    "K": {"width": 5, "rows": [17,18,20,24,20,18,17]}
+  "geometry": {
+    "matrix_columns": 100,
+    "matrix_rows": 27,
+    "row_pitch": 9,
+    "text_column": 7,
+    "letter_gap": 1
   },
-  "browser_rows": [
-    {"text": "[ARTIST]", "glyph_columns": [7,12,18,24,30,34,40,46], "last_column": 49},
-    {"text": "[ALBUM]", "glyph_columns": [7,12,18,24,30,36,42], "last_column": 45},
-    {"text": "[TRACK]", "glyph_columns": [7,12,18,24,30,36,42], "last_column": 45}
+  "glyphs": {
+    "[": {
+      "width": 4,
+      "rows": [
+        15,
+        14,
+        12,
+        12,
+        12,
+        14,
+        15
+      ]
+    },
+    "]": {
+      "width": 4,
+      "rows": [
+        15,
+        7,
+        3,
+        3,
+        3,
+        7,
+        15
+      ]
+    },
+    "A": {
+      "width": 5,
+      "rows": [
+        14,
+        17,
+        17,
+        17,
+        31,
+        17,
+        17
+      ]
+    },
+    "R": {
+      "width": 5,
+      "rows": [
+        30,
+        17,
+        17,
+        30,
+        20,
+        18,
+        17
+      ]
+    },
+    "T": {
+      "width": 5,
+      "rows": [
+        31,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4
+      ]
+    },
+    "I": {
+      "width": 3,
+      "rows": [
+        7,
+        2,
+        2,
+        2,
+        2,
+        2,
+        7
+      ]
+    },
+    "S": {
+      "width": 5,
+      "rows": [
+        15,
+        16,
+        16,
+        14,
+        1,
+        1,
+        30
+      ]
+    },
+    "L": {
+      "width": 5,
+      "rows": [
+        16,
+        16,
+        16,
+        16,
+        16,
+        16,
+        31
+      ]
+    },
+    "B": {
+      "width": 5,
+      "rows": [
+        30,
+        17,
+        17,
+        30,
+        17,
+        17,
+        30
+      ]
+    },
+    "U": {
+      "width": 5,
+      "rows": [
+        17,
+        17,
+        17,
+        17,
+        17,
+        17,
+        14
+      ]
+    },
+    "M": {
+      "width": 5,
+      "rows": [
+        17,
+        27,
+        21,
+        21,
+        17,
+        17,
+        17
+      ]
+    },
+    "C": {
+      "width": 5,
+      "rows": [
+        14,
+        17,
+        16,
+        16,
+        16,
+        17,
+        14
+      ]
+    },
+    "K": {
+      "width": 5,
+      "rows": [
+        17,
+        18,
+        20,
+        24,
+        20,
+        18,
+        17
+      ]
+    }
+  },
+  "text_rows": [
+    {
+      "text": "[ARTIST]",
+      "glyph_columns": [
+        7,
+        12,
+        18,
+        24,
+        30,
+        34,
+        40,
+        46
+      ],
+      "last_column": 49
+    },
+    {
+      "text": "[ALBUM]",
+      "glyph_columns": [
+        7,
+        12,
+        18,
+        24,
+        30,
+        36,
+        42
+      ],
+      "last_column": 45
+    },
+    {
+      "text": "[TRACK]",
+      "glyph_columns": [
+        7,
+        12,
+        18,
+        24,
+        30,
+        36,
+        42
+      ],
+      "last_column": 45
+    }
   ]
 }
