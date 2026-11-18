@@ -948,6 +948,15 @@ void cdj850_panel_peer_reset_readouts(void)
 
         panel_capture_write(line, len);
     }
+    panel.state = PANEL_IDLE;
+    panel.frame = 0;
+    panel.start_ns = 0;
+    panel.due_ns = 0;
+    memset(panel.cur_tx, 0, sizeof(panel.cur_tx));
+    memset(panel.logged_status, 0, sizeof(panel.logged_status));
+    if (panel.timer) {
+        timer_mod(panel.timer, ns + panel.period_ns);
+    }
     cdj850_panel_display_reset_readouts(&panel.display, ns, panel_publish_display,
                                      &ms);
 }

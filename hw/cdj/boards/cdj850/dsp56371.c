@@ -275,6 +275,19 @@ typedef struct {
 
 static Cdj850Dsp cdj850_dsp;
 
+static void cdj850_dsp_reset(void *opaque)
+{
+    (void)opaque;
+    cdj850_dsp.alive = false;
+    cdj850_dsp.bringup = 0;
+    cdj850_dsp.pedrl = 0;
+    cdj850_dsp.n_reads = 0;
+    cdj850_dsp.seq_pos = 0;
+    cdj850_dsp.last_sent = 0;
+    cdj850_dsp.have_sent = false;
+    cdj850_dsp.servo_pos = 0;
+}
+
 void cdj850_dsp_init(void)
 {
     const char *rep;
@@ -285,6 +298,7 @@ void cdj850_dsp_init(void)
     memset(&cdj850_dsp, 0, sizeof(cdj850_dsp));
     cdj850_dsp.reply_hi = -1;
     cdj850_dsp.reply_lo = -1;
+    qemu_register_reset(cdj850_dsp_reset, NULL);
     /* Experimental reply drive (Task 8g): $CDJ850_DSP_REPLY=0xHL,
      * H,L in 0-7. Default OFF. Parsed once; invalid = OFF + warn. */
     rep = getenv("CDJ850_DSP_REPLY");

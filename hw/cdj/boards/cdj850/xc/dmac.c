@@ -334,6 +334,17 @@ static const VMStateDescription vmstate_cdj850_dmac = {
     }
 };
 
+static void cdj850_dmac_reset(void *opaque)
+{
+    Cdj850Dmac *s = opaque;
+
+    timer_del(s->run);
+    timer_del(s->irq_poll);
+    memset(s->reg, 0, sizeof(s->reg));
+    memset(s->dei, 0, sizeof(s->dei));
+    memset(s->units, 0, sizeof(s->units));
+}
+
 void cdj850_dmac_init(MemoryRegion *sysmem, SuperHCPU *cpu)
 {
     Cdj850Dmac *s = g_new0(Cdj850Dmac, 1);
@@ -342,6 +353,7 @@ void cdj850_dmac_init(MemoryRegion *sysmem, SuperHCPU *cpu)
     s->run = timer_new_ns(QEMU_CLOCK_VIRTUAL, dmac_run, s);
     s->irq_poll = timer_new_ns(QEMU_CLOCK_VIRTUAL, dmac_irq_poll, s);
     cdj850_dmac = s;
+    qemu_register_reset(cdj850_dmac_reset, s);
     vmstate_register_any(NULL, &vmstate_cdj850_dmac, s);
     memory_region_init_io(&s->iomem, NULL, &cdj850_dmac_ops, s,
                           "cdj850.dmac", CDJ850_DMAC_SIZE);

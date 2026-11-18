@@ -149,11 +149,22 @@ static const VMStateDescription vmstate_cdj850_adc = {
     }
 };
 
+static void cdj850_adc_reset(void *opaque)
+{
+    Cdj850Adc *s = opaque;
+
+    memset(s->reg, 0, sizeof(s->reg));
+    s->busy_reads = 0;
+    s->converting = false;
+    s->adf = false;
+}
+
 void cdj850_adc_init(MemoryRegion *sysmem, SuperHCPU *cpu)
 {
     Cdj850Adc *s = g_new0(Cdj850Adc, 1);
 
     s->cpu = cpu;
+    qemu_register_reset(cdj850_adc_reset, s);
     vmstate_register_any(NULL, &vmstate_cdj850_adc, s);
     memory_region_init_io(&s->iomem, NULL, &cdj850_adc_ops, s,
                           "cdj850.adc", CDJ850_ADC_SIZE);

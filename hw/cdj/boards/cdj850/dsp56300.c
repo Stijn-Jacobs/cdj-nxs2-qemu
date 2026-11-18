@@ -3355,6 +3355,68 @@ static void dsp_exit_cb(Notifier *n, void *data)
     qatomic_set(&d->running, false);
     qemu_thread_join(&d->thread);
 }
+
+static void dsp56300_reset(void *opaque)
+{
+    Dsp56300 *d = opaque;
+    unsigned i;
+
+    dsp_host_lock(d);
+    if (d->threaded) {
+        qemu_mutex_lock(&d->rx_lock);
+    }
+    memset(d->ssi_rx, 0, sizeof(d->ssi_rx));
+    d->esai_rx_words = 0;
+    if (d->threaded) {
+        qemu_mutex_unlock(&d->rx_lock);
+        qemu_mutex_lock(&d->irq_lock);
+    }
+    memset(d->irq7_q, 0, sizeof(d->irq7_q));
+    d->irq7_head = d->irq7_tail = d->irq7_count = 0;
+    if (d->threaded) {
+        qemu_mutex_unlock(&d->irq_lock);
+    }
+
+    memset(&d->a, 0, offsetof(Dsp56300, ssi_rx) - offsetof(Dsp56300, a));
+    d->audio_tick = 0;
+    d->audio_last_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    d->audio_frac = 0;
+    d->debug_next_ns = 0;
+    d->left_sample = 0;
+    d->have_left = false;
+    d->tfs_slot = false;
+    d->esai_tx_written = false;
+    d->esai_rx_pending = 0;
+    d->unimp_logged = 0;
+    d->esai_tx_words = 0;
+    d->esai_tx_nonzero = 0;
+    d->esai_tx_peak = 0;
+    d->shi_last_tx = 0;
+    d->shi_tx_logged = 0;
+    qatomic_set(&d->main_pfdr, 0);
+
+    memset(d->p, 0, sizeof(d->p));
+    memset(d->icache, 0, sizeof(d->icache));
+    memset(d->x, 0, sizeof(d->x));
+    memset(d->y, 0, sizeof(d->y));
+    memset(d->x_io, 0, sizeof(d->x_io));
+    memset(d->y_io, 0, sizeof(d->y_io));
+
+    for (i = 0; i < 8; i++) {
+        d->m[i] = DSP_MASK24;
+    }
+    d->sr = 0x0300u; /* I1:I0 = 3 at reset */
+    d->omr = 0x05u;  /* Boot mode 5 (SHI slave SPI) */
+    d->pc = DSP_BOOT_ROM;
+    d->halted = true;
+    d->boot_state = BOOT_COUNT;
+    d->dspdreq_pin = cdj850_intc_get_pin(7);
+
+    if (d->audio_timer) {
+        timer_mod(d->audio_timer, d->audio_last_ns + DSP_AUDIO_TICK_NS);
+    }
+    dsp_host_unlock(d);
+}
 #endif
 
 void dsp56300_shi_tx(uint8_t byte)
@@ -3552,6 +3614,7 @@ void dsp56300_init(void)
     qemu_mutex_init(&d->lock);
     qemu_mutex_init(&d->rx_lock);
     qemu_mutex_init(&d->irq_lock);
+    qemu_register_reset(dsp56300_reset, d);
     vmstate_register_any(NULL, &vmstate_cdj850_dsp56300, d);
     d->threaded = !icount_enabled();
     if (d->threaded) {

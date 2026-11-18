@@ -254,6 +254,20 @@ static const VMStateDescription vmstate_cdj850_ssi = {
     }
 };
 
+static void cdj850_ssi_reset(void *opaque)
+{
+    Cdj850Ssi *s = opaque;
+
+    timer_del(s->tx_timer);
+    memset(s->reg, 0, sizeof(s->reg));
+    memset(s->tx_full, 0, sizeof(s->tx_full));
+    memset(s->tx_word, 0, sizeof(s->tx_word));
+    memset(s->tx_half, 0, sizeof(s->tx_half));
+    s->clock_remainder = 0;
+    s->last_ns = 0;
+    s->in_tick = false;
+}
+
 void cdj850_ssi_init(MemoryRegion *sysmem, SuperHCPU *cpu)
 {
     Cdj850Ssi *s = g_new0(Cdj850Ssi, 1);
@@ -261,6 +275,7 @@ void cdj850_ssi_init(MemoryRegion *sysmem, SuperHCPU *cpu)
     s->cpu = cpu;
     s->tx_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, cdj850_ssi_tx_tick, s);
     cdj850_ssi = s;
+    qemu_register_reset(cdj850_ssi_reset, s);
     vmstate_register_any(NULL, &vmstate_cdj850_ssi, s);
     memory_region_init_io(&s->iomem, NULL, &cdj850_ssi_ops, s,
                           "cdj850.ssi", CDJ850_SSI_SIZE);

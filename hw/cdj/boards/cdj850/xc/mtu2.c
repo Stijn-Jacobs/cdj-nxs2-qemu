@@ -116,22 +116,31 @@ static const VMStateDescription vmstate_cdj850_mtu2 = {
     }
 };
 
-void cdj850_mtu2_init(MemoryRegion *sysmem, SuperHCPU *cpu)
+static void cdj850_mtu2_reset(void *opaque)
 {
     static const unsigned tgr3[] = {
         MTU2_TGRA_3, MTU2_TGRB_3, MTU2_TGRC_3, MTU2_TGRD_3,
     };
-    Cdj850Mtu2 *s = g_new0(Cdj850Mtu2, 1);
+    Cdj850Mtu2 *s = opaque;
     unsigned a;
 
-    s->cpu = cpu;
-    cdj850_mtu2 = s;
+    memset(s->reg, 0, sizeof(s->reg));
     for (a = 0; a < ARRAY_SIZE(tgr3); a++) {
         s->reg[tgr3[a]] = 0xFF;
         s->reg[tgr3[a] + 1] = 0xFF;
     }
     s->reg[MTU2_TSR_3] = 0xC0;
     s->reg[MTU2_TSR_4] = 0xC0;
+}
+
+void cdj850_mtu2_init(MemoryRegion *sysmem, SuperHCPU *cpu)
+{
+    Cdj850Mtu2 *s = g_new0(Cdj850Mtu2, 1);
+
+    s->cpu = cpu;
+    cdj850_mtu2 = s;
+    cdj850_mtu2_reset(s);
+    qemu_register_reset(cdj850_mtu2_reset, s);
     vmstate_register_any(NULL, &vmstate_cdj850_mtu2, s);
     memory_region_init_io(&s->iomem, NULL, &cdj850_mtu2_ops, s, "cdj850.mtu2",
                           MTU2_SIZE);
