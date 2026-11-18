@@ -260,13 +260,14 @@ static const MemoryRegionOps cdj850_intc_ops = {
 
 static const VMStateDescription vmstate_cdj850_intc = {
     .name = "cdj850-intc",
-    .version_id = 2,
-    .minimum_version_id = 2,
+    .version_id = 3,
+    .minimum_version_id = 3,
     .fields = (const VMStateField[]) {
         VMSTATE_UINT8_ARRAY(reg, Cdj850Intc, CDJ850_INTC_SIZE),
         VMSTATE_UINT8(pins, Cdj850Intc),
         VMSTATE_UINT8(flags, Cdj850Intc),
         VMSTATE_UINT8(read_set, Cdj850Intc),
+        VMSTATE_TIMER_PTR(level_timer, Cdj850Intc),
         VMSTATE_END_OF_LIST()
     }
 };

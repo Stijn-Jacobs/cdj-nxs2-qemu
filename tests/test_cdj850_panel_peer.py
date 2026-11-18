@@ -19,7 +19,7 @@ STUBS = {
         "#ifndef STUB_CDJ_COMMON_H\n#define STUB_CDJ_COMMON_H\n"
         "#include <stdint.h>\n#include <stdbool.h>\n"
         "#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n"
-        "#include <inttypes.h>\n"
+        "#include <inttypes.h>\n#include <sys/types.h>\n"
         "typedef struct MemoryRegion MemoryRegion;\n"
         "typedef struct SuperHCPU SuperHCPU;\n"
         "typedef struct QEMUTimer QEMUTimer;\n"
@@ -45,10 +45,33 @@ STUBS = {
         "#define VMSTATE_UINT32(f, s) { .dummy = 0 }\n"
         "#define VMSTATE_INT64(f, s) { .dummy = 0 }\n"
         "#define VMSTATE_BOOL(f, s) { .dummy = 0 }\n"
+        "#define VMSTATE_UINT8(f, s) { .dummy = 0 }\n"
+        "#define VMSTATE_UINT16(f, s) { .dummy = 0 }\n"
+        "#define VMSTATE_UINT64(f, s) { .dummy = 0 }\n"
+        "#define VMSTATE_UINT8_ARRAY(f, s, n) { .dummy = 0 }\n"
+        "#define VMSTATE_BOOL_ARRAY(f, s, n) { .dummy = 0 }\n"
         "#define VMSTATE_UINT8_2DARRAY(f, s, a, b) { .dummy = 0 }\n"
         "#define VMSTATE_UINT16_V(f, s, v) { .dummy = 0 }\n"
         "#define VMSTATE_UINT8_ARRAY_V(f, s, n, v) { .dummy = 0 }\n"
+        "#define VMSTATE_STRUCT_ARRAY(f, s, n, v, vmsd, t) { .dummy = 0 }\n"
+        "#define VMSTATE_BUFFER_UNSAFE(f, s, v, n) { .dummy = 0 }\n"
         "#define VMSTATE_END_OF_LIST() { .dummy = 0 }\n"
+        "#endif\n"
+    ),
+    "cdj_panelkeys.h": (
+        "#ifndef STUB_CDJ_PANELKEYS_H\n#define STUB_CDJ_PANELKEYS_H\n"
+        "#include <sys/types.h>\n"
+        "#define CDJ_PANELKEY_ENV \"CDJ_PANEL_KEYSOCK\"\n"
+        "static inline int cdj_panelkey_bind(const char *n) { (void)n; return -1; }\n"
+        "static inline ssize_t recv(int fd, void *b, size_t l, int f)\n"
+        "{ (void)fd; (void)b; (void)l; (void)f; return -1; }\n"
+        "#endif\n"
+    ),
+    "cdj_pnl_stateout.h": (
+        "#ifndef STUB_CDJ_PNL_STATEOUT_H\n#define STUB_CDJ_PNL_STATEOUT_H\n"
+        "#include <stdint.h>\n"
+        "static inline void cdj_pnl_stateout(const uint8_t *f, unsigned l)\n"
+        "{ (void)f; (void)l; }\n"
         "#endif\n"
     ),
     "intc.h": (
@@ -188,10 +211,47 @@ int main(int argc, char **argv)
             stub_vms_ns = ms * 1000000ULL;
             cdj850_panel_peer_build_rx(0, f1);
             cdj850_panel_peer_build_rx(1, f2);
-            printf("t=%llu rot=%u rx1_13=%02x rx2_6=%02x\n",
+            printf("t=%llu rot=%u pitch=%04x jog=%04x per=%04x rx1_13=%02x rx2_6=%02x vinyl=%02x\n",
                    (unsigned long long)ms,
                    (unsigned)cdj850_panel_peer_rotary(),
-                   f1[13], f2[6]);
+                   (unsigned)cdj850_panel_peer_pitch(),
+                   (unsigned)cdj850_panel_peer_jog(),
+                   (unsigned)cdj850_panel_peer_jog_period(),
+                   f1[13], f2[6], f2[8]);
+        }
+        return 0;
+    }
+    if (strcmp(argv[1], "pitch_jog") == 0) {
+        cdj850_panel_peer_set_pitch(0x0300);
+        cdj850_panel_peer_set_jog(80, 278);
+        cdj850_panel_peer_set_vinyl_speed(0xA5);
+        cdj850_panel_peer_build_rx(0, f1);
+        cdj850_panel_peer_build_rx(1, f2);
+        dump_frame("F1_FWD", f1);
+        dump_frame("F2_FWD", f2);
+        cdj850_panel_peer_set_jog(-40, 556);
+        cdj850_panel_peer_build_rx(0, f1);
+        dump_frame("F1_REV", f1);
+        cdj850_panel_peer_set_jog(0, 0);
+        cdj850_panel_peer_build_rx(0, f1);
+        dump_frame("F1_STOP", f1);
+        return 0;
+    }
+    if (strcmp(argv[1], "live") == 0) {
+        for (int i = 2; i < argc; i++) {
+            const char *arg = argv[i];
+            if (arg[0] == '@') {
+                uint64_t ms = strtoull(arg + 1, NULL, 10);
+                stub_vms_ns = ms * 1000000ULL;
+                cdj850_panel_peer_build_rx(0, f1);
+                cdj850_panel_peer_build_rx(1, f2);
+                printf("T%llu ", (unsigned long long)ms);
+                dump_frame("F1", f1);
+                printf("T%llu ", (unsigned long long)ms);
+                dump_frame("F2", f2);
+            } else {
+                cdj850_panel_peer_feed_key(arg, stub_vms_ns / 1000000ULL);
+            }
         }
         return 0;
     }
@@ -304,10 +364,39 @@ def test_idle_frames_and_checksum(panel_peer_exe):
     lines = out.strip().splitlines()
     f1 = parse_frame_line(lines[0])
     f2 = parse_frame_line(lines[1])
-    assert f1 == [0x01, 0x01, 0x00] + [0x00] * 12 + [0x02]
+    assert f1 == [
+        0x01, 0x01, 0x00, 0x00, 0x00,
+        0x80, 0x00, 0x80, 0x00,
+        0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x03,
+    ]
     assert f2 == [0x02] + [0x00] * 11 + [0x02, 0x00, 0x00, 0x00]
     assert f1[15] == sum8ec(f1[:15])
     assert f2[12] == sum8ec(f2[:12])
+
+
+def test_pitch_jog_and_vinyl_encodings(panel_peer_exe):
+    out, _ = panel_peer_exe(None, "pitch_jog")
+    lines = out.strip().splitlines()
+    f1_fwd = parse_frame_line(lines[0])
+    f2_fwd = parse_frame_line(lines[1])
+    f1_rev = parse_frame_line(lines[2])
+    f1_stop = parse_frame_line(lines[3])
+
+    assert f1_fwd[5:9] == [0x03, 0x00, 0x80, 0x00]
+    assert f1_fwd[9:13] == [0x00, 80, 0x01, 0x16]  # 278 = 0x0116
+    assert f1_fwd[13] == 0xC0  # jog_move | jog_fwd
+    assert f1_fwd[15] == sum8ec(f1_fwd[:15])
+    assert f2_fwd[8] == 0xA5
+    assert f2_fwd[12] == sum8ec(f2_fwd[:12])
+
+    assert f1_rev[9:13] == [0x00, 40, 0x02, 0x2C]  # 556 = 0x022C
+    assert f1_rev[13] == 0x80  # jog_move only (reverse)
+    assert f1_rev[15] == sum8ec(f1_rev[:15])
+
+    assert f1_stop[9:13] == [0x00, 40, 0x00, 0x00]
+    assert f1_stop[13] == 0x00
+    assert f1_stop[15] == sum8ec(f1_stop[:15])
 
 
 def test_button_encodings(panel_peer_exe):
@@ -456,3 +545,50 @@ def test_display_decoder_browse_tags_and_cursor_move(panel_peer_exe):
     assert "mode=0x01 updates=2 vfd=2\n" in out
     assert "tag=25/02/03 attr=04:00:00/04:00:00/04:00:00 [ALPHA.wav] | [BETA.wav] | [GAMMA.wav]" in err
     assert "tag=01/26/03 attr=04:00:00/04:00:00/04:00:00 [ALPHA.wav] | [BETA.wav] | [GAMMA.wav]" in err
+
+
+def test_script_pitch_and_jog_events(panel_peer_exe):
+    out, _ = panel_peer_exe(
+        {"CDJ850_PANEL_SCRIPT": (
+            "100:pitch=0x0300,200:pitch+256,300:jog+80:278,400:jog=0,500:vinyl=0x7f"
+        )},
+        "script", "0", "100", "200", "300", "400", "500",
+    )
+    rows = {}
+    for ln in out.strip().splitlines():
+        parts = dict(kv.split("=") for kv in ln.split())
+        rows[int(parts["t"])] = parts
+
+    assert rows[0]["pitch"] == "8000"
+    assert rows[100]["pitch"] == "0300"
+    assert rows[200]["pitch"] == "0400"
+    assert rows[300]["jog"] == "0050"
+    assert rows[300]["per"] == "0116"
+    assert rows[300]["rx1_13"] == "c0"
+    assert rows[400]["per"] == "0000"
+    assert rows[400]["rx1_13"] == "00"
+    assert rows[500]["vinyl"] == "7f"
+
+
+def test_live_udp_key_feed(panel_peer_exe):
+    out, _ = panel_peer_exe(
+        None, "live",
+        "@100",
+        "0x05:0xfc:0:lvl", "0x06:0xff:0:lvl",
+        "0x04:3:0:rot",
+        "0x11:0x04:0:hold",
+        "0x12:0x02:50:or",
+        "@120",
+        "0x11:0x04:0:rel",
+        "@180",
+    )
+    lines = out.strip().splitlines()
+    frames = {}
+    for ln in lines:
+        tag, rest = ln.split(" ", 1)
+        frames.setdefault(tag, {})[rest.split(":")[0]] = parse_frame_line(rest)
+
+    assert frames["T100"]["F1"][5:9] == [0x80, 0x00, 0x80, 0x00]
+    assert frames["T120"]["F1"][3:7] == [0x00, 0x03, 0xFC, 0xFF]
+    assert frames["T120"]["F2"][1:3] == [0x04, 0x02]
+    assert frames["T180"]["F2"][1:3] == [0x00, 0x00]

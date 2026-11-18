@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "cdj_common.h"
+#include "cdj_panelkeys.h"
+#include "cdj_pnl_stateout.h"
 #include "intc.h"
 #include "panel_peer.h"
 #include "port.h"
@@ -76,6 +78,10 @@
 #define PANEL_DISP_BUF          700       /* up to 47 * 14 payload bytes */
 #define PANEL_SCRIPT_MAX        256
 #define PANEL_HOLD_DEFAULT_MS   120
+#define PANEL_PITCH_CENTER      0x8000u
+#define PANEL_JOG_PERIOD_DEF    556u      /* 0xD904 / 556 = 100% platter speed */
+#define PANEL_LIVE_LEN          32
+#define PANEL_LIVE_PRESS_MAX    64
 
 typedef enum {
     PANEL_IDLE,         /* waiting for MAIN_XBUSY / the next period */
@@ -92,6 +98,11 @@ typedef enum {
     PANEL_ACT_PRESS,
     PANEL_ACT_RELEASE,
     PANEL_ACT_ROTATE,
+    PANEL_ACT_PITCH,
+    PANEL_ACT_PITCH_REL,
+    PANEL_ACT_JOG,
+    PANEL_ACT_JOG_STOP,
+    PANEL_ACT_VINYL,
 } PanelActionKind;
 
 typedef struct {
@@ -99,8 +110,17 @@ typedef struct {
     uint32_t order;
     PanelActionKind kind;
     int32_t delta;
+    uint16_t u16;
     char name[24];
 } PanelScriptEvent;
+
+typedef struct {
+    uint8_t off;
+    uint8_t mask;
+    bool held;
+    uint64_t at_ms;
+    uint64_t dur_ms;
+} PanelLivePress;
 
 /* Button map verified against MAIN 0x0C194EA4 / 0x0C194FD8 and UI handlers. */
 static const PanelButtonDef panel_buttons[] = {
@@ -171,14 +191,25 @@ static struct {
 
     /* Panel inputs (frame 1 and frame 2 payloads) */
     uint16_t rotary;
+    uint16_t pitch;
+    uint16_t pitch_centre;
     uint16_t jog;
+    uint16_t jog_period;
+    uint8_t vinyl_speed;
     uint8_t btn_rx1[2];         /* rx1[13..14] */
     uint8_t btn_rx2[8];         /* rx2[1..8] */
+
+    /* Live UDP panel socket (CDJ_PANEL_KEYSOCK) */
+    int key_fd;
+    PanelLivePress live_press[PANEL_LIVE_PRESS_MAX];
+    uint32_t live_press_n;
+    uint8_t live_lvl[PANEL_LIVE_LEN];
+    bool live_lvl_on[PANEL_LIVE_LEN];
 
     /* Scripted input schedule */
     PanelScriptEvent script[PANEL_SCRIPT_MAX];
     unsigned script_n;
-    unsigned script_next;
+    uint32_t script_next;
 
     /* Reassembly state for MAIN->panel 0x80..0xAE display frames */
     uint8_t disp_pending_seq;
@@ -285,26 +316,191 @@ uint16_t cdj850_panel_peer_rotary(void)
     return panel.rotary;
 }
 
-static void cdj850_panel_build_rx1(uint8_t f[PANEL_FRAME_LEN])
+void cdj850_panel_peer_set_pitch(uint16_t raw)
 {
+    panel.pitch = raw;
+    panel.live_lvl_on[5] = false;
+    panel.live_lvl_on[6] = false;
+}
+
+uint16_t cdj850_panel_peer_pitch(void)
+{
+    return panel.pitch;
+}
+
+void cdj850_panel_peer_set_jog(int delta, uint16_t period)
+{
+    unsigned i;
+
+    if (delta == 0 && period == 0) {
+        panel.jog_period = 0;
+        cdj850_panel_peer_set_button("jog_move", false);
+        cdj850_panel_peer_set_button("jog_fwd", false);
+    } else {
+        panel.jog = (uint16_t)((int)panel.jog + delta);
+        panel.jog_period = period ? period : PANEL_JOG_PERIOD_DEF;
+        cdj850_panel_peer_set_button("jog_move", true);
+        cdj850_panel_peer_set_button("jog_fwd", delta >= 0);
+    }
+    for (i = 9; i <= 12; i++) {
+        panel.live_lvl_on[i] = false;
+    }
+}
+
+uint16_t cdj850_panel_peer_jog(void)
+{
+    return panel.jog;
+}
+
+uint16_t cdj850_panel_peer_jog_period(void)
+{
+    return panel.jog_period;
+}
+
+void cdj850_panel_peer_set_vinyl_speed(uint8_t val)
+{
+    panel.vinyl_speed = val;
+    panel.live_lvl_on[0x18] = false;
+}
+
+static void panel_live_prune(uint64_t now_ms)
+{
+    uint32_t i, keep = 0;
+
+    for (i = 0; i < panel.live_press_n; i++) {
+        const PanelLivePress *p = &panel.live_press[i];
+
+        if (p->held || now_ms < p->at_ms + p->dur_ms) {
+            if (keep != i) {
+                panel.live_press[keep] = *p;
+            }
+            keep++;
+        }
+    }
+    panel.live_press_n = keep;
+}
+
+void cdj850_panel_peer_feed_key(const char *msg, uint64_t now_ms)
+{
+    char op[16] = "or";
+    unsigned off, dur;
+    int val;
+
+    if (!msg || sscanf(msg, "%i:%i:%u:%15s", &off, &val, &dur, op) < 3) {
+        return;
+    }
+    if (off >= PANEL_LIVE_LEN) {
+        return;
+    }
+    if (!strcmp(op, "rot")) {
+        if (off == 3 || off == 4) {
+            cdj850_panel_peer_rotate(val);
+        }
+        return;
+    }
+    if (!strcmp(op, "lvl")) {
+        panel.live_lvl[off] = (uint8_t)val;
+        panel.live_lvl_on[off] = true;
+        return;
+    }
+    if (!strcmp(op, "rel")) {
+        uint32_t i;
+
+        for (i = 0; i < panel.live_press_n; i++) {
+            PanelLivePress *p = &panel.live_press[i];
+
+            if (p->held && p->off == off && p->mask == (uint8_t)val) {
+                uint64_t held_ms = (now_ms >= p->at_ms) ? (now_ms - p->at_ms) : 0;
+
+                p->held = false;
+                p->dur_ms = held_ms > 25 ? held_ms : 25;
+            }
+        }
+        return;
+    }
+    panel_live_prune(now_ms);
+    if (panel.live_press_n < PANEL_LIVE_PRESS_MAX) {
+        panel.live_press[panel.live_press_n++] = (PanelLivePress) {
+            .off = (uint8_t)off,
+            .mask = (uint8_t)val,
+            .held = !strcmp(op, "hold"),
+            .at_ms = now_ms,
+            .dur_ms = dur ? dur : PANEL_HOLD_DEFAULT_MS,
+        };
+    }
+}
+
+static void panel_drain_keys(uint64_t now_ms)
+{
+    char msg[64];
+    ssize_t n;
+
+    if (panel.key_fd < 0) {
+        return;
+    }
+    while ((n = recv(panel.key_fd, msg, sizeof(msg) - 1, 0)) > 0) {
+        msg[n] = '\0';
+        cdj850_panel_peer_feed_key(msg, now_ms);
+    }
+}
+
+static void cdj850_panel_build_rx1(uint8_t f[PANEL_FRAME_LEN], uint64_t now_ms)
+{
+    uint32_t i;
+
     memset(f, 0, PANEL_FRAME_LEN);
     f[0] = CDJ850_PANEL_TYPE1;
     f[1] = CDJ850_PANEL_VER_MAJ;
     f[2] = CDJ850_PANEL_VER_MIN;
     f[3] = (uint8_t)(panel.rotary >> 8);
     f[4] = (uint8_t)panel.rotary;
-    f[5] = (uint8_t)(panel.jog >> 8);
-    f[6] = (uint8_t)panel.jog;
+    f[5] = (uint8_t)(panel.pitch >> 8);
+    f[6] = (uint8_t)panel.pitch;
+    f[7] = (uint8_t)(panel.pitch_centre >> 8);
+    f[8] = (uint8_t)panel.pitch_centre;
+    f[9] = (uint8_t)(panel.jog >> 8);
+    f[10] = (uint8_t)panel.jog;
+    f[11] = (uint8_t)(panel.jog_period >> 8);
+    f[12] = (uint8_t)panel.jog_period;
     f[13] = panel.btn_rx1[0];
     f[14] = panel.btn_rx1[1];
+    for (i = 3; i <= 14; i++) {
+        if (panel.live_lvl_on[i]) {
+            f[i] = panel.live_lvl[i];
+        }
+    }
+    for (i = 0; i < panel.live_press_n; i++) {
+        const PanelLivePress *p = &panel.live_press[i];
+
+        if ((p->held || now_ms < p->at_ms + p->dur_ms) &&
+            p->off >= 3 && p->off <= 14) {
+            f[p->off] |= p->mask;
+        }
+    }
     f[15] = cdj850_panel_sum8ec(f, 15);
 }
 
-static void cdj850_panel_build_rx2(uint8_t f[PANEL_FRAME_LEN])
+static void cdj850_panel_build_rx2(uint8_t f[PANEL_FRAME_LEN], uint64_t now_ms)
 {
+    uint32_t i;
+
     memset(f, 0, PANEL_FRAME_LEN);
     f[0] = CDJ850_PANEL_TYPE2;
     memcpy(&f[1], panel.btn_rx2, 8);
+    f[8] |= panel.vinyl_speed;
+    for (i = 1; i <= 8; i++) {
+        if (panel.live_lvl_on[0x10 + i]) {
+            f[i] = panel.live_lvl[0x10 + i];
+        }
+    }
+    for (i = 0; i < panel.live_press_n; i++) {
+        const PanelLivePress *p = &panel.live_press[i];
+
+        if ((p->held || now_ms < p->at_ms + p->dur_ms) &&
+            p->off >= 0x11 && p->off <= 0x18) {
+            f[p->off - 0x10] |= p->mask;
+        }
+    }
     f[12] = cdj850_panel_sum8ec(f, 12);
 }
 
@@ -312,11 +508,15 @@ static void panel_script_run(uint64_t now_ms);
 
 void cdj850_panel_peer_build_rx(unsigned frame, uint8_t f[16])
 {
+    uint64_t now_ms = cdj850_vms();
+
     if (frame == 0) {
-        panel_script_run(cdj850_vms());
-        cdj850_panel_build_rx1(f);
+        panel_script_run(now_ms);
+        panel_drain_keys(now_ms);
+        panel_live_prune(now_ms);
+        cdj850_panel_build_rx1(f, now_ms);
     } else if (frame == 1) {
-        cdj850_panel_build_rx2(f);
+        cdj850_panel_build_rx2(f, now_ms);
     } else {
         memset(f, 0, PANEL_FRAME_LEN);
     }
@@ -334,7 +534,7 @@ static int panel_script_cmp(const void *a, const void *b)
 }
 
 static void panel_script_add(uint64_t at_ms, PanelActionKind kind,
-                             const char *name, int32_t delta)
+                             const char *name, int32_t delta, uint16_t u16)
 {
     PanelScriptEvent *ev;
 
@@ -349,6 +549,7 @@ static void panel_script_add(uint64_t at_ms, PanelActionKind kind,
     ev->order = panel.script_n;
     ev->kind = kind;
     ev->delta = delta;
+    ev->u16 = u16;
     if (name) {
         snprintf(ev->name, sizeof(ev->name), "%.*s",
                  (int)sizeof(ev->name) - 1, name);
@@ -379,6 +580,64 @@ static bool panel_parse_rot_prefix(const char *s, int32_t *delta_out)
     }
     *delta_out = (int32_t)v;
     return true;
+}
+
+static bool panel_parse_pitch_or_jog(uint64_t at_ms, const char *action,
+                                     const char *arg)
+{
+    char *end = NULL;
+
+    if (strncmp(action, "pitch=", 6) == 0 && action[6]) {
+        unsigned long v = strtoul(action + 6, &end, 0);
+
+        if (*end == '\0' && v <= 0xFFFFul) {
+            panel_script_add(at_ms, PANEL_ACT_PITCH, NULL, 0, (uint16_t)v);
+            return true;
+        }
+    } else if (strncmp(action, "pitch", 5) == 0 &&
+               (action[5] == '+' || action[5] == '-')) {
+        long d = strtol(action + 5, &end, 10);
+
+        if (end != action + 5 && *end == '\0') {
+            panel_script_add(at_ms, PANEL_ACT_PITCH_REL, NULL, (int32_t)d, 0);
+            return true;
+        }
+    } else if (strcmp(action, "jog=0") == 0 || strcmp(action, "jog0") == 0) {
+        panel_script_add(at_ms, PANEL_ACT_JOG_STOP, NULL, 0, 0);
+        return true;
+    } else if (strncmp(action, "jog", 3) == 0 &&
+               (action[3] == '+' || action[3] == '-')) {
+        long d = strtol(action + 3, &end, 10);
+        unsigned long per = PANEL_JOG_PERIOD_DEF;
+
+        if (end != action + 3 && *end == '\0') {
+            if (arg && *arg) {
+                char *pend = NULL;
+                unsigned long p = strtoul(arg, &pend, 0);
+
+                if (*pend == '\0' && p <= 0xFFFFul) {
+                    per = p;
+                }
+            }
+            if (d == 0 && per == 0) {
+                panel_script_add(at_ms, PANEL_ACT_JOG_STOP, NULL, 0, 0);
+            } else {
+                panel_script_add(at_ms, PANEL_ACT_JOG, NULL, (int32_t)d,
+                                 (uint16_t)per);
+            }
+            return true;
+        }
+    } else if ((strncmp(action, "vinyl=", 6) == 0 && action[6]) ||
+               (strncmp(action, "vinyl_speed=", 12) == 0 && action[12])) {
+        const char *vp = (action[5] == '=') ? action + 6 : action + 12;
+        unsigned long v = strtoul(vp, &end, 0);
+
+        if (*end == '\0' && v <= 0xFFul) {
+            panel_script_add(at_ms, PANEL_ACT_VINYL, NULL, 0, (uint16_t)v);
+            return true;
+        }
+    }
+    return false;
 }
 
 static void panel_script_parse(const char *spec)
@@ -437,12 +696,15 @@ static void panel_script_parse(const char *spec)
             }
             panel_script_add(at_ms,
                              pressed ? PANEL_ACT_PRESS : PANEL_ACT_RELEASE,
-                             bname, 0);
+                             bname, 0, 0);
         } else {
             int32_t rot_delta = 0;
 
             if (panel_parse_rot_prefix(action, &rot_delta)) {
-                panel_script_add(at_ms, PANEL_ACT_ROTATE, NULL, rot_delta);
+                panel_script_add(at_ms, PANEL_ACT_ROTATE, NULL, rot_delta, 0);
+            } else if (panel_parse_pitch_or_jog(at_ms, action,
+                                                c2 ? c2 + 1 : NULL)) {
+                /* scheduled above */
             } else {
                 unsigned long hold_ms = PANEL_HOLD_DEFAULT_MS;
 
@@ -457,8 +719,9 @@ static void panel_script_parse(const char *spec)
                         hold_ms = PANEL_HOLD_DEFAULT_MS;
                     }
                 }
-                panel_script_add(at_ms, PANEL_ACT_PRESS, action, 0);
-                panel_script_add(at_ms + hold_ms, PANEL_ACT_RELEASE, action, 0);
+                panel_script_add(at_ms, PANEL_ACT_PRESS, action, 0, 0);
+                panel_script_add(at_ms + hold_ms, PANEL_ACT_RELEASE, action,
+                                 0, 0);
             }
         }
     }
@@ -493,6 +756,40 @@ static void panel_script_run(uint64_t now_ms)
             cdj850_panel_peer_rotate(ev->delta);
             info_report("cdj850-panel: input rotate %+d -> %u at %" PRIu64 " ms",
                         (int)ev->delta, (unsigned)panel.rotary, now_ms);
+            break;
+        case PANEL_ACT_PITCH:
+            cdj850_panel_peer_set_pitch(ev->u16);
+            info_report("cdj850-panel: input pitch=0x%04x at %" PRIu64 " ms",
+                        (unsigned)panel.pitch, now_ms);
+            break;
+        case PANEL_ACT_PITCH_REL: {
+            int32_t v = (int32_t)panel.pitch + ev->delta;
+
+            if (v < 0) {
+                v = 0;
+            } else if (v > 0xFFFF) {
+                v = 0xFFFF;
+            }
+            cdj850_panel_peer_set_pitch((uint16_t)v);
+            info_report("cdj850-panel: input pitch %+d -> 0x%04x at %" PRIu64 " ms",
+                        (int)ev->delta, (unsigned)panel.pitch, now_ms);
+            break;
+        }
+        case PANEL_ACT_JOG:
+            cdj850_panel_peer_set_jog(ev->delta, ev->u16);
+            info_report("cdj850-panel: input jog %+d per=%u -> %u at %" PRIu64 " ms",
+                        (int)ev->delta, (unsigned)panel.jog_period,
+                        (unsigned)panel.jog, now_ms);
+            break;
+        case PANEL_ACT_JOG_STOP:
+            cdj850_panel_peer_set_jog(0, 0);
+            info_report("cdj850-panel: input jog stop at %" PRIu64 " ms",
+                        now_ms);
+            break;
+        case PANEL_ACT_VINYL:
+            cdj850_panel_peer_set_vinyl_speed((uint8_t)ev->u16);
+            info_report("cdj850-panel: input vinyl_speed=%u at %" PRIu64 " ms",
+                        (unsigned)panel.vinyl_speed, now_ms);
             break;
         }
     }
@@ -708,6 +1005,12 @@ static void panel_end_transaction(void)
         }
         memcpy(panel.last_tx, panel.cur_tx, sizeof(panel.last_tx));
         for (i = 0; i < panel.frame; i++) {
+            if (panel.cur_tx[i][0] == 0x01) {
+                cdj_pnl_stateout(panel.cur_tx[i], PANEL_FRAME_LEN);
+                break;
+            }
+        }
+        for (i = 0; i < panel.frame; i++) {
             cdj850_panel_peer_feed_display_tx(panel.cur_tx[i]);
         }
         if (panel.disp_hdr_pending && ++panel.disp_hdr_wait >= 2) {
@@ -817,10 +1120,24 @@ static void panel_tick(void *opaque)
     panel_end_transaction();
 }
 
+static const VMStateDescription vmstate_cdj850_live_press = {
+    .name = "cdj850-panel-live-press",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT8(off, PanelLivePress),
+        VMSTATE_UINT8(mask, PanelLivePress),
+        VMSTATE_BOOL(held, PanelLivePress),
+        VMSTATE_UINT64(at_ms, PanelLivePress),
+        VMSTATE_UINT64(dur_ms, PanelLivePress),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 static const VMStateDescription vmstate_cdj850_panel = {
     .name = "cdj850-panel-peer",
-    .version_id = 3,
-    .minimum_version_id = 3,
+    .version_id = 4,
+    .minimum_version_id = 4,
     .fields = (const VMStateField[]) {
         VMSTATE_TIMER_PTR(timer, typeof(panel)),
         VMSTATE_UINT32(state, typeof(panel)),
@@ -835,10 +1152,34 @@ static const VMStateDescription vmstate_cdj850_panel = {
                               PANEL_FRAME_LEN),
         VMSTATE_UINT8_2DARRAY(cur_tx, typeof(panel), PANEL_TX_MAX,
                               PANEL_FRAME_LEN),
-        VMSTATE_UINT16_V(rotary, typeof(panel), 2),
-        VMSTATE_UINT16_V(jog, typeof(panel), 2),
-        VMSTATE_UINT8_ARRAY_V(btn_rx1, typeof(panel), 2, 2),
-        VMSTATE_UINT8_ARRAY_V(btn_rx2, typeof(panel), 8, 2),
+        VMSTATE_UINT16(rotary, typeof(panel)),
+        VMSTATE_UINT16(pitch, typeof(panel)),
+        VMSTATE_UINT16(pitch_centre, typeof(panel)),
+        VMSTATE_UINT16(jog, typeof(panel)),
+        VMSTATE_UINT16(jog_period, typeof(panel)),
+        VMSTATE_UINT8(vinyl_speed, typeof(panel)),
+        VMSTATE_UINT8_ARRAY(btn_rx1, typeof(panel), 2),
+        VMSTATE_UINT8_ARRAY(btn_rx2, typeof(panel), 8),
+        VMSTATE_UINT32(live_press_n, typeof(panel)),
+        VMSTATE_STRUCT_ARRAY(live_press, typeof(panel), PANEL_LIVE_PRESS_MAX,
+                             0, vmstate_cdj850_live_press, PanelLivePress),
+        VMSTATE_UINT8_ARRAY(live_lvl, typeof(panel), PANEL_LIVE_LEN),
+        VMSTATE_BOOL_ARRAY(live_lvl_on, typeof(panel), PANEL_LIVE_LEN),
+        VMSTATE_UINT32(script_next, typeof(panel)),
+        VMSTATE_UINT8(disp_pending_seq, typeof(panel)),
+        VMSTATE_UINT8(disp_pending_mode, typeof(panel)),
+        VMSTATE_UINT8(disp_next_sub, typeof(panel)),
+        VMSTATE_UINT8_ARRAY(disp_buf, typeof(panel), PANEL_DISP_BUF),
+        VMSTATE_UINT32(disp_buf_len, typeof(panel)),
+        VMSTATE_UINT8_ARRAY(disp_hdr, typeof(panel), PANEL_FRAME_LEN),
+        VMSTATE_BOOL(disp_hdr_pending, typeof(panel)),
+        VMSTATE_UINT8(disp_hdr_wait, typeof(panel)),
+        VMSTATE_UINT8(disp_mode, typeof(panel)),
+        VMSTATE_UINT8_ARRAY(disp_tag, typeof(panel), PANEL_DISP_ROWS),
+        VMSTATE_UINT8_2DARRAY(disp_attr, typeof(panel), PANEL_DISP_ROWS, 3),
+        VMSTATE_BUFFER_UNSAFE(disp_line, typeof(panel), 0,
+                              sizeof(panel.disp_line)),
+        VMSTATE_UINT32(disp_updates, typeof(panel)),
         VMSTATE_END_OF_LIST()
     }
 };
@@ -858,9 +1199,13 @@ void cdj850_panel_peer_init(void)
     const char *e = getenv("CDJ850_PANEL");
     const char *p = getenv("CDJ850_PANEL_PERIOD_MS");
     const char *s = getenv("CDJ850_PANEL_SCRIPT");
+    const char *k = getenv(CDJ_PANELKEY_ENV);
     unsigned ms = PANEL_PERIOD_MS_DEFAULT;
 
     memset(&panel, 0, sizeof(panel));
+    panel.key_fd = -1;
+    panel.pitch = PANEL_PITCH_CENTER;
+    panel.pitch_centre = PANEL_PITCH_CENTER;
     if (e && *e == '0') {
         info_report("cdj850: panel peer disabled (CDJ850_PANEL=0)");
         return;
@@ -874,6 +1219,7 @@ void cdj850_panel_peer_init(void)
     panel.enabled = true;
     panel.period_ns = (uint64_t)ms * 1000000;
     panel.state = PANEL_IDLE;
+    panel.key_fd = cdj_panelkey_bind(k);
     panel_script_parse(s);
     panel.timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, panel_tick, NULL);
     vmstate_register_any(NULL, &vmstate_cdj850_panel, &panel);

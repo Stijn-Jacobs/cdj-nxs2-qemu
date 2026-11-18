@@ -28,7 +28,22 @@ STUBS = {
     "cdj_common.h": (
         "#ifndef STUB_CDJ_COMMON_H\n#define STUB_CDJ_COMMON_H\n"
         "#include <stdint.h>\n#include <stdbool.h>\n"
-        "#include <stdio.h>\n#include <string.h>\n"
+        "#include <stdio.h>\n#include <string.h>\n#include <inttypes.h>\n"
+        "typedef struct VMStateField { int dummy; } VMStateField;\n"
+        "typedef struct VMStateDescription {\n"
+        "    const char *name; int version_id; int minimum_version_id;\n"
+        "    int (*post_load)(void *opaque, int version_id);\n"
+        "    const VMStateField *fields;\n"
+        "} VMStateDescription;\n"
+        "static inline int vmstate_register_any(void *d, const VMStateDescription *v,\n"
+        "    void *o)\n"
+        "{ (void)d; (void)v; (void)o; return 0; }\n"
+        "#define VMSTATE_BUFFER_UNSAFE(f, s, v, n) { .dummy = 0 }\n"
+        "#define VMSTATE_BOOL(f, s) { .dummy = 0 }\n"
+        "#define VMSTATE_UINT8_ARRAY(f, s, n) { .dummy = 0 }\n"
+        "#define VMSTATE_UINT32(f, s) { .dummy = 0 }\n"
+        "#define VMSTATE_UINT64(f, s) { .dummy = 0 }\n"
+        "#define VMSTATE_END_OF_LIST() { .dummy = 0 }\n"
         "#endif\n"
     ),
     "ui/console.h": (

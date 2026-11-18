@@ -22,6 +22,22 @@
 #define CDJ_NUDGE_PERIOD    278
 #define CDJ_NUDGE_HARD      139
 
+static CdjGuiLayout cdj_gui_layout = {
+    .rot_off = CDJ_GUI_ROTARY,
+    .jog_pos_off = 0x08,
+    .jog_per_off = 0x0A,
+    .jog_bits_off = 0x0F,
+    .nudge_period = CDJ_NUDGE_PERIOD,
+    .nudge_hard = CDJ_NUDGE_HARD,
+};
+
+void cdj_gui_keys_set_layout(const CdjGuiLayout *layout)
+{
+    if (layout) {
+        cdj_gui_layout = *layout;
+    }
+}
+
 static struct {
     QEMUTimer *timer;
     const char *sock;
@@ -32,21 +48,25 @@ static struct {
 
 static void cdj_nudge_send(void)
 {
-    unsigned period = cdj_nudge.dir ? (cdj_nudge.hard ? CDJ_NUDGE_HARD
-                                                      : CDJ_NUDGE_PERIOD) : 0;
+    unsigned period = cdj_nudge.dir ? (cdj_nudge.hard ? cdj_gui_layout.nudge_hard
+                                                      : cdj_gui_layout.nudge_period)
+                                    : 0;
     unsigned bits = 0x80 | (cdj_nudge.dir > 0 ? 0x40 : 0);
 
     if (cdj_nudge.dir) {
         cdj_nudge.count += cdj_nudge.dir * CDJ_NUDGE_STEP;
-        cdj_panelkey_send_op(cdj_nudge.sock, 0x08, cdj_nudge.count >> 8, 0, "lvl");
-        cdj_panelkey_send_op(cdj_nudge.sock, 0x09, cdj_nudge.count & 0xff, 0,
-                             "lvl");
+        cdj_panelkey_send_op(cdj_nudge.sock, cdj_gui_layout.jog_pos_off,
+                             cdj_nudge.count >> 8, 0, "lvl");
+        cdj_panelkey_send_op(cdj_nudge.sock, cdj_gui_layout.jog_pos_off + 1,
+                             cdj_nudge.count & 0xff, 0, "lvl");
     }
-    cdj_panelkey_send_op(cdj_nudge.sock, 0x0A, period >> 8, 0, "lvl");
-    cdj_panelkey_send_op(cdj_nudge.sock, 0x0B, period & 0xff, 0, "lvl");
+    cdj_panelkey_send_op(cdj_nudge.sock, cdj_gui_layout.jog_per_off,
+                         period >> 8, 0, "lvl");
+    cdj_panelkey_send_op(cdj_nudge.sock, cdj_gui_layout.jog_per_off + 1,
+                         period & 0xff, 0, "lvl");
     if (cdj_nudge.dir) {
-        cdj_panelkey_send_op(cdj_nudge.sock, 0x0F, bits, CDJ_NUDGE_TICK_MS * 3,
-                             "or");
+        cdj_panelkey_send_op(cdj_nudge.sock, cdj_gui_layout.jog_bits_off,
+                             bits, CDJ_NUDGE_TICK_MS * 3, "or");
     }
 }
 
@@ -143,7 +163,7 @@ static void cdj_gui_key_event(DeviceState *dev, QemuConsole *src,
         if (qcode == Q_KEY_CODE_UP || qcode == Q_KEY_CODE_PGUP) {
             step = -step;
         }
-        cdj_panelkey_send_op(sock, CDJ_GUI_ROTARY, step, 0, "rot");
+        cdj_panelkey_send_op(sock, cdj_gui_layout.rot_off, step, 0, "rot");
         return;
     }
     if (!getenv("CDJ_PANEL_SWEEP")) {

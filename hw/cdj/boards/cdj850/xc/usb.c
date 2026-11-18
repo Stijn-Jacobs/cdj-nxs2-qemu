@@ -552,6 +552,21 @@ static void cdj850_usb_dump(Notifier *n, void *unused)
                 usb_reg_read(s, U_D1FIFOSEL));
 }
 
+static const VMStateDescription vmstate_cdj850_usb = {
+    .name = "cdj850-usb",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        VMSTATE_TIMER_PTR(poll, Cdj850Usb),
+        VMSTATE_BOOL(level, Cdj850Usb),
+        VMSTATE_UINT16_ARRAY(loc, Cdj850Usb, CDJ850_USB_SIZE / 2),
+        VMSTATE_UINT32(raised, Cdj850Usb),
+        VMSTATE_UINT16_ARRAY(pipecfg, Cdj850Usb, CDJ_USB_NR_PIPES),
+        VMSTATE_BOOL_ARRAY(tx_dreq, Cdj850Usb, 3),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
 void cdj850_usb_init(MemoryRegion *sysmem, SuperHCPU *cpu)
 {
     Cdj850Usb *s = g_new0(Cdj850Usb, 1);
@@ -581,6 +596,7 @@ void cdj850_usb_init(MemoryRegion *sysmem, SuperHCPU *cpu)
     s->model = sysbus_mmio_get_region(sbd, 0);
     sysbus_connect_irq(sbd, 0, qemu_allocate_irq(usb_irq_in, s, 0));
     s->poll = timer_new_ns(QEMU_CLOCK_VIRTUAL, usb_irq_poll, s);
+    vmstate_register_any(NULL, &vmstate_cdj850_usb, s);
 
     memory_region_init_io(&s->iomem, NULL, &cdj850_usb_ops, s, "cdj850.usb",
                           CDJ850_USB_SIZE);

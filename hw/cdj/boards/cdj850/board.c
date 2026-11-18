@@ -1,10 +1,12 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "cdj_common.h"
+#include "cdj_gui_keys.h"
 #include "dsp56300.h"
 #include "dsp56371.h"
 #include "xc/adc.h"
 #include "xc/cmt.h"
 #include "xc/dmac.h"
+#include "xc/dsp_shi.h"
 #include "xc/intc.h"
 #include "xc/loader.h"
 #include "xc/mtu2.h"
@@ -80,6 +82,48 @@ static const CdjBoardDesc cdj850_board = {
     .ccn_trace_lo = 1,
     .ccn_trace_hi = 0,
     .exit_report = NULL,
+};
+
+static const CdjGuiLayout cdj850_gui_layout = {
+    .rot_off = 0x04,
+    .jog_pos_off = 0x09,
+    .jog_per_off = 0x0B,
+    .jog_bits_off = 0x0D,
+    .nudge_period = 556,
+    .nudge_hard = 278,
+};
+
+static const CdjGuiKey cdj850_gui_keys[] = {
+    { Q_KEY_CODE_SPC,           0x11, 0x02, "PLAY/PAUSE",   true  },
+    { Q_KEY_CODE_C,             0x11, 0x04, "CUE",          true  },
+    { Q_KEY_CODE_Q,             0x11, 0x08, "LOOP IN",      true  },
+    { Q_KEY_CODE_W,             0x11, 0x10, "LOOP OUT",     true  },
+    { Q_KEY_CODE_E,             0x11, 0x20, "RELOOP/EXIT",  true  },
+    { Q_KEY_CODE_1,             0x12, 0x01, "BEAT 1",       true  },
+    { Q_KEY_CODE_2,             0x12, 0x02, "BEAT 2",       true  },
+    { Q_KEY_CODE_3,             0x12, 0x04, "BEAT 4",       true  },
+    { Q_KEY_CODE_4,             0x12, 0x08, "BEAT 8",       true  },
+    { Q_KEY_CODE_Z,             0x12, 0x20, "REV",          true  },
+    { Q_KEY_CODE_J,             0x13, 0x02, "VINYL",        true  },
+    { Q_KEY_CODE_P,             0x13, 0x08, "TEMPO",        true  },
+    { Q_KEY_CODE_K,             0x13, 0x10, "MASTER TEMPO", true  },
+    { Q_KEY_CODE_COMMA,         0x15, 0x02, "TRACK -",      true  },
+    { Q_KEY_CODE_DOT,           0x15, 0x04, "TRACK +",      true  },
+    { Q_KEY_CODE_BRACKET_LEFT,  0x15, 0x08, "SEARCH -",     true  },
+    { Q_KEY_CODE_BRACKET_RIGHT, 0x15, 0x10, "SEARCH +",     true  },
+    { Q_KEY_CODE_L,             0x16, 0x01, "PC/LINK",      true  },
+    { Q_KEY_CODE_U,             0x16, 0x02, "USB",          true  },
+    { Q_KEY_CODE_D,             0x16, 0x04, "DISC",         true  },
+    { Q_KEY_CODE_B,             0x17, 0x01, "BROWSE",       true  },
+    { Q_KEY_CODE_T,             0x17, 0x02, "TAG LIST",     true  },
+    { Q_KEY_CODE_I,             0x17, 0x04, "INFO",         true  },
+    { Q_KEY_CODE_M,             0x17, 0x08, "MENU",         true  },
+    { Q_KEY_CODE_ESC,           0x17, 0x10, "BACK",         true  },
+    { Q_KEY_CODE_LEFT,          0x17, 0x10, "BACK",         true  },
+    { Q_KEY_CODE_BACKSPACE,     0x17, 0x10, "BACK",         true  },
+    { Q_KEY_CODE_RET,           0x0D, 0x01, "ROTARY PUSH",  true  },
+    { Q_KEY_CODE_KP_ENTER,      0x0D, 0x01, "ROTARY PUSH",  true  },
+    { Q_KEY_CODE_RIGHT,         0x0D, 0x01, "ROTARY PUSH",  true  },
 };
 
 /* SH-2A vector reset, after the SH7269 GUI board's sh7269_reset: reset the CPU
@@ -370,6 +414,7 @@ static void cdj850_init(MachineState *machine)
     cdj850_intc_init(sysmem, cpu);
     cdj850_adc_init(sysmem, cpu);
     cdj850_dsp_init();
+    cdj850_dsp_shi_init();
     dsp56300_init();
     cdj850_port_init(sysmem, cpu);
     cdj850_mtu2_init(sysmem, cpu);
@@ -391,6 +436,9 @@ static void cdj850_init(MachineState *machine)
      * emulated). The window stays empty under -nographic. */
     panel_link_init();
     vfd_init();
+    cdj_gui_keys_set_layout(&cdj850_gui_layout);
+    cdj_gui_keys_init(cdj850_gui_keys, ARRAY_SIZE(cdj850_gui_keys), "cdj850");
+    cdj_gui_pointer_init();
 
     /* On-chip peripheral block (BSC/CPG, less CCR/INTC/CMT/ports modelled
      * above): every remaining access is logged rather than silently
