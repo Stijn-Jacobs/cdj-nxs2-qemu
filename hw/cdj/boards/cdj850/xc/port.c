@@ -249,6 +249,9 @@ static void cdj850_port_write(void *opaque, hwaddr off, uint64_t val,
     }
     /* Snoop for the DSP bootstrap tracker + upload record. */
     cdj850_dsp_snoop_write(off, val, size, s->cpu->env.pc, cdj850_vms());
+    if (off <= CDJ850_PFDRL_OFF + 1 && off + size > CDJ850_PFDRH_OFF) {
+        dsp56300_set_pf(cdj850_port_pfdrh(), cdj850_port_pfdrl());
+    }
     if (off <= CDJ850_PFDRL_OFF + 1 && off + size > CDJ850_PFDRL_OFF) {
         dsp56300_shi_cs(!(cdj850_port_pfdrl() & (1u << 3)));
     }
