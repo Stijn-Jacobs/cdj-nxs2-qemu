@@ -57,7 +57,8 @@ class FaceDeckView:
         if face.jog_counter:
             self.jog.start()
         self.grab_jog = None            # the angle the platter was last at
-        self.slider = C.WordSlider(self.send, face.slider_off) if face.slider_off is not None else None
+        self.slider = (C.WordSlider(self.send, face.slider_off, invert=face.slider_invert)
+                       if face.slider_off is not None else None)
         self.grab_slider = False
         self.finger = False             # the mouse is down on the touch screen
         self.scale = self.ratio = None
