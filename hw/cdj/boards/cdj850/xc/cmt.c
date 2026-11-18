@@ -498,10 +498,31 @@ static const VMStateDescription vmstate_cdj850_cmt = {
     }
 };
 
+static void cdj850_irq_reset(void *opaque)
+{
+    memset(cdj850_irq.q, 0, sizeof(cdj850_irq.q));
+    cdj850_irq.head = cdj850_irq.tail = 0;
+    cdj850_irq.cur_valid = false;
+    if (cdj850_irq.pump) {
+        timer_del(cdj850_irq.pump);
+    }
+}
+
+static void cdj850_cmt_reset(void *opaque)
+{
+    Cdj850Cmt *s = opaque;
+
+    s->cmstr = s->cmcsr0 = s->cmcnt0 = s->cmcor0 = 0;
+    s->cmcsr1 = s->cmcnt1 = s->cmcor1 = 0;
+    s->period_ns = s->next_ns = 0;
+    timer_del(s->timer);
+}
+
 void cdj850_cmt_init(MemoryRegion *sysmem, SuperHCPU *cpu)
 {
     Cdj850Cmt *s;
 
+    qemu_register_reset(cdj850_irq_reset, NULL);
     vmstate_register_any(NULL, &vmstate_cdj850_irq, &cdj850_irq);
 
     /* CDJ850_CMT_OFF=1 leaves the timer unimplemented (no RTOS tick). */
@@ -514,6 +535,7 @@ void cdj850_cmt_init(MemoryRegion *sysmem, SuperHCPU *cpu)
     s = g_new0(Cdj850Cmt, 1);
     s->cpu = cpu;
     s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, cmt_fire, s);
+    qemu_register_reset(cdj850_cmt_reset, s);
     vmstate_register_any(NULL, &vmstate_cdj850_cmt, s);
     memory_region_init_io(&s->iomem, NULL, &cmt_ops, s, "cdj850.cmt",
                           CDJ850_CMT_SIZE);

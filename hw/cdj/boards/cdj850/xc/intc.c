@@ -310,6 +310,15 @@ static void intc_pulse_setup(Cdj850Intc *s)
     }
 }
 
+static void cdj850_intc_reset(void *opaque)
+{
+    Cdj850Intc *s = opaque;
+
+    memset(s->reg, 0, sizeof(s->reg));
+    s->flags = s->read_set = 0;
+    timer_del(s->level_timer);
+}
+
 void cdj850_intc_init(MemoryRegion *sysmem, SuperHCPU *cpu)
 {
     Cdj850Intc *s = g_new0(Cdj850Intc, 1);
@@ -339,6 +348,7 @@ void cdj850_intc_init(MemoryRegion *sysmem, SuperHCPU *cpu)
     s->pins = idle ? strtoul(idle, NULL, 0) : 0xC0;
     s->level_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, intc_level_settle, s);
     cdj850_intc = s;
+    qemu_register_reset(cdj850_intc_reset, s);
     vmstate_register_any(NULL, &vmstate_cdj850_intc, s);
     memory_region_init_io(&s->iomem, NULL, &cdj850_intc_ops, s,
                           "cdj850.intc", CDJ850_INTC_SIZE);

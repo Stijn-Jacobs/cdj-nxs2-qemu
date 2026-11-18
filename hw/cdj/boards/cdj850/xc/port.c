@@ -339,12 +339,21 @@ static const VMStateDescription vmstate_cdj850_port = {
     }
 };
 
+static void cdj850_port_reset(void *opaque)
+{
+    Cdj850Port *s = opaque;
+
+    /* MAIN_XBUSY stays low until the firmware sets up the panel link. */
+    memset(s->reg, 0, sizeof(s->reg));
+}
+
 void cdj850_port_init(MemoryRegion *sysmem, SuperHCPU *cpu)
 {
     Cdj850Port *s = g_new0(Cdj850Port, 1);
 
     s->cpu = cpu;
     cdj850_port = s;
+    qemu_register_reset(cdj850_port_reset, s);
     vmstate_register_any(NULL, &vmstate_cdj850_port, s);
     memory_region_init_io(&s->iomem, NULL, &cdj850_port_ops, s,
                           "cdj850.port", CDJ850_PORT_SIZE);

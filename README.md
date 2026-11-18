@@ -159,7 +159,7 @@ Firmware: CDJ-2000NXS2 1.87, XDJ-1000MK2 1.45, XDJ-700 1.15, XDJ-1000 1.13, CDJ-
 8. The slipped playback is not checked yet.
 9. The CDJ-850 has no Ethernet port.
 10. The DSP output is correct (checked under `-icount` with `CDJ850_DSP_IPS=2048`). Real-time playback (`CDJ850_DSP_IPS=750`, ~66.2 MIPS) runs the DSP on a worker thread; the predecoded interpreter reaches ~95 MIPS on unthrottled CPUs (~53 MIPS at a 1.9 GHz thermal cap), while default `CDJ850_DSP_IPS=256` avoids host overload.
-11. The playing overview, artist line, cue/memory strips, and cue/memory lamps decode and render in SCIF1 replay (`test_cdj850_scif1_replay.py`); live rekordbox export playback and the jog display are not yet covered.
+11. The playing overview, artist line, cue/memory strips, and cue/memory lamps decode and render in SCIF1 replay (`test_cdj850_scif1_replay.py`). Live rekordbox export playback still needs automated coverage.
 12. Tempo pitch percentage and range (`±6`/`±10`/`±16`/`WIDE`) are verified live (`test_cdj850_usb.py`); BPM decoding and rendering are verified on SCIF1 captures in replay tests.
 13. MASTER TEMPO key toggle and lamp are tested live (`test_cdj850_usb.py`); audio throughput with MASTER TEMPO active is not measured yet.
 
@@ -192,6 +192,14 @@ this project (`hw/cdj/boards/cdj850/dsp56300.c`).
   3-line browser text and selection tags, track number, elapsed/remaining time,
   pitch % / range, BPM, playing overview/strips, and panel lamps (`MASTER TEMPO`,
   `A.CUE`, `INFO`, `BROWSE`, `TAG LIST`, `MENU`, `MEMORY`, `CUE`).
+- The desktop jog display follows the firmware's playback position, cue marker,
+  audio-memory indicator and VINYL status. Drag or scroll the VINYL SPEED
+  ADJUST knob to change the firmware's brake and release ramps.
+- PLAY/PAUSE, CUE, and the manual and automatic loop buttons follow the lamp
+  states in the firmware's second SCIF1 status page, including flashes.
+- USB, DISC, PC and the red USB activity light use the same firmware status.
+- Press a deck button to wake from auto standby. The first press wakes the deck,
+  and subsequent presses operate the controls as usual.
 - Save/restore and persistence: QMP `savevm`/`migrate` snapshot restore with USB
   storage attached (`usb`, `intc`, `dsp_shi`, `vfd`, `panel_peer`, `dsp56300`), and
   `PERSIST=1` per-deck flash copies preserving the `0x3F8000` user settings sector.
@@ -202,7 +210,7 @@ this project (`hw/cdj/boards/cdj850/dsp56300.c`).
 
 **Not yet:** reliable real-time audio on thermally throttled laptops (`CDJ850_DSP_IPS`
 defaults to `256`; set `CDJ850_DSP_IPS=750` on fast/unthrottled hosts or use `-icount` + `2048`
-for exact offline audio), the jog display and remaining unmapped panel/metadata fields,
+for exact offline audio), remaining unmapped panel/metadata fields,
 Panel CPU firmware extraction (panel side is emulated as a behavioral peer), the CD servo,
 and testing packed updates on physical hardware.
 
@@ -210,7 +218,7 @@ and testing packed updates on physical hardware.
 
 ```sh
 ./setup.sh --model cdj850 --firmware path/to/C850MAIN.UPD
-./start.sh --model cdj850
+./start.sh --model cdj850 --app
 ```
 
 Keep the emulated flash (including user settings at `0x3F8000`) across launches with

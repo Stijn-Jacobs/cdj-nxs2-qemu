@@ -596,6 +596,7 @@ void cdj850_usb_init(MemoryRegion *sysmem, SuperHCPU *cpu)
     s->model = sysbus_mmio_get_region(sbd, 0);
     sysbus_connect_irq(sbd, 0, qemu_allocate_irq(usb_irq_in, s, 0));
     s->poll = timer_new_ns(QEMU_CLOCK_VIRTUAL, usb_irq_poll, s);
+    qemu_register_reset(cdj_usb_reset_host, dev);
     vmstate_register_any(NULL, &vmstate_cdj850_usb, s);
 
     memory_region_init_io(&s->iomem, NULL, &cdj850_usb_ops, s, "cdj850.usb",

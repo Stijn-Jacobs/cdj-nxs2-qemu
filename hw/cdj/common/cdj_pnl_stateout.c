@@ -10,11 +10,15 @@
  */
 #define PNL_MAX_FRAME 40
 
+typedef struct PanelStateReport {
+    char last[5 + 2 * PNL_MAX_FRAME + 1];
+    int64_t sent_ms;
+} PanelStateReport;
+
 static struct {
     bool parsed;
     int fd;
-    char last[4 + 2 * PNL_MAX_FRAME + 1];
-    int64_t sent_ms;
+    PanelStateReport first, second;
 } stateout = { .fd = -1 };
 
 static void stateout_connect(void)
@@ -38,10 +42,12 @@ static void stateout_connect(void)
     }
 }
 
-void cdj_pnl_stateout(const uint8_t *frame, unsigned len)
+static void stateout_send(PanelStateReport *report, const char *prefix,
+                          const uint8_t *frame, unsigned len)
 {
-    char msg[4 + 2 * PNL_MAX_FRAME + 1] = "pnl ";
+    char msg[sizeof(report->last)];
     int64_t now = qemu_clock_get_ms(QEMU_CLOCK_REALTIME);
+    size_t header;
     unsigned k;
 
     if (!stateout.parsed) {
@@ -50,14 +56,24 @@ void cdj_pnl_stateout(const uint8_t *frame, unsigned len)
     if (stateout.fd < 0 || len > PNL_MAX_FRAME) {
         return;
     }
+    header = g_strlcpy(msg, prefix, sizeof(msg));
     for (k = 0; k < len; k++) {
-        snprintf(msg + 4 + 2 * k, 3, "%02x", frame[k]);
+        snprintf(msg + header + 2 * k, 3, "%02x", frame[k]);
     }
-    if (!strcmp(stateout.last, msg) ? now - stateout.sent_ms < 1000
-                                    : now - stateout.sent_ms < 20) {
+    if (now - report->sent_ms < (strcmp(report->last, msg) ? 20 : 1000)) {
         return;
     }
-    g_strlcpy(stateout.last, msg, sizeof(stateout.last));
-    stateout.sent_ms = now;
+    g_strlcpy(report->last, msg, sizeof(report->last));
+    report->sent_ms = now;
     (void)send(stateout.fd, msg, strlen(msg), 0);
+}
+
+void cdj_pnl_stateout(const uint8_t *frame, unsigned len)
+{
+    stateout_send(&stateout.first, "pnl ", frame, len);
+}
+
+void cdj_pnl_stateout_page2(const uint8_t *frame, unsigned len)
+{
+    stateout_send(&stateout.second, "pnl2 ", frame, len);
 }
