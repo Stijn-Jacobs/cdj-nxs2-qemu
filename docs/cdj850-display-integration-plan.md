@@ -1,6 +1,6 @@
 # CDJ-850 display integration plan
 
-Status: renderer ready for isolated integration; live field decoding incomplete.
+The isolated QEMU baseline and SCIF1 replay are verified for text, track number, time, BPM, pitch, and MASTER TEMPO.
 Prepared 2026-11-18. Companion: [handoff](cdj850-display-handoff.md).
 
 ## Isolation contract
@@ -35,21 +35,19 @@ working copies or run directories to the original checkout. Do not use the
 original binary through an inherited `GUI_QEMU`. Use unique monitor sockets,
 logs, VNC ports and run tags. Do not kill or attach to the DSP session's process.
 
-No QEMU source installation, emulator compilation or live boot was performed
-for this handoff. `qemu-src` and the build directories are absent in the new
-worktree. A later build is authorized only within these isolated paths; the
-original source/build restrictions remain in force.
+The baseline build uses this worktree's `qemu-src` and `qemu-build-eb`.
+The original source and build paths remain outside the integration worktree.
 
 ## Current behavior and boundaries
 
 | Area | Implemented | Integration gap |
 |---|---|---|
-| Console | Adapter creates a 1280x480 QEMU graphic console | No isolated emulator boot/capture yet |
+| Console | Private QEMU boot and 1280x480 QMP captures verified | VNC and virtual-deck frontend checks pending |
 | Text | SCIF1 text records feed all three rows; tag bit 5 highlights selection | Most text attributes are retained by panel peer but not forwarded to renderer |
 | Browser | 100x27 matrix, proportional glyphs, nine-dot bands, five-dot rail | Font evidence covers photographed characters, not the entire charset |
-| Fixed legends | Photo-traced REMAIN, INFO, BROWSE, TAG/LIST, A.CUE, MT, WIDE, MEMORY, CUE, BPM, M/S/F | Shapes available; most active states still unmapped |
+| Fixed legends | Photo-traced REMAIN, INFO, BROWSE, TAG/LIST, A.CUE, MT, WIDE, MEMORY, CUE, BPM, M/S/F | REMAIN, MT, and pitch range follow live status. Other active states need mapping |
 | Playing | Title band/note, explicit artist/overview/strip fields | Only title/mode currently reach adapter; artist, overview and strip masks are fixture-only |
-| Numeric/pitch | Rendering primitives, split leading 1, decimal apertures, range badges | No live time/BPM/pitch/lamp decoder/state API yet |
+| Numeric/pitch | Live track number, M/S/F time, REMAIN, whole BPM, and signed pitch with range | Other lamp decoding pending |
 | Reference fixtures | Loaded photo values plus approximate sampled waveform | Never treat fixture data as decoded firmware traffic |
 | Persistence | Render state is currently static host state | Reset and migration behavior must be defined; VM save/restore is not established |
 
@@ -81,15 +79,23 @@ or writes beyond clipped/padded surfaces. Preview compilations use
 `-Wall -Wextra -Werror`. Python 3.11 is the currently available pytest runtime;
 use another Python with pytest installed on other machines.
 
-### 2. Build and boot an isolated baseline (pending)
+### 2. Build and boot an isolated baseline (completed)
 
 First verify all resolved paths are inside this worktree. With the environment
 above, initialize a fresh private QEMU v11.1.2 tree using `./build.sh source`,
-then run `./build.sh display`. These commands may fetch sources and build; they
-have **not** been executed for this handoff. Do not reuse the original
-`qemu-src` to save time. A genuinely independent, immutable-source copy can be
-used instead of fetching, but must have no shared writable files or worktree
-build metadata.
+then run `./build.sh display`. A separate clone of the committed upstream tag
+can seed `qemu-src` when fetching is unavailable. Use independent Git objects,
+the wrap-pinned subproject revisions, and a fresh build directory.
+
+On 2026-11-18 GitLab DNS failed. The private baseline used a `git clone
+--no-local` of the locally available upstream v11.1.2 tag (`4fc49f46dc95`).
+The four Meson subprojects were cloned independently at their wrap revisions.
+The display build completed on macOS with Python 3.11. The local
+`runs/display-baseline/bin/python3` shim keeps Homebrew's older
+`gdbus-codegen` on Python 3.11. For a repeat build on this host, prepend that
+directory and `/usr/local/bin` to `PATH` and set
+`QEMU_PYTHON=/usr/local/bin/python3.11`. The build log is under
+`runs/display-baseline/`.
 
 Put an owned copy of prepared firmware in this worktree's ignored
 `extract/cdj850/flash_cdj850.bin`. Keep USB data disposable; use `snapshot=on`
@@ -97,52 +103,276 @@ for both block devices. No firmware or photos belong in the commit. Do not
 assume a VM snapshot is safe merely because a block drive uses snapshot mode.
 
 Run `GUI_QEMU="$QEMU_EB_BUILD/qemu-system-sh4eb"` explicitly for emulator tests.
-The existing live scenario is:
+Run the live USB scenario and its separate framebuffer smoke test:
 
 ```sh
-/usr/local/bin/python3.11 -m pytest -q \
-  tests/test_cdj850_usb.py::test_live_usb_source_select_browse_load_and_play
+GUI_QEMU="$QEMU_EB_BUILD/qemu-system-sh4eb" /usr/local/bin/python3.11 -m pytest -q \
+  tests/test_cdj850_usb.py::test_live_usb_source_select_browse_load_and_play \
+  tests/test_cdj850_usb.py::test_live_usb_display_screendump
 ```
 
-That test finds flash relative to its own worktree, creates a disposable USB
-image, and uses `-icount shift=2,sleep=off` for deterministic panel input. It
-checks firmware logs/state, **not visual rendering**. Add a separate visual
-capture smoke test through that private process's QMP `screendump`:
-boot -> NO DISC -> USB browser -> cursor move -> loaded title. Assert 1280x480,
-three visible rows, changed selection and title changes. Review captured pixels
-against offline fixtures; don't expect the photographed song's name or waveform
-from a different USB test track.
+Both tests find flash relative to the worktree, create disposable USB images,
+and use `-icount shift=2,sleep=off` for deterministic panel input. The USB scenario
+checks firmware logs and player state. The framebuffer test captures NO DISC,
+the USB root, the three-row file list, the moved selection, and the loaded
+title using QMP `screendump`. It checks 1280x480 output, the three visible rows,
+selection movement, and the correspondence between the chosen row and the
+loaded title. The test's temporary directory contains the PPM captures.
 
-Acceptance: all existing milestones pass and the real console renders decoded
-text. A failing DSP milestone is a baseline issue to report or resolve by taking
-the user's completed DSP commit, not by editing their live checkout.
+On 2026-11-18, 33 non-live tests and both firmware boots passed. The firmware
+auto-played `BETA.wav`, braked to a stop, and restarted. The NO DISC, file
+list, moved selection, and loaded-title captures matched the standalone
+renderer pixel for pixel with the same input text and selection. The USB root
+was captured and checked as a separate state. The PNGs and test log are under
+`runs/display-baseline/`.
 
-### 3. Capture and map real display traffic (pending)
+### 3. Capture and replay real display traffic (completed)
 
-Add optional, lossless SCIF1 TX transaction capture and an offline replay tool.
-Preserve framing, checksums, sequence, virtual timestamps, all header bytes,
-three text attribute bytes and unknown 0x60/0x70-family messages. Bound recorder
-output and leave it disabled by default. Derive fields from MAIN's message
-builders and controlled state transitions, not plausible values from screenshots.
+Set `CDJ850_SCIF1_CAPTURE` to the path of a new file in an ignored run
+directory when starting the private CDJ-850 QEMU. Recording is off by
+default. The recorder refuses to overwrite an existing file and caps output
+at 8 MiB. Use a fresh firmware boot and keep the binary version and SHA-256
+of the binary and prepared flash alongside each recording.
 
-Useful transitions: idle/source select, browse selection, load, play/pause/cue,
-TIME/REMAIN, tempo/range/MT, and metadata page changes when available. Record
-which firmware version and baseline binary produced each capture. Commit only
-hand-authored/sanitized test stimuli; retain raw firmware-derived captures locally.
+The ASCII format starts with `CDJ850-SCIF1 1`. Each `T` record holds the
+transaction sequence, start and end virtual nanoseconds, frame count, and a
+`timestamp:hex` pair for every 16-byte MAIN TX frame in wire order. The file
+includes closed zero- or one-frame windows and all received bytes, including
+bad checksums. An `R <virtual ns>` record invalidates the track, time, BPM,
+pitch, and MASTER TEMPO on a warm reset. Earlier captures without reset records can still be replayed.
+A final `LIMIT` line marks a capture stopped at the size cap. An in-flight
+window at exit is outside the capture.
 
-Acceptance: replayed validated text produces the same state as the live panel
-peer; bad/truncated messages do not corrupt prior complete state. Document each
-field's byte location, meaning, units, evidence and unresolved alternatives.
+From the integration worktree, build the reader and pass it a capture file.
 
-### 4. Integrate one verified field at a time (pending)
+```sh
+xc=hw/cdj/boards/cdj850/xc
+mkdir -p runs/scif1-replay
+cc -std=c11 -Wall -Wextra -Werror -O2 -I "$xc" \
+  scripts/debug/cdj850_scif1_replay.c "$xc/panel_display.c" \
+  -o runs/scif1-replay/cdj850-scif1-replay
+runs/scif1-replay/cdj850-scif1-replay path/to/capture.scif1 --ppm runs/scif1-replay/last-frame.ppm
+```
 
-Add a typed adapter API for numeric fields, pitch, indicators and `FlPlaying`.
+The reader emits the same change-only display diagnostics as the live panel
+peer, using the same decoder and the recorded transaction end time. The optional
+`--ppm` argument renders the final state to a new file. For a
+repeatable end-to-end comparison, run the live USB playback test from step 2.
+It enables capture in its own temporary directory and compares the entire
+replayed display log with the live log, including timestamps, modes, row
+tags, all three attributes per row, and visible text. Synthetic tests cover
+malformed capture records, bad checksums, partial and aborted window replay,
+and resumption at the next valid display message. Keep raw firmware-derived
+captures in the ignored run directory.
+
+| Field | Location and units | Evidence and limits |
+|---|---|---|
+| Frame checksum | Byte 15, end-around carry over bytes 0–14 | PyGhidra confirmed MAIN `0x0C0F9EE8`. The shared decoder checks MAIN text and status frames |
+| Header and mode | `0x80` at byte 0, sequence at byte 1, and mode at byte 2 | Firmware v1.13 capture observed `0x01` USB browse, `0x08` NO DISC, and `0x0a` loaded. The meanings of bytes 3–14 remain unresolved |
+| Text chunks | `0x81` onward at byte 0, 14 bytes of payload per frame | PyGhidra confirmed the counter and chunk layout in MAIN `0x0C066046` and `0x0C0660D4` |
+| Row record | Tag at relative byte 0, attributes at 1–3, byte length at 4, and text from 5 onward | MAIN `0x0C0660D4` writes all five fields then copies the counted text. The decoder stages all three rows before publishing |
+| Row and selection | Tag low two bits are row IDs 1–3. Bit 5 marks the selected row in browse | The capture changed from `25/02/03` to `01/26/03` on one encoder step while text stayed identical. Other tag bits and attribute meanings remain unresolved |
+| Other TX families | Full 16-byte records, including observed `0x60` and `0x70` | Both occur in the boot-to-load capture. Their display roles and units remain unresolved |
+
+A solitary valid header can update the mode with the current rows. The
+decoder uses the existing two-transaction wait to distinguish it from the
+start of a text burst. A received continuation, even with a bad checksum,
+cancels that header-only path. Until all three row records validate, the last
+published display state stays intact.
+
+#### Verification on CDJ-850 MAIN v1.13
+
+- The original live decoder, with capture enabled, produced 17 display entries
+  from 1,054 transactions. The standalone decoder reproduced every entry.
+- The shared decoder's live USB playback run captured 1,900 transactions.
+  Replay reproduced all 18 live entries byte for byte.
+- A separate control run captured 2,117 transactions and 6,189 frames through
+  TIME, tempo range, Master Tempo, INFO, PLAY, CUE, and DISC inputs. All 22
+  live entries matched replay, including the three-row DISC confirmation.
+  Frames `0x70`–`0x77` were present. Header byte 11 alternated between
+  `0x20` and `0x00` around INFO, but the transition does not establish its
+  meaning. Leave it unmapped pending an isolated repeat and builder evidence.
+- All 41 CDJ-850 tests passed, including the independent framebuffer smoke test.
+  The local logs, recordings, input timeline, and firmware and binary hashes
+  are under `runs/scif1-replay/`.
+
+### 4. Integrate one verified field at a time
+
+#### Track number
+
+- MAIN `0x0C065DB4` reads the display index at `0x0C9D0ADB` and
+  `0x0C065DB6` copies it into zero-based byte 4 of TX page `0x01`. PyGhidra
+  shows the producer at `0x0C0644D4` assigning a track ordinal and applying
+  a 99-track display limit. The same MAIN builder emits `0xBB` for overflow
+  and `0xFF` when unavailable. Their hardware glyphs remain unverified.
+- CDJ-850 MAIN v1.13 captures show `0x02` with `BETA.wav`, `0x0a` with
+  `TRACK10.wav`, `0x0b` after selecting `TRACK11.wav`, and `0x00` after
+  USB stop. Values are binary, so `0x0a` renders as decimal `10`.
+- The first frame in a closed window must be page `0x01` with a valid
+  checksum. Values 0–99 render as two decimal digits, including `00`. An
+  out-of-range value blanks the readout. The alternating `0x02` page,
+  corrupt checksums, and aborted windows leave the last valid state in
+  place. The track display starts blank and clears on reset pending a
+  valid post-reset status page.
+
+The live test uses independent seven-segment masks for `00`, `10`, `11`,
+and blank. For each sampled state it compares the live QMP track-number
+pixels with the frame rendered from the same capture prefix. The test covers
+idle, load, track advance, USB stop, and reset. Synthetic replay tests cover
+checksum failure, unavailable values, and a status transaction that straddles
+a reset. All 43 CDJ-850 tests passed. A separate byte comparison matched the
+full 1280x480 framebuffer at all five sampled states. Logs, captures and build
+provenance are under `runs/scif1-track/`.
+
+#### Time readout
+
+| Field | Location and units | Evidence |
+|---|---|---|
+| Minutes, seconds, frames | MAIN TX `0x01` bytes 5, 6, and 7, zero-based and binary. One second is 75 frames. | PyGhidra shows `0x0C065DB8` through `0x0C065DC2` copying the bytes at `0x0C9D0ADC` through `0x0C9D0ADE`. MAIN `0x0C0644D4` passes the remaining duration to `0x0C003E56`, which divides by 75 and 60 to obtain M/S/F. |
+| REMAIN | MAIN TX `0x02` byte 13, bit 0. | MAIN `0x0C0D9194` toggles the mode at `0x0CE6D0DD`. `0x0C063D36` copies its truth value to bit 0 at `0x0C9D0AF2`, and `0x0C065E56` puts the flags byte on the wire. |
+
+A v1.13 capture of a synthetic 66-second WAV showed `01:06:00` followed by
+`01:05:74`. The first TIME press changed the digits to elapsed
+(`00:00:21` in the initial sample) and the flags byte from `0x2f` to
+`0x2e`. The second TIME press restored remaining time and `0x2f`.
+Each page is applied when its checksum validates in a closed transaction.
+The digits and lamp can therefore update one page apart during a toggle.
+
+The renderer shows the firmware's tuple as two digits per component.
+The six digits and unit markers stay dark until there is a value in range.
+An unavailable or unsupported tuple, including `ff ff ff`, also blanks
+the digits. REMAIN follows the most recent valid page `0x02` independently.
+A warm reset invalidates both pages until fresh data arrives. QEMU and replay
+use the same decoder and consume the same reset record.
+
+Six full 1280x480 QMP frames matched replay byte for byte at idle, initial
+remaining time, elapsed time, restored remaining time, USB stop, and warm
+reset. The test independently checks all six digit masks against the
+captured bytes and samples the REMAIN legend. The USB playback regression
+also matched all 79 live display log entries. The 44 other CDJ-850 tests
+passed on the same build. The time regression passed on rerun with one
+wall-clock deadline per milestone so slow virtual playback could reach
+USB stop. Captures, PNGs, logs, and build provenance are under
+`runs/scif1-time/`.
+
+#### BPM
+
+PyGhidra shows MAIN instructions `0x0C065DC4` through `0x0C065DD0`
+copying the halfword at `0x0C9D0AE0` to zero-based bytes 8–9 of TX page
+`0x01`, high byte first. The local producer at `0x0C064118` initializes
+the field to `0xffff` and selects a BPM value when available. The writer
+at `0x0C0726EC` rounds the tempo it stores at `0x0C9D23F0` to whole BPM
+before the page builder copies it. The renderer uses the wire value directly.
+
+MAIN v1.13 mounted an analyzed synthetic rekordbox export and emitted
+`0x0080` for `GRID128`, `0x0060` for `GRID96`, and `0xffff`
+while idle, between tracks, and after USB stop. Earlier plain-WAV captures
+also carried `0xffff` where the firmware had no BPM reading.
+
+The numeric field accepts 1–999 from a complete, checksummed page `0x01`.
+The renderer right-aligns shorter values and leaves unused leading digits
+dark. `0xffff`, zero, and other out-of-range values clear the digits.
+A warm reset invalidates BPM until a fresh status page arrives. The BPM
+legend and outline use the existing glass artwork.
+
+Run the live BPM regression with the private export image.
+
+```sh
+source ./env.sh
+CDJ850_BPM_TEST_IMAGE="$CDJ_ROOT/runs/scif1-bpm/probe/export.img" \
+  /usr/local/bin/python3.11 -m pytest -q \
+  tests/test_cdj850_usb.py::test_live_scif1_bpm_matches_replay
+```
+
+The fixture in `runs/scif1-bpm/probe/` contains only synthetic WAVs and
+their generated analysis. The live test copies the image into its run directory
+and checks the BPM word, the three segment masks, and the full-frame replay.
+The standalone test covers bad checksums, aborted windows, the high byte,
+blank values, and reset.
+
+All 47 CDJ-850 tests passed. The live QMP and replay framebuffers matched
+byte for byte at idle, 128 BPM, 96 BPM, and USB stop. The captures, rendered
+PNGs, image hash, and build provenance are under `runs/scif1-bpm/`.
+
+#### Pitch percentage and range
+
+PyGhidra traced firmware routine `0x0C063FD6` and the SCIF1 page builder at
+`0x0C065DD4`. The display uses the absolute magnitude and the sign from
+adjacent, complete status windows.
+
+| MAIN TX page | Zero-based bytes | Field |
+| --- | --- | --- |
+| `0x01` | 10–11 | Big-endian unsigned magnitude in hundredths, or tenths for WIDE |
+| `0x02` | 11 | Low two bits are 0 for zero, 2 for minus, and 3 for plus |
+| `0x02` | 12 | Bits 4–5 are `0x10` for hundredths or `0x20` for tenths |
+| `0x02` | 14 | Bit 1 enables the range indication. Bits 7, 6, 5, and 2 select ±6, ±10, ±16, and WIDE respectively |
+
+MAIN copies the panel's fader position and center reference from incoming
+page `0x01` bytes 5–8 into `0x0CE6CA48` and `0x0CE6CA4A` at
+`0x0C0ECF12`–`0x0C0ECF1A`. The old peer sent zero for both words,
+which kept MAIN's numeric pitch output inactive. The peer now starts both
+words at `0x8000`. `<ms>:fader=<0-1023>` changes the position word
+and MAIN calculates the percentage and writes both outgoing status pages.
+
+With a known range and no supported numeric format, the range lamp stays
+visible and the digits stay dark. A damaged or incomplete transaction breaks
+status pairing. Reset clears both the display field and any pending flags.
+WIDE values below 10.0 use the two rightmost full digits.
+
+Run the live framebuffer and standalone replay checks from the worktree.
+
+```sh
+source ./env.sh
+/usr/local/bin/python3.11 -m pytest -q \
+  tests/test_cdj850_usb.py::test_live_scif1_pitch_matches_replay \
+  tests/test_cdj850_usb.py::test_live_scif1_wide_pitch_matches_replay \
+  tests/test_cdj850_scif1_replay.py::test_replay_pitch_status_pairing_and_reset
+```
+
+The first live test moves the fader and cycles ±10, ±16, and ±6 with a
+synthetic WAV loaded. The second selects WIDE from DISC mode and checks
+center and both endpoints. Each compares the raw wire fields, lit apertures,
+and full QMP screendump against replay. All 50 CDJ-850 tests passed. Live
+QEMU and replay framebuffers matched byte for byte at all ten pitch
+checkpoints. The raw captures, framebuffers, match hashes, and binary
+provenance are under `runs/scif1-pitch/verified/`.
+
+#### MASTER TEMPO indicator
+
+PyGhidra traced the MASTER TEMPO button handler in `0x0C0D8D78` to the
+latch at `0x0CE6D0E0`. The writer at `0x0C06405A` sets bit 7 of staging
+byte `0x0C9D0AF0` when the latch is on. The page builder at
+`0x0C065E42`–`0x0C065E4A` copies that byte to zero-based byte 11 of
+MAIN TX page `0x02`. The earlier controls capture has `0x00` in that byte
+before the press at 18002 ms and `0x80` in the status frame ending at
+18017.650 ms.
+
+A complete, checksummed page `0x02` sets or clears the existing red
+`MT` legend and border. The indicator starts dark and clears on warm reset.
+The replay test checks that corrupt or aborted frames and unrelated page
+and text traffic preserve the last validated state.
+
+```sh
+source ./env.sh
+/usr/local/bin/python3.11 -m pytest -q \
+  tests/test_cdj850_usb.py::test_live_scif1_master_tempo_matches_replay \
+  tests/test_cdj850_scif1_replay.py::test_replay_master_tempo_status_and_reset
+```
+
+Live MAIN emitted byte values `0x04`, `0x84`, and `0x04` at the three
+checkpoints. The full QEMU and replay framebuffers matched byte for byte.
+The captures, framebuffer hashes, and build provenance are under
+`runs/scif1-master-tempo/`.
+
+#### Additional fields (pending)
+
+Extend the typed adapter API for indicators and `FlPlaying`.
 Use explicit known/valid flags and atomic complete-message updates. Clear stale
 metadata/waveform/strip/lamp state on source/track transitions and reset. Keep
 photo fixture initialization confined to the preview tool.
 
-Suggested order: time/track number -> BPM/pitch -> fixed indicator states ->
-artist/title attributes -> waveform and lower strip messages. Apply actual text
+Continue with fixed indicator states, then artist/title attributes, waveform,
+and lower strip messages. Apply actual text
 attributes once mapped; do not equate a renderer row with a semantic field
 without protocol evidence. Lower strip names currently describe appearance,
 not proven hardware semantics. Preserve the two-line diagnostic accessor while

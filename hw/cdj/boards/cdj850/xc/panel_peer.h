@@ -6,8 +6,13 @@
 
 /* Env: CDJ850_PANEL=0 disables the peer, CDJ850_PANEL_PERIOD_MS=<n> sets the
  * idle gap between transactions (default 10), CDJ850_PANEL_SCRIPT schedules
- * inputs (<ms>:<btn>[:<hold_ms>], <ms>:+<btn>, <ms>:-<btn>, <ms>:rot+/-N). */
+ * inputs (<ms>:<btn>[:<hold_ms>], <ms>:+<btn>, <ms>:-<btn>, <ms>:rot+/-N,
+ * <ms>:fader=<raw 0-1023>).
+ * CDJ850_SCIF1_CAPTURE=<new path> records MAIN TX in closed windows. */
 void cdj850_panel_peer_init(void);
+
+/* Invalidate the status readouts and discard pre-reset status windows for them. */
+void cdj850_panel_peer_reset_readouts(void);
 
 /* Completed transactions (at least frames 1 and 2 exchanged). */
 unsigned cdj850_panel_peer_transactions(void);

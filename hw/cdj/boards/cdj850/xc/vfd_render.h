@@ -12,6 +12,8 @@
 #include <stdbool.h>
 #include <string.h>
 #include "vfd_legends.h"
+#include "vfd_pitch.h"
+#include "vfd_time.h"
 
 #define FL_WIDTH 1280
 #define FL_HEIGHT 480
@@ -50,6 +52,13 @@ typedef struct FlState {
     uint8_t tags[3];
     uint8_t mode;
     bool has_text;
+    Cdj850Time time;
+    Cdj850Pitch pitch;
+    uint16_t bpm;
+    bool bpm_known;
+    bool master_tempo;
+    bool track_known;
+    uint8_t track_number;
     /* Synthetic all-on inspection fixture; never enabled by firmware bytes. */
     bool all_on;
 } FlState;
@@ -617,25 +626,51 @@ static void fl_render(FlCanvas *c, const FlState *s)
     fl_rect(c, 0, 0, c->width, c->height, FL_BG);
     /* Numeric positions are calibrated against the all-on reference.
      * Unknown fixed fields stay unlit until their protocol is mapped. */
-    uint32_t blue = s->all_on ? FL_BLUE : FL_OFF;
-    fl_digit(c, 35, 40, 44, 86, s->all_on ? 8 : -1);
-    fl_digit(c, 101, 40, 44, 86, s->all_on ? 8 : -1);
-    fl_label_xy(c, 157, 40, "REMAIN", 4, 3, blue);
+    bool track_known = s->track_known && s->track_number <= 99;
+    fl_digit(c, 35, 40, 44, 86,
+             s->all_on ? 8 : track_known ? s->track_number / 10 : -1);
+    fl_digit(c, 101, 40, 44, 86,
+             s->all_on ? 8 : track_known ? s->track_number % 10 : -1);
+    bool remain = s->time.remain_known && s->time.remain;
+    fl_label_xy(c, 157, 40, "REMAIN", 4, 3, s->all_on || remain ? FL_BLUE : FL_OFF);
     fl_box(c, 157, 77, 142, 49, "A.CUE", s->all_on ? FL_RED : FL_OFF);
     const int time_x[] = {316, 381, 479, 542, 632, 695};
-    for (int i = 0; i < 6; i++) {
-        fl_digit(c, time_x[i], 40, 44, 86, s->all_on ? 8 : -1);
-    }
-    fl_rect(c, 449, 65, 6, 6, blue);
-    fl_rect(c, 449, 95, 6, 6, blue);
-    fl_label_xy(c, 430, 110, "M", 3, 2, blue);
-    fl_label_xy(c, 590, 110, "S", 3, 2, blue);
-    fl_label_xy(c, 742, 110, "F", 3, 2, blue);
-    const FlPitch all_pitch = {{8,8,8}, true, true, true, 3};
-    fl_pitch(c, s->all_on ? &all_pitch : NULL);
-    fl_box(c, 1050, 35, 150, 86, "", FL_BLUE);
+    const int time_parts[] = {s->time.minutes, s->time.seconds, s->time.frames};
+    bool time_known = s->time.known && cdj850_time_in_range(&s->time);
     for (int i = 0; i < 3; i++) {
-        fl_digit(c, 1061 + i * 46, 47, 36, 64, s->all_on ? 8 : -1);
+        fl_digit(c, time_x[2 * i], 40, 44, 86,
+                 s->all_on ? 8 : time_known ? time_parts[i] / 10 : -1);
+        fl_digit(c, time_x[2 * i + 1], 40, 44, 86,
+                 s->all_on ? 8 : time_known ? time_parts[i] % 10 : -1);
+    }
+    uint32_t time_labels = s->all_on || time_known ? FL_BLUE : FL_OFF;
+    fl_rect(c, 449, 65, 6, 6, time_labels);
+    fl_rect(c, 449, 95, 6, 6, time_labels);
+    fl_label_xy(c, 430, 110, "M", 3, 2, time_labels);
+    fl_label_xy(c, 590, 110, "S", 3, 2, time_labels);
+    fl_label_xy(c, 742, 110, "F", 3, 2, time_labels);
+    const FlPitch all_pitch = {{8,8,8}, true, true, true, 3};
+    const Cdj850Pitch *pitch = &s->pitch;
+    unsigned magnitude = pitch->value < 0 ? -pitch->value : pitch->value;
+    bool wide = pitch->decimals == 1;
+    FlPitch readout = {
+        .digits = {wide && magnitude < 100 ? -1 : (int)(magnitude / 100 % 10),
+                   magnitude / 10 % 10, magnitude % 10},
+        .leading_one = magnitude >= 1000,
+        .plus = pitch->value > 0,
+        .minus = pitch->value < 0,
+        .decimals = wide ? 2 : 1,
+    };
+
+    fl_pitch(c, s->all_on ? &all_pitch : pitch->decimals ? &readout : NULL);
+    fl_box(c, 1050, 35, 150, 86, "", FL_BLUE);
+    bool bpm_known = s->bpm_known && s->bpm > 0 && s->bpm <= 999;
+    const int bpm_place[] = {100, 10, 1};
+    for (int i = 0; i < 3; i++) {
+        int digit = bpm_known && s->bpm >= bpm_place[i] ?
+                    (s->bpm / bpm_place[i]) % 10 : -1;
+
+        fl_digit(c, 1061 + i * 46, 47, 36, 64, s->all_on ? 8 : digit);
     }
     fl_label_xy(c, 1120, 134, "BPM", 4, 3, FL_BLUE);
     const char *left[] = {"BROWSE", "TAG LIST", "INFO"};
@@ -659,11 +694,13 @@ static void fl_render(FlCanvas *c, const FlState *s)
         fl_label_fit(c, i ? 60 : 40, y + 5, i ? "CUE" : "MEMORY",
                      i ? 54 : 78, 21, color);
     }
-    fl_box(c, 1110, 164, 98, 44, "MT", s->all_on ? FL_RED : FL_OFF);
-    fl_label_xy(c, 1110, 227, "WIDE", 4, 5, s->all_on ? FL_RED : FL_OFF);
-    fl_pitch_range(c, 16, s->all_on);
-    fl_pitch_range(c, 10, s->all_on);
-    fl_pitch_range(c, 6, s->all_on);
+    fl_box(c, 1110, 164, 98, 44, "MT",
+           s->all_on || s->master_tempo ? FL_RED : FL_OFF);
+    fl_label_xy(c, 1110, 227, "WIDE", 4, 5,
+                s->all_on || pitch->range == CDJ850_PITCH_WIDE ? FL_RED : FL_OFF);
+    fl_pitch_range(c, 16, s->all_on || pitch->range == 16);
+    fl_pitch_range(c, 10, s->all_on || pitch->range == 10);
+    fl_pitch_range(c, 6, s->all_on || pitch->range == 6);
     if (s->all_on) {
         memset(dots, 1, sizeof(dots));
     } else if (s->mode == 0x0a) {

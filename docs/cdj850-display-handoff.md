@@ -14,8 +14,9 @@ source ./env.sh
 contains the complete environment commands if it is missing. Check `CDJ_ROOT`,
 `QEMU_EB_BUILD`, `QEMU_BUILD`, `C66X_JIT_LIBDIR` and `GUI_QEMU` before any build
 or emulator test. They must resolve to this worktree, not the active DSP checkout.
-The next task is plan step 2: an isolated QEMU baseline build/boot. No build has
-been attempted here, and no QEMU source tree has been copied or linked here.
+The private QEMU v11.1.2 build, prepared firmware, and verified SCIF1
+captures are ready in this worktree. Step 4 has integrated the track
+number, time readout, REMAIN indication, BPM, pitch and range, and MASTER TEMPO.
 
 ## What is complete
 
@@ -30,16 +31,37 @@ been attempted here, and no QEMU source tree has been copied or linked here.
   generic stick alphabet. The user specifically identified REMAIN and INFO as
   the remaining font problem. Letter widths alone had not solved it.
 - 24 focused display/panel tests pass. Standalone previews compile with strict
-  warnings. Generated legend spans have resource-bounds checks. There has been
-  no emulator compilation, private live boot or new live visual verification.
+  warnings, and generated legend spans have resource-bounds checks.
+- The isolated build passed all 35 CDJ-850 tests, including both live USB runs.
+  QMP captures show NO DISC, USB root, three browser rows, selection movement
+  and the loaded `BETA.wav` title at 1280x480. Build logs, test results and
+  PNG captures are under `runs/display-baseline/`.
+- Set `CDJ850_SCIF1_CAPTURE` to a new file to record the private QEMU's MAIN TX
+  windows. The standalone replay tool shares the live decoder. The 41-test
+  suite passed, and replay matched all 18 playback and all 22 control-run
+  display entries. Usage and field evidence are in plan step 3. Captures and
+  provenance are under `runs/scif1-replay/`.
+- The firmware's binary track number now drives the two-digit readout. The
+  43-test suite passed. QMP and replay produced identical frames at idle,
+  tracks 10 and 11, USB stop, and reset.
+- The six M/S/F digits and REMAIN follow the firmware's SCIF1 status pages.
+  Live QMP and replay matched at all six time-test milestones, including both
+  TIME toggles, USB stop, and warm reset. Evidence is under `runs/scif1-time/`.
+- MAIN's whole BPM word drives the three-digit readout. Live QMP and replay
+  matched at idle, 128 BPM, 96 BPM, and USB stop. All 47 CDJ-850 tests passed.
+  The synthetic export and captures are under `runs/scif1-bpm/`.
+- MAIN's paired pitch status pages drive the signed percentage, decimal point,
+  and ±6, ±10, ±16, or WIDE lamp. The panel script supplies the fader position
+  and center over SCIF1. The tests and captures are under `runs/scif1-pitch/`.
+- The red MASTER TEMPO legend follows bit 7 of MAIN status page `0x02`
+  byte 11. The tests and captures are under `runs/scif1-master-tempo/`.
 
 ## What is still incomplete
 
-Live adapter input reaches mode, text rows and selection tags. Numeric values,
-most lamp states, artist metadata, waveform and strip masks do not yet reach it.
-The screenshot-like loaded preview is an **offline fixture**, not a demonstration
-of decoded runtime waveform/time/BPM. INFO is currently inferred from loaded
-mode. See the plan for explicit known-state APIs, capture/replay and reset work.
+Live adapter input reaches track number, time, REMAIN, BPM, pitch percentage
+and range, MASTER TEMPO, mode, text rows, and selection tags. Most other lamps, artist
+metadata, waveform, and strip masks remain unmapped. The loaded preview's waveform is an offline fixture. INFO is currently inferred from loaded
+mode. See the plan for explicit known-state APIs and reset work.
 The photographed font is not a complete arbitrary charset. Some glyphs and the
 final p stem are approximate because of glare/obscured dots. Optics remain
 approximate. The user has no deck at hand and will supply video later.
@@ -57,7 +79,9 @@ approximate. The user has no deck at hand and will supply video later.
 - `tests/fixtures/cdj850-now-playing.json`: approximate photo study for the
   `loaded --photo-readouts` fixture; never wire its values into live state.
 - `vfd.c`/`vfd.h`: graphic-console adapter and legacy diagnostic accessor.
-- `panel_peer.c`: SCIF1 framing/text producer; future capture and field mapping.
+- `panel_peer.c`: SCIF1 transaction handling and opt-in MAIN TX capture.
+- `panel_display.c` and `panel_display.h`: shared text/header decoder.
+- `scripts/debug/cdj850_scif1_replay.c`: offline reader for captured transactions.
 
 SSU0 is the audio DSP link. `vfd_note_tx()` is retained diagnostic compatibility,
 not a source from which to decode display pixels. Do not revisit superseded
@@ -83,16 +107,13 @@ state so resuming does not depend on that ignored file.
 
 ## Resume checklist
 
-1. Inspect this branch's commit and clean status; rerun the four focused suites.
-2. Source/recreate the isolated environment. Ensure source and build paths are
-   absent or independently owned; no links into the DSP checkout.
-3. Initialize/build the private QEMU baseline following plan step 2. Prepare
-   private firmware/media working copies; set GUI_QEMU explicitly.
-4. Capture real console output and only then add SCIF1 capture/replay and one
-   verified field at a time. Keep protocol decoding separate from rendering.
-5. Before eventual transfer, reconcile with the user's finished DSP commit.
-   Do not overwrite or stash their original working changes automatically.
-
-No outstanding user answer is required. Build dependencies/source fetching and
-local firmware preparation may be needed for the next phase. Preserve the
-original QEMU/DSP development environment throughout.
+1. Verify that `CDJ_ROOT`, the QEMU trees and `GUI_QEMU` still point to this
+   worktree. Keep the firmware and USB working copies private.
+2. Use the control capture and MAIN's builders to select a candidate field
+   for step 4. Keep raw captures in the ignored run directory with firmware
+   and binary provenance. Track and time captures and framebuffer checks
+   are under `runs/scif1-track/` and `runs/scif1-time/`.
+3. Reproduce each candidate with isolated input transitions before mapping it
+   to the adapter.
+4. Before transferring display work, reconcile with the user's finished DSP
+   commit. Leave their original working changes in place.

@@ -87,6 +87,13 @@ STUBS = {
     "vfd.h": (
         "#ifndef STUB_VFD_H\n#define STUB_VFD_H\n"
         "#include <stdint.h>\n"
+        "#include \"vfd_time.h\"\n"
+        "void vfd_note_time(const Cdj850Time *time);\n"
+        "#include \"vfd_pitch.h\"\n"
+        "void vfd_note_bpm(bool known, uint16_t bpm);\n"
+        "void vfd_note_pitch(const Cdj850Pitch *pitch);\n"
+        "void vfd_note_master_tempo(bool enabled);\n"
+        "void vfd_note_track_number(bool known, uint8_t number);\n"
         "void vfd_note_panel_tags(const uint8_t tags[3]);\n"
         "void vfd_note_panel_text(uint8_t mode, const char *l0, const char *l1, const char *l2);\n"
         "#endif\n"
@@ -103,12 +110,19 @@ HARNESS = r"""
 #include <stdlib.h>
 #include <string.h>
 #include "panel_peer.h"
+#include "vfd_time.h"
+#include "vfd_pitch.h"
 
 uint64_t stub_vms_ns = 0;
 static uint8_t vfd_last_mode = 0xff;
 static char vfd_last[3][256];
 static unsigned vfd_calls = 0;
 
+void vfd_note_time(const Cdj850Time *time) { (void)time; }
+void vfd_note_bpm(bool known, uint16_t bpm) { (void)known; (void)bpm; }
+void vfd_note_pitch(const Cdj850Pitch *pitch) { (void)pitch; }
+void vfd_note_master_tempo(bool enabled) { (void)enabled; }
+void vfd_note_track_number(bool known, uint8_t number) { (void)known; (void)number; }
 void vfd_note_panel_tags(const uint8_t tags[3]) { (void)tags; }
 
 void vfd_note_panel_text(uint8_t mode, const char *l0, const char *l1,
@@ -188,10 +202,10 @@ int main(int argc, char **argv)
             stub_vms_ns = ms * 1000000ULL;
             cdj850_panel_peer_build_rx(0, f1);
             cdj850_panel_peer_build_rx(1, f2);
-            printf("t=%llu rot=%u rx1_13=%02x rx2_6=%02x\n",
+            printf("t=%llu rot=%u rx1_13=%02x rx2_6=%02x fader=%02x%02x center=%02x%02x\n",
                    (unsigned long long)ms,
                    (unsigned)cdj850_panel_peer_rotary(),
-                   f1[13], f2[6]);
+                   f1[13], f2[6], f1[5], f1[6], f1[7], f1[8]);
         }
         return 0;
     }
@@ -276,6 +290,7 @@ def panel_peer_exe(tmp_path_factory):
          "-I", str(d),
          "-I", path("hw", "cdj", "boards", "cdj850", "xc"),
          str(main_c), path("hw", "cdj", "boards", "cdj850", "xc", "panel_peer.c"),
+         path("hw", "cdj", "boards", "cdj850", "xc", "panel_display.c"),
          "-o", str(exe)],
         capture_output=True, text=True, timeout=120)
     if r.returncode != 0:
@@ -284,6 +299,7 @@ def panel_peer_exe(tmp_path_factory):
     def run(extra_env, *args):
         env = dict(os.environ)
         env.pop("CDJ850_PANEL_SCRIPT", None)
+        env.pop("CDJ850_SCIF1_CAPTURE", None)
         if extra_env:
             env.update(extra_env)
         res = subprocess.run([str(exe)] + list(args), capture_output=True,
@@ -304,7 +320,7 @@ def test_idle_frames_and_checksum(panel_peer_exe):
     lines = out.strip().splitlines()
     f1 = parse_frame_line(lines[0])
     f2 = parse_frame_line(lines[1])
-    assert f1 == [0x01, 0x01, 0x00] + [0x00] * 12 + [0x02]
+    assert f1 == [1, 1, 0, 0, 0, 0x80, 0, 0x80, 0] + [0] * 6 + [3]
     assert f2 == [0x02] + [0x00] * 11 + [0x02, 0x00, 0x00, 0x00]
     assert f1[15] == sum8ec(f1[:15])
     assert f2[12] == sum8ec(f2[:12])
@@ -359,7 +375,8 @@ def test_rotary_encoder_steps(panel_peer_exe):
 
 def test_scripted_timeline(panel_peer_exe):
     out, err = panel_peer_exe(
-        {"CDJ850_PANEL_SCRIPT": "100:usb:50,200:rot+2,300:enter:100"},
+        {"CDJ850_PANEL_SCRIPT": ("50:fader=0,80:fader=1024,90:fader=-1,"
+                                 "100:usb:50,200:rot+2,300:enter:100,350:fader=1023")},
         "script", "0", "99", "100", "149", "150", "200", "300", "399", "400",
     )
     rows = {}
@@ -367,6 +384,12 @@ def test_scripted_timeline(panel_peer_exe):
         parts = dict(kv.split("=") for kv in ln.split())
         rows[int(parts["t"])] = parts
 
+    assert rows[0]["fader"] == rows[0]["center"] == "8000"
+    assert rows[99]["fader"] == "0000"
+    assert rows[400]["fader"] == "ffc0"
+    assert all(row["center"] == "8000" for row in rows.values())
+    assert "invalid fader action 'fader=1024'" in err
+    assert "invalid fader action 'fader=-1'" in err
     assert rows[99]["rx2_6"] == "00"
     assert rows[100]["rx2_6"] == "02"
     assert rows[149]["rx2_6"] == "02"

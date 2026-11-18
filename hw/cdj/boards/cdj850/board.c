@@ -110,6 +110,7 @@ static void cdj850_reset(void *opaque)
      * manual.
      */
     env->sr &= ~((1u << SR_RB) | (1u << SR_BL));
+    cdj850_panel_peer_reset_readouts();
 }
 
 /* On-chip RAM: 256 KB at 0xFFF80000, up to where the peripherals begin at

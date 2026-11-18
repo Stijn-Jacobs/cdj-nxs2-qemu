@@ -179,14 +179,13 @@ this project (`hw/cdj/boards/cdj850/dsp56300.c`).
   1.0×. The DSP's output is a clean, correctly pitched signal. In CDJ mode a
   pause keeps replaying a short window around the pause point, as the real
   unit does.
-- DATA FL display: a dot-matrix reconstruction of the glass, calibrated from
-  photos of a real unit (no Pioneer font ROM is used), showing the browser text
-  and selection highlight that MAIN sends.
+- The DATA FL display reconstructs the glass from photos of a real unit.
+  It shows browser text, selection, track number, elapsed or remaining time,
+  and BPM when MAIN sends a reading.
 
-**Not yet:** real-time audio (the DSP interpreter runs at about 70 % of the
-speed it needs), the waveform overview, BPM and time readouts, CUE, the tempo
-fader and the jog. There is no keyboard mapping yet; the panel is driven by
-scripted events.
+Real-time audio, the waveform overview, CUE, the tempo fader, and jog remain
+pending. The DSP interpreter runs at about 70 % of the required speed.
+Scripted events drive the panel.
 
 **Run it:**
 
@@ -205,6 +204,9 @@ opens it, moves down one entry, loads the track, and presses PLAY twice
 CDJ850_PANEL_SCRIPT=6000:usb,9000:enter,11000:rot+1,13000:enter,19000:play,24000:play \
   ./start.sh --model cdj850
 ```
+
+Use `<ms>:fader=<0-1023>` to move the TEMPO fader. The center is 512.
+Use the `tempo` button to cycle the firmware's available pitch ranges.
 
 Button names include `play`, `cue`, `usb`, `enter`, `back`, `browse`,
 `vinyl`, `master_tempo`, `eject`, the loop and beat buttons and the
