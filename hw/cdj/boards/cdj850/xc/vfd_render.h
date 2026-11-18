@@ -673,11 +673,10 @@ static void fl_render(FlCanvas *c, const FlState *s)
         bool on = s->all_on || left_on[i];
         fl_box(c, 35, 164 + i * 75, 108, 66, left[i], on ? FL_BLUE : FL_OFF);
     }
-    /* MEMORY and CUE have opposite angled right edges. */
+    /* MEMORY and CUE are fixed legends, independent of the matrix mode. */
     for (int i = 0; i < 2; i++) {
         int y = 390 + i * 34;
-        bool on = s->all_on || (s->mode == 0x0a &&
-                  (i ? s->playing.cue_lamp : s->playing.memory_lamp));
+        bool on = s->all_on || (i ? s->playing.cue_lamp : s->playing.memory_lamp);
         uint32_t color = on ? (i ? FL_BLUE : FL_RED) : FL_OFF;
         fl_rect(c, 35, y, i ? 100 : 114, 2, color);
         fl_rect(c, 35, y + 28, i ? 114 : 100, 2, color);
@@ -752,14 +751,15 @@ static void fl_render(FlCanvas *c, const FlState *s)
             fl_rect(c, px, py + 1, FL_DOT_W, FL_DOT_H - 2, color);
         }
     }
+    bool strips_known = s->playing.strips_known;
+    bool show_address = s->mode == 0x0a && strips_known;
     for (int i = 0; i < FL_COLS; i++) {
-        bool known = s->mode == 0x0a && s->playing.strips_known;
         fl_rect(c, FL_MATRIX_X + i * FL_PITCH_X, FL_RED_Y, 7, 12,
-                s->all_on || (known && s->playing.memory[i]) ? FL_RED : FL_OFF);
+                s->all_on || (strips_known && s->playing.memory[i]) ? FL_RED : FL_OFF);
         fl_rect(c, FL_MATRIX_X + i * FL_PITCH_X, FL_GREEN_Y, 7, 28,
-                s->all_on || (known && s->playing.position[i]) ? FL_GREEN : FL_OFF);
+                s->all_on || (show_address && s->playing.position[i]) ? FL_GREEN : FL_OFF);
         fl_rect(c, FL_MATRIX_X + i * FL_PITCH_X, FL_CUE_Y, 7, 14,
-                s->all_on || (known && s->playing.cue[i]) ? FL_BLUE : FL_OFF);
+                s->all_on || (strips_known && s->playing.cue[i]) ? FL_BLUE : FL_OFF);
     }
 }
 #endif

@@ -1189,10 +1189,10 @@ def test_live_scif1_playing_fields_match_replay(tmp_path, scif1_replay_exe):
               "15000:play:200,16800:cue:200,20300:next:200,25000:usb_stop:1500")
     capture = tmp_path / "playing.scif1"
     stages = [
-        ("loaded-128", ("[GRID128]", "[SCIF ARTIST]"), {12, 36, 66}, 0),
-        ("cue-set", ("display playing ", "cue=2 ("), {12, 36, 66}, 2),
-        ("loaded-96", ("[GRID96]", "[SCIF ARTIST]"), set(), 0),
-        ("unloaded", ("[NO USB]",), set(), 0),
+        ("loaded-128", ("[GRID128]", "[SCIF ARTIST]"), {12, 36, 66}, False),
+        ("cue-set", ("display playing ",), {12, 36, 66}, True),
+        ("loaded-96", ("[GRID96]", "[SCIF ARTIST]"), set(), False),
+        ("unloaded", ("[NO USB]",), set(), False),
     ]
     waveforms = {}
     observed = []
@@ -1221,12 +1221,14 @@ def test_live_scif1_playing_fields_match_replay(tmp_path, scif1_replay_exe):
                     rows = message
                 if "display playing " in message:
                     wave_ready = "wave=1 " in message
-                name, triggers, expected_memory, expected_cue = stages[stage]
+                name, triggers, expected_memory, expect_cue = stages[stage]
                 if name.startswith("loaded"):
                     # The title and the complete overview can arrive in either order.
                     if not wave_ready or not all(trigger in rows for trigger in triggers):
                         continue
                 elif not all(trigger in message for trigger in triggers):
+                    continue
+                if expect_cue and " cue=0 (" in message:
                     continue
 
                 live, replay, prefix = _capture_replay_snapshot(
@@ -1236,7 +1238,8 @@ def test_live_scif1_playing_fields_match_replay(tmp_path, scif1_replay_exe):
                             if frame is not None and frame[0] == 2)
                 memory, wave = _captured_playing_packets(prefix)
                 assert {x for x in range(100) if memory[x // 8] & (0x80 >> (x % 8))} == expected_memory
-                assert (page[10], bool(page[11] & 0x10)) == (expected_cue, bool(expected_memory)), name
+                cue = page[10]
+                assert (bool(cue), bool(page[11] & 0x10)) == (expect_cue, bool(expected_memory)), name
 
                 def rgb(x, y):
                     offset = (y * 1280 + x) * 3
@@ -1244,8 +1247,10 @@ def test_live_scif1_playing_fields_match_replay(tmp_path, scif1_replay_exe):
 
                 red, green, blue = b"\xff\x58\x4c", b"\x68\xe4\xa5", b"\x9f\xe8\xff"
                 playing = name != "unloaded"
+                remain = bool(page[13] & 1)
+                address_on = bool(page[9] & 4) or (not remain and not (page[9] & 3))
                 assert (rgb(52, 390) == red) == bool(expected_memory), name
-                assert (rgb(52, 424) == blue) == bool(expected_cue), name
+                assert (rgb(52, 424) == blue) == expect_cue, name
                 if playing:
                     assert wave is not None and len(wave) == 100 and max(wave) == 15, name
                     waveforms[name] = wave
@@ -1254,8 +1259,9 @@ def test_live_scif1_playing_fields_match_replay(tmp_path, scif1_replay_exe):
                 for x in range(100):
                     px = 176 + x * 9
                     assert (rgb(px, 391) == red) == (x in expected_memory), (name, x)
-                    assert (rgb(px, 407) == green) == (playing and x < page[4]), (name, x)
-                    assert (rgb(px, 439) == blue) == (x + 1 == expected_cue), (name, x)
+                    address_here = playing and address_on and ((x < page[4]) != remain)
+                    assert (rgb(px, 407) == green) == address_here, (name, x)
+                    assert (rgb(px, 439) == blue) == (x + 1 == cue), (name, x)
                     # Message mode can light the five-column navigation rail.
                     if playing or x >= 5:
                         height = (wave[x] + 2) // 3 if playing else 0

@@ -477,9 +477,9 @@ independent waveform and an empty memory list.
 | --- | --- |
 | Artist | Mode `0x0a`, text row 2 with attribute `0x07`. The row builder at `0x0C0660D4` serializes the attribute and text. |
 | Waveform | `0x0C0662AE` packs 100 samples from `0x0C9D1199` into frames `0x70`–`0x77`. Samples start at byte 3 on `0x70`, run through bytes 1–14 on `0x71`–`0x76`, and end with bytes 1–4 on `0x77`. |
-| MEMORY | `0x0C06664E` packs normalized saved-cue columns MSB first, serialized by `0x0C0664A8` into bytes 2–14 of frame `0x60`. Status page `0x02` byte 11 bit 4 drives the caption. |
-| Progress | `0x0C0637CC` emits a count from 0 to 100 in page `0x02` byte 4. |
-| CUE | `0x0C0642CC` emits the one-based cue column in page `0x02` byte 10. Zero leaves the cue marker and caption dark. |
+| MEMORY | `0x0C06664E` packs the normalized starts of saved cues and loops MSB first, serialized by `0x0C0664A8` into bytes 2–14 of frame `0x60`. Status page `0x02` byte 11 bit 4 drives the caption. |
+| Playing address | `0x0C0637CC` emits the elapsed column count (0–100) in page `0x02` byte 4. Byte 9 bits 1 and 0 indicate the slow and fast warnings, and bit 2 carries the lit phase. Byte 13 bit 0 selects REMAIN. |
+| CUE | `0x0C0642CC` emits one column for the current cue or loop-in in page `0x02` byte 10. The value is one-based. Zero leaves the cue marker and caption dark. |
 
 The renderer groups the firmware's 15 waveform levels into five dot heights
 with three levels per height. The decoder publishes an overview after all
@@ -487,6 +487,16 @@ eight checksummed parts arrive in order. Track number changes and warm reset
 clear cached data. A valid empty waveform or memory bitmap clears that field.
 The next track's title can arrive before its overview, so its waveform stays
 dark until the new burst is complete.
+
+The green playing-address bar fills from the left in elapsed mode and
+extinguishes columns from the left in REMAIN. The decoder follows the phase
+sent by MAIN for the warnings below 30 and 15 seconds. Replay preserves both
+phases using the recorded status pages.
+
+The red MEMORY and blue CUE strips and legends follow SCIF1 independently of
+the matrix mode. The firmware retains both strips through the `MEMORY` and
+`DELETED` messages. The red legend flashes using its status bit while the
+saved marks follow the bitmap, including when a saved point is removed.
 
 ```sh
 source ./env.sh
@@ -536,8 +546,8 @@ support unsupported for this board. Optimize redraws on actual state changes
 only after correctness is established.
 
 The user will provide a physical-player video later. Until then, scrolling,
-blink cadence and waveform animation remain unverified. Do not invent timings
-and call them 1:1 behavior.
+other panel-side blink behavior and waveform animation remain unverified.
+Do not invent timings and call them 1:1 behavior.
 
 Acceptance: documented static visual coverage, replay/live evidence, reset
 checks and frontend smoke tests. Keep visual tolerances for geometry distinct
