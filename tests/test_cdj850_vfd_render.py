@@ -99,6 +99,22 @@ int main(void) {
     s.mode = 1; /* stale playback fields cannot leak into browser mode */
     draw(&s);
     assert(pixels[FL_RED_Y][FL_MATRIX_X] == FL_OFF);
+    s.mode = 0x0a;
+    draw(&s);
+    assert(pixels[314][89] == FL_OFF); /* Loaded text alone lights no INFO lamp. */
+    s.mode = 0x07;
+    s.info_lamp = true;
+    draw(&s);
+    assert(pixels[314][89] == FL_BLUE); /* INFO can stay on over a dialog. */
+    assert(pixels[164][89] == FL_OFF);
+    s.mode = 1;
+    s.info_lamp = false;
+    draw(&s);
+    assert(pixels[164][89] == FL_OFF); /* Browser text alone leaves BROWSE dark. */
+    s.browse_lamp = true;
+    s.mode = 0x07;
+    draw(&s);
+    assert(pixels[164][89] == FL_BLUE); /* BROWSE can stay on over a dialog. */
     /* Pitch uses independent physical decimal apertures and a split one. */
     FlPitch zero = {{0,0,0}, false, false, false, 1};
     fl_pitch(&((FlCanvas){(uint8_t *)pixels, FL_WIDTH, FL_HEIGHT, FL_WIDTH*4}), &zero);

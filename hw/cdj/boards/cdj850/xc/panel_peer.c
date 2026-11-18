@@ -578,15 +578,30 @@ static void panel_publish_display(const PanelDisplayState *state,
         vfd_note_pitch(&state->pitch);
     } else if (field == PANEL_DISPLAY_MASTER_TEMPO) {
         vfd_note_master_tempo(state->master_tempo);
+    } else if (field == PANEL_DISPLAY_AUTO_CUE) {
+        vfd_note_auto_cue(state->auto_cue);
+    } else if (field == PANEL_DISPLAY_INFO) {
+        vfd_note_info(state->info_lamp);
+    } else if (field == PANEL_DISPLAY_BROWSE) {
+        vfd_note_browse(state->browse_lamp);
+    } else if (field == PANEL_DISPLAY_TAG_LIST) {
+        vfd_note_tag_list(state->tag_list_lamp);
+    } else if (field == PANEL_DISPLAY_MENU) {
+        vfd_note_menu(state->menu_lamp);
+    } else if (field == PANEL_DISPLAY_PLAYING) {
+        vfd_note_playing(&state->playing);
     } else {
+        vfd_note_playing(&state->playing);
         if (field == PANEL_DISPLAY_ROWS) {
             vfd_note_panel_tags(state->tags);
         }
         vfd_note_panel_text(state->header[2], state->rows[0],
                             state->rows[1], state->rows[2]);
     }
-    /* The clock can change every status tick. Keep ordinary boot logs quiet. */
-    if (changed && (field != PANEL_DISPLAY_TIME || capture.file || cdj850_trace())) {
+    /* Keep frequently changing playback diagnostics out of ordinary logs. */
+    bool quiet = field == PANEL_DISPLAY_TIME || field == PANEL_DISPLAY_PLAYING;
+
+    if (changed && (!quiet || capture.file || cdj850_trace())) {
         char message[PANEL_DISP_LOG_LEN];
 
         cdj850_panel_display_format(message, sizeof(message), state, field, *ms);

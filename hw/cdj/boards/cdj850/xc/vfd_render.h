@@ -13,11 +13,12 @@
 #include <string.h>
 #include "vfd_legends.h"
 #include "vfd_pitch.h"
+#include "vfd_playing.h"
 #include "vfd_time.h"
 
 #define FL_WIDTH 1280
 #define FL_HEIGHT 480
-#define FL_COLS 100
+#define FL_COLS CDJ850_OVERVIEW_COLUMNS
 #define FL_ROWS 27
 #define FL_MATRIX_X 174
 #define FL_MATRIX_Y 164
@@ -34,21 +35,9 @@
 #define FL_OFF 0xff0a121bu
 #define FL_BG 0xff060b10u
 
-/* Explicit data for future protocol mapping. These fields are only populated
- * by offline fixtures until the corresponding panel commands are decoded. */
-typedef struct FlPlaying {
-    bool artist_known;
-    char artist[256];
-    bool waveform_known;
-    uint8_t waveform[FL_COLS]; /* overview heights; renderer clamps to 5 */
-    bool strips_known;
-    uint8_t memory[FL_COLS], position[FL_COLS], cue[FL_COLS];
-    bool memory_lamp, cue_lamp;
-} FlPlaying;
-
 typedef struct FlState {
     char rows[3][256];
-    FlPlaying playing;
+    Cdj850Playing playing;
     uint8_t tags[3];
     uint8_t mode;
     bool has_text;
@@ -57,6 +46,11 @@ typedef struct FlState {
     uint16_t bpm;
     bool bpm_known;
     bool master_tempo;
+    bool auto_cue;
+    bool info_lamp;
+    bool browse_lamp;
+    bool tag_list_lamp;
+    bool menu_lamp;
     bool track_known;
     uint8_t track_number;
     /* Synthetic all-on inspection fixture; never enabled by firmware bytes. */
@@ -592,8 +586,7 @@ static void fl_matrix_text(uint8_t dots[FL_ROWS][FL_COLS], int x, int y,
 }
 
 /* Loaded-track layout: inverted title/note band, artist line and a short
- * bottom-aligned overview. Unmapped data stays absent, rather than borrowing
- * browser rows as metadata or synthesizing a waveform. */
+ * bottom-aligned overview. The artist and waveform start blank. */
 static void fl_playing_matrix(uint8_t dots[FL_ROWS][FL_COLS], const FlState *s)
 {
     static const uint8_t note[] = {12,10,10,10,24,56,48};
@@ -614,7 +607,7 @@ static void fl_playing_matrix(uint8_t dots[FL_ROWS][FL_COLS], const FlState *s)
     if (s->playing.waveform_known) {
         for (int x = 0; x < FL_COLS; x++) {
             unsigned height = s->playing.waveform[x];
-            if (height > 5) height = 5;
+            if (height > CDJ850_OVERVIEW_ROWS) height = CDJ850_OVERVIEW_ROWS;
             for (unsigned y = 0; y < height; y++) dots[FL_ROWS-1-y][x] = 1;
         }
     }
@@ -633,7 +626,8 @@ static void fl_render(FlCanvas *c, const FlState *s)
              s->all_on ? 8 : track_known ? s->track_number % 10 : -1);
     bool remain = s->time.remain_known && s->time.remain;
     fl_label_xy(c, 157, 40, "REMAIN", 4, 3, s->all_on || remain ? FL_BLUE : FL_OFF);
-    fl_box(c, 157, 77, 142, 49, "A.CUE", s->all_on ? FL_RED : FL_OFF);
+    fl_box(c, 157, 77, 142, 49, "A.CUE",
+           s->all_on || s->auto_cue ? FL_RED : FL_OFF);
     const int time_x[] = {316, 381, 479, 542, 632, 695};
     const int time_parts[] = {s->time.minutes, s->time.seconds, s->time.frames};
     bool time_known = s->time.known && cdj850_time_in_range(&s->time);
@@ -674,9 +668,9 @@ static void fl_render(FlCanvas *c, const FlState *s)
     }
     fl_label_xy(c, 1120, 134, "BPM", 4, 3, FL_BLUE);
     const char *left[] = {"BROWSE", "TAG LIST", "INFO"};
+    const bool left_on[] = {s->browse_lamp, s->tag_list_lamp, s->info_lamp};
     for (int i = 0; i < 3; i++) {
-        bool on = s->all_on || (s->has_text &&
-                   (s->mode == 0x0a ? i == 2 : i == 0));
+        bool on = s->all_on || left_on[i];
         fl_box(c, 35, 164 + i * 75, 108, 66, left[i], on ? FL_BLUE : FL_OFF);
     }
     /* MEMORY and CUE have opposite angled right edges. */
@@ -701,6 +695,10 @@ static void fl_render(FlCanvas *c, const FlState *s)
     fl_pitch_range(c, 16, s->all_on || pitch->range == 16);
     fl_pitch_range(c, 10, s->all_on || pitch->range == 10);
     fl_pitch_range(c, 6, s->all_on || pitch->range == 6);
+    /* MENU is a panel button lamp. Put its virtual indicator below the glass. */
+    if (s->menu_lamp) {
+        fl_box(c, 1110, 452, 98, 26, "MENU", FL_BLUE);
+    }
     if (s->all_on) {
         memset(dots, 1, sizeof(dots));
     } else if (s->mode == 0x0a) {

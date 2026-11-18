@@ -315,3 +315,138 @@ def test_replay_master_tempo_status_and_reset(scif1_replay_exe, tmp_path):
         "master_tempo=1 (12 ms)",
         "master_tempo=0 (13 ms)",
     ]
+
+
+def test_replay_auto_cue_status_and_reset(scif1_replay_exe, tmp_path):
+    def flags(auto_cue, remain):
+        frame = bytearray(status_remain(remain))
+        frame[12] = 0x50 | auto_cue  # Adjacent pitch-format and status flags.
+        frame[15] = sum8ec(frame[:15])
+        return bytes(frame)
+
+    other = bytes([0x71] + [0] * 14 + [0x71])
+    off, on = flags(False, True), flags(True, True)
+    bad_off = off[:-1] + bytes([off[-1] ^ 1])
+    page1 = bytearray(status_track(1))
+    page1[12] = 1
+    page1[15] = sum8ec(page1[:15])
+    text = make_display_burst(
+        1, 8, [(0, 0, 0, ""), (0, 0, 0, "NO DISC"), (0, 0, 0, "")])
+    record = tmp_path / "auto-cue.scif1"
+    write_capture(record, [
+        (off, other), (page1, other),
+        (on, other),
+        (bad_off, other), (off,),
+        (other, *text[:2]), (other, *text[2:]),
+        (flags(True, False), other),      # REMAIN clears while A.CUE stays on.
+        (on, other),                      # In flight at reset.
+        (on, other), (off, other),
+    ])
+    lines = record.read_bytes().splitlines(keepends=True)
+    lines.insert(9, b"R 9500000\n")
+    record.write_bytes(b"".join(lines))
+    result = subprocess.run([str(scif1_replay_exe), str(record)],
+                            capture_output=True, text=True, check=True)
+    assert [line.split("display ", 1)[1] for line in result.stdout.splitlines()
+            if "display auto_cue=" in line] == [
+        "auto_cue=1 (3 ms)",
+        "auto_cue=0 (9 ms)",
+        "auto_cue=1 (10 ms)",
+        "auto_cue=0 (11 ms)",
+    ]
+
+
+def test_replay_navigation_status_and_reset(scif1_replay_exe, tmp_path):
+    def status_lamps(value):
+        frame = bytearray(status_remain(False))
+        frame[7] = value
+        frame[15] = sum8ec(frame[:15])
+        return bytes(frame)
+
+    browse, tag, info, menu = (status_lamps(value) for value in (0x1F, 0x2F, 0x4F, 0x8F))
+    bad_off = browse[:-1] + bytes([browse[-1] ^ 1])
+    other = bytes([0x71] + [0] * 14 + [0x71])
+    page1 = status_track(1, (0, 1, 0x5F))
+    dialog = make_display_burst(
+        1, 7, [(0, 0, 0, "USB connected"), (0, 0, 0, ""), (0, 0, 0, "")])
+    record = tmp_path / "navigation.scif1"
+    write_capture(record, [
+        (browse, other), (page1, other),
+        (info, other),
+        (bad_off, other), (browse,),
+        (other, *dialog[:2]), (other, *dialog[2:]),  # INFO survives dialog publication.
+        (info, other), (tag, other), (info, other),
+        (info, other),                              # In flight at reset.
+        (info, other), (browse, other),
+        (browse, other),                            # In flight at second reset.
+        (browse, other),
+        (other, *dialog[:2]), (other, *dialog[2:]),   # BROWSE survives dialog publication.
+        (browse, other),
+        (tag, other), (menu, other), (bad_off, other),
+        (menu, other),                              # In flight at third reset.
+        (browse, other),
+    ])
+    lines = record.read_bytes().splitlines(keepends=True)
+    lines.insert(22, b"R 22500000\n")
+    lines.insert(14, b"R 14500000\n")
+    lines.insert(11, b"R 11500000\n")
+    record.write_bytes(b"".join(lines))
+    result = subprocess.run([str(scif1_replay_exe), str(record)],
+                            capture_output=True, text=True, check=True)
+    assert [line.split("display ", 1)[1] for line in result.stdout.splitlines()
+            if "display info=" in line] == [
+        "info=1 (3 ms)",
+        "info=0 (9 ms)",
+        "info=1 (10 ms)",
+        "info=0 (11 ms)",
+        "info=1 (12 ms)",
+        "info=0 (13 ms)",
+    ]
+    assert [line.split("display ", 1)[1] for line in result.stdout.splitlines()
+            if "display browse=" in line] == [
+        "browse=1 (1 ms)",
+        "browse=0 (3 ms)",
+        "browse=1 (13 ms)",
+        "browse=0 (14 ms)",
+        "browse=1 (15 ms)",
+        "browse=0 (19 ms)",
+        "browse=1 (23 ms)",
+    ]
+    assert [line.split("display ", 1)[1] for line in result.stdout.splitlines()
+            if "display tag_list=" in line] == [
+        "tag_list=1 (9 ms)", "tag_list=0 (10 ms)",
+        "tag_list=1 (19 ms)", "tag_list=0 (20 ms)",
+    ]
+    assert [line.split("display ", 1)[1] for line in result.stdout.splitlines()
+            if "display menu=" in line] == ["menu=1 (20 ms)", "menu=0 (22 ms)"]
+
+
+def test_replay_overview_ignores_partial_and_pre_reset_packets(scif1_replay_exe, tmp_path):
+    def wave_frames(value):
+        frames = []
+        for part in range(8):
+            payload = [1, 0] + [value] * 12 if part == 0 else [value] * 14
+            if part == 7:
+                payload[4:] = [0] * 10
+            frame = bytes([0x70 + part, *payload])
+            frames.append(frame + bytes([sum8ec(frame)]))
+        return frames
+
+    other = bytes([0x69] + [0] * 14 + [0x69])
+    initial = [(status_track(1), other)]
+    wave = wave_frames(15)
+    damaged = wave_frames(6)
+    damaged[5] = damaged[5][:-1] + bytes([damaged[5][-1] ^ 1])
+    fresh = wave_frames(3)
+    record = tmp_path / "overview.scif1"
+    write_capture(record, initial + [(other, frame) for frame in wave + damaged + fresh])
+    lines = record.read_bytes().splitlines(keepends=True)
+    lines.insert(18, b"R 18500000\n")   # New wave's first frame straddled reset.
+    record.write_bytes(b"".join(lines))
+    result = subprocess.run([str(scif1_replay_exe), str(record)],
+                            capture_output=True, text=True, check=True)
+    assert [line.split("display ", 1)[1] for line in result.stdout.splitlines()
+            if "display playing " in line] == [
+        "playing wave=1 memory=0 position=0 cue=0 (9 ms)",
+        "playing wave=0 memory=0 position=0 cue=0 (18 ms)",
+    ]

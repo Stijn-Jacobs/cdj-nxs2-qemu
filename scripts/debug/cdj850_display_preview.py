@@ -28,6 +28,7 @@ int main(int argc, char **argv) {
     if (argc != 3) return 2;
     state.all_on = !strcmp(argv[1], "all-on");
     state.has_text = true;
+    state.browse_lamp = strcmp(argv[1], "loaded") != 0;
     if (!strcmp(argv[1], "no-disc")) strcpy(state.rows[1], "NO DISC");
     if (!strcmp(argv[1], "no-usb")) strcpy(state.rows[1], "NO USB");
     if (!strcmp(argv[1], "browser")) {
@@ -40,6 +41,7 @@ int main(int argc, char **argv) {
     if (!strcmp(argv[1], "loaded")) {
         strcpy(state.rows[0], "EXAMPLE.WAV");
         state.mode = 0x0a;
+        state.info_lamp = true;
         if (!strcmp(argv[2], "photo")) {
             /* PLAYING_FIXTURE */
         }

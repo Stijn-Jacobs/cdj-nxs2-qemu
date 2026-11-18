@@ -977,3 +977,297 @@ def test_live_scif1_master_tempo_matches_replay(tmp_path, scif1_replay_exe):
     assert stage == len(stages), (
         f"Missing {stages[stage][0]}; display log:\n" + "\n".join(observed)
     )
+
+
+def test_live_scif1_auto_cue_matches_replay(tmp_path, scif1_replay_exe):
+    script = "2200:time:200,3300:time:1600,6100:time:1600"
+    capture = tmp_path / "auto-cue.scif1"
+    stages = [
+        ("initial", ("[NO DISC]",), False, True),
+        ("short-press", ("display time=", "remain=0"), False, False),
+        ("auto-cue-on", ("display auto_cue=1",), True, False),
+        ("auto-cue-off", ("display auto_cue=0",), False, False),
+    ]
+    stage = 0
+    observed = []
+    with _live_usb_deck(tmp_path, script, capture) as (p, qmp), selectors.DefaultSelector() as sel:
+        sel.register(p.stderr, selectors.EVENT_READ)
+        deadline = time.monotonic() + 180
+        buf = b""
+        while time.monotonic() < deadline and stage < len(stages):
+            if not sel.select(timeout=0.3):
+                continue
+            chunk = os.read(p.stderr.fileno(), 4096)
+            if not chunk:
+                break
+            buf += chunk
+            while b"\n" in buf and stage < len(stages):
+                line, buf = buf.split(b"\n", 1)
+                if b"cdj850-panel: display " not in line:
+                    continue
+                message = line.decode(errors="replace")
+                observed.append(message)
+                name, triggers, auto_cue, remain = stages[stage]
+                if not all(trigger in message for trigger in triggers):
+                    continue
+
+                live, replay, prefix = _capture_replay_snapshot(
+                    qmp, tmp_path, name, capture, scif1_replay_exe)
+                pages = list(_captured_status_pages(prefix))
+                page = next(frame for frame in reversed(pages) if frame is not None and frame[0] == 2)
+                assert (bool(page[12] & 1), bool(page[13] & 1)) == (auto_cue, remain), name
+
+                red, off = b"\xff\x58\x4c", b"\x0a\x12\x1b"
+                border = (77 * 1280 + 225) * 3
+                assert live[border:border + 3] == (red if auto_cue else off), name
+                label_rows = (live[(y * 1280 + 165) * 3:(y * 1280 + 291) * 3]
+                              for y in range(89, 113))
+                assert any(red in row for row in label_rows) == auto_cue, name
+                remain_lit = any(live[(y * 1280 + x) * 3 + 2] > 128
+                                 for y in range(40, 64) for x in range(157, 301))
+                assert remain_lit == remain, name
+                assert live == replay, name
+                stage += 1
+                if stage < len(stages):
+                    deadline = time.monotonic() + 180
+                    _qmp_execute(qmp, "cont")
+
+    assert stage == len(stages), (
+        f"Missing {stages[stage][0]}; display log:\n" + "\n".join(observed)
+    )
+
+
+def test_live_scif1_navigation_lamps_match_replay(tmp_path, scif1_replay_exe):
+    script = ("6000:usb:200,9000:enter:200,11500:enter:200,14000:info:200,"
+              "16500:browse:200,18500:info:200,21000:tag:200,23000:info:200,"
+              "25000:disc:200")
+    capture = tmp_path / "navigation.scif1"
+    stages = [
+        ("no-disc", ("mode=0x08", "[NO DISC]"), 0x10),
+        ("usb-root", ("mode=0x01", "[.FOLDER.]"), 0x10),
+        ("loaded", ("mode=0x0a", "[INFO.wav]"), 0x40),
+        ("browse", ("mode=0x01", "attr=5a:", "[INFO.wav]"), 0x10),
+        ("info-from-browse", ("mode=0x0a", "[INFO.wav]"), 0x40),
+        ("tag", ("mode=0x08", "[EMPTY]"), 0x20),
+        ("info-from-tag", ("mode=0x0a", "[INFO.wav]"), 0x40),
+        ("disc-dialog", ("mode=0x07", "[USB is connected.]"), 0x40),
+    ]
+    stage = 0
+    observed = []
+    deck = _live_usb_deck(tmp_path, script, capture, ("INFO.wav",), track_seconds=30)
+    with deck as (p, qmp), selectors.DefaultSelector() as sel:
+        sel.register(p.stderr, selectors.EVENT_READ)
+        deadline = time.monotonic() + 180
+        buf = b""
+        while time.monotonic() < deadline and stage < len(stages):
+            if not sel.select(timeout=0.3):
+                continue
+            chunk = os.read(p.stderr.fileno(), 4096)
+            if not chunk:
+                break
+            buf += chunk
+            while b"\n" in buf and stage < len(stages):
+                line, buf = buf.split(b"\n", 1)
+                if b"cdj850-panel: display mode=" not in line:
+                    continue
+                message = line.decode(errors="replace")
+                observed.append(message)
+                name, triggers, lamps = stages[stage]
+                if not all(trigger in message for trigger in triggers):
+                    continue
+
+                live, replay, prefix = _capture_replay_snapshot(
+                    qmp, tmp_path, name, capture, scif1_replay_exe)
+                pages = list(_captured_status_pages(prefix))
+                page = next(frame for frame in reversed(pages) if frame is not None and frame[0] == 2)
+                assert page[7] & 0xF0 == lamps, name
+
+                blue, off = b"\x9f\xe8\xff", b"\x0a\x12\x1b"
+                for mask, top, left, label_top, width, height in (
+                    (0x10, 164, 41, 183, 96, 28),  # BROWSE
+                    (0x20, 239, 61, 246, 56, 51),  # TAG LIST
+                    (0x40, 314, 61, 335, 56, 24),  # INFO
+                ):
+                    enabled = bool(lamps & mask)
+                    border = (top * 1280 + 89) * 3
+                    assert live[border:border + 3] == (blue if enabled else off), (name, mask)
+                    label = (live[(y * 1280 + left) * 3:(y * 1280 + left + width) * 3]
+                             for y in range(label_top, label_top + height))
+                    assert any(blue in row for row in label) == enabled, (name, mask)
+                assert live == replay, name
+                stage += 1
+                if stage < len(stages):
+                    deadline = time.monotonic() + 180
+                    _qmp_execute(qmp, "cont")
+
+    assert stage == len(stages), (
+        f"Missing {stages[stage][0]}; display log:\n" + "\n".join(observed)
+    )
+
+
+def test_live_scif1_menu_matches_replay(tmp_path, scif1_replay_exe):
+    # A hold opens UTILITY. Releasing preserves MENU until another press.
+    script = "3800:menu:1700,6500:menu:200"
+    capture = tmp_path / "menu.scif1"
+    stages = [
+        ("initial", "[NO DISC]", False),
+        ("utility", "[.UTILITY.]", True),
+        ("released", "input release menu", True),
+        ("closed", "[NO DISC]", False),
+    ]
+    stage = 0
+    observed = []
+    with _live_usb_deck(tmp_path, script, capture) as (p, qmp), selectors.DefaultSelector() as sel:
+        sel.register(p.stderr, selectors.EVENT_READ)
+        deadline = time.monotonic() + 180
+        buf = b""
+        while time.monotonic() < deadline and stage < len(stages):
+            if not sel.select(timeout=0.3):
+                continue
+            chunk = os.read(p.stderr.fileno(), 4096)
+            if not chunk:
+                break
+            buf += chunk
+            while b"\n" in buf and stage < len(stages):
+                line, buf = buf.split(b"\n", 1)
+                message = line.decode(errors="replace")
+                name, trigger, enabled = stages[stage]
+                if "cdj850-panel: display " in message or "input " in message:
+                    observed.append(message)
+                if trigger not in message:
+                    continue
+
+                live, replay, prefix = _capture_replay_snapshot(
+                    qmp, tmp_path, name, capture, scif1_replay_exe)
+                pages = list(_captured_status_pages(prefix))
+                page = next(frame for frame in reversed(pages) if frame is not None and frame[0] == 2)
+                assert page[7] == (0x8F if enabled else 0x1F), name
+
+                blue, background = b"\x9f\xe8\xff", b"\x06\x0b\x10"
+                border = (452 * 1280 + 1159) * 3
+                assert live[border:border + 3] == (blue if enabled else background), name
+                assert live == replay, name
+                stage += 1
+                if stage < len(stages):
+                    deadline = time.monotonic() + 180
+                    _qmp_execute(qmp, "cont")
+
+    assert stage == len(stages), (
+        f"Missing {stages[stage][0]}; display log:\n" + "\n".join(observed)
+    )
+
+
+def _captured_playing_packets(prefix):
+    memory = waveform = None
+    wave = []
+    for line in prefix.read_text().splitlines()[1:]:
+        cols = line.split()
+        if cols[0] != "T" or int(cols[4]) < 2:
+            continue
+        for field in cols[5:]:
+            frame = bytes.fromhex(field.split(":")[1])
+            if sum8ec(frame[:15]) != frame[15]:
+                continue
+            if frame[0] == 0x60:
+                memory = frame[2:15]
+            elif frame[0] == 0x70:
+                wave = [frame[3:15]]
+            elif wave and frame[0] == 0x70 + len(wave):
+                wave.append(frame[1:15])
+                if frame[0] == 0x77:
+                    waveform = b"".join(wave)[:100]
+                    wave = []
+    assert memory is not None
+    return memory, waveform
+
+
+def test_live_scif1_playing_fields_match_replay(tmp_path, scif1_replay_exe):
+    image = os.environ.get("CDJ850_PLAYING_TEST_IMAGE")
+    if not image:
+        pytest.skip("set CDJ850_PLAYING_TEST_IMAGE to the SCIF ARTIST export")
+    script = ("6000:usb:200,7600:rot+2,9000:enter:200,11500:enter:200,"
+              "15000:play:200,16800:cue:200,20300:next:200,25000:usb_stop:1500")
+    capture = tmp_path / "playing.scif1"
+    stages = [
+        ("loaded-128", ("[GRID128]", "[SCIF ARTIST]"), {12, 36, 66}, 0),
+        ("cue-set", ("display playing ", "cue=2 ("), {12, 36, 66}, 2),
+        ("loaded-96", ("[GRID96]", "[SCIF ARTIST]"), set(), 0),
+        ("unloaded", ("[NO USB]",), set(), 0),
+    ]
+    waveforms = {}
+    observed = []
+    rows = ""
+    wave_ready = False
+    stage = 0
+    deck = _live_usb_deck(tmp_path, script, capture, usb_image=image)
+    with deck as (p, qmp), selectors.DefaultSelector() as sel:
+        sel.register(p.stderr, selectors.EVENT_READ)
+        deadline = time.monotonic() + 180
+        buf = b""
+        while time.monotonic() < deadline and stage < len(stages):
+            if not sel.select(timeout=0.3):
+                continue
+            chunk = os.read(p.stderr.fileno(), 16384)
+            if not chunk:
+                break
+            buf += chunk
+            while b"\n" in buf and stage < len(stages):
+                line, buf = buf.split(b"\n", 1)
+                if b"cdj850-panel: display" not in line:
+                    continue
+                message = line.decode(errors="replace")
+                observed.append(message)
+                if "display mode=" in message:
+                    rows = message
+                if "display playing " in message:
+                    wave_ready = "wave=1 " in message
+                name, triggers, expected_memory, expected_cue = stages[stage]
+                if name.startswith("loaded"):
+                    # The title and the complete overview can arrive in either order.
+                    if not wave_ready or not all(trigger in rows for trigger in triggers):
+                        continue
+                elif not all(trigger in message for trigger in triggers):
+                    continue
+
+                live, replay, prefix = _capture_replay_snapshot(
+                    qmp, tmp_path, name, capture, scif1_replay_exe)
+                assert live == replay, name
+                page = next(frame for frame in reversed(list(_captured_status_pages(prefix)))
+                            if frame is not None and frame[0] == 2)
+                memory, wave = _captured_playing_packets(prefix)
+                assert {x for x in range(100) if memory[x // 8] & (0x80 >> (x % 8))} == expected_memory
+                assert (page[10], bool(page[11] & 0x10)) == (expected_cue, bool(expected_memory)), name
+
+                def rgb(x, y):
+                    offset = (y * 1280 + x) * 3
+                    return live[offset:offset + 3]
+
+                red, green, blue = b"\xff\x58\x4c", b"\x68\xe4\xa5", b"\x9f\xe8\xff"
+                playing = name != "unloaded"
+                assert (rgb(52, 390) == red) == bool(expected_memory), name
+                assert (rgb(52, 424) == blue) == bool(expected_cue), name
+                if playing:
+                    assert wave is not None and len(wave) == 100 and max(wave) == 15, name
+                    waveforms[name] = wave
+                    assert any(rgb(176 + x * 9, 166 + y * 8) == blue
+                               for x in range(8, 60) for y in range(11, 18)), name
+                for x in range(100):
+                    px = 176 + x * 9
+                    assert (rgb(px, 391) == red) == (x in expected_memory), (name, x)
+                    assert (rgb(px, 407) == green) == (playing and x < page[4]), (name, x)
+                    assert (rgb(px, 439) == blue) == (x + 1 == expected_cue), (name, x)
+                    # Message mode can light the five-column navigation rail.
+                    if playing or x >= 5:
+                        height = (wave[x] + 2) // 3 if playing else 0
+                        for y in range(5):
+                            assert (rgb(px, 166 + (26 - y) * 8) == blue) == (y < height), (name, x, y)
+                stage += 1
+                if stage < len(stages):
+                    deadline = time.monotonic() + 180
+                    _qmp_execute(qmp, "cont")
+
+    assert stage == len(stages), (
+        f"Missing {stages[stage][0]}; latest display log:\n" + "\n".join(observed[-35:])
+    )
+    assert waveforms["loaded-128"] == waveforms["cue-set"]
+    assert waveforms["loaded-128"] != waveforms["loaded-96"]

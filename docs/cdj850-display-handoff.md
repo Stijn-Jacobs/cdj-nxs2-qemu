@@ -16,7 +16,8 @@ contains the complete environment commands if it is missing. Check `CDJ_ROOT`,
 or emulator test. They must resolve to this worktree, not the active DSP checkout.
 The private QEMU v11.1.2 build, prepared firmware, and verified SCIF1
 captures are ready in this worktree. Step 4 has integrated the track
-number, time readout, REMAIN indication, BPM, pitch and range, and MASTER TEMPO.
+number, time readout, REMAIN, BPM, pitch and range, MASTER TEMPO, A.CUE,
+the navigation lamps, and the now-playing overview.
 
 ## What is complete
 
@@ -55,13 +56,26 @@ number, time readout, REMAIN indication, BPM, pitch and range, and MASTER TEMPO.
   and center over SCIF1. The tests and captures are under `runs/scif1-pitch/`.
 - The red MASTER TEMPO legend follows bit 7 of MAIN status page `0x02`
   byte 11. The tests and captures are under `runs/scif1-master-tempo/`.
+- The A.CUE legend follows bit 0 of MAIN status page `0x02` byte 12.
+  The tests use short and long presses of TIME MODE/AUTO CUE. Evidence
+  is under `runs/scif1-auto-cue/`.
+- INFO follows bit 6 of MAIN status page `0x02` byte 7. The USB probe
+  distinguishes INFO, BROWSE, TAG LIST, and an INFO-active dialog.
+  Evidence is under `runs/scif1-info/`.
+- BROWSE follows bit 4 of MAIN status page `0x02` byte 7. Live and
+  replay captures distinguish NO DISC, the USB root, the BROWSE file
+  list, INFO, and TAG LIST. Evidence is under `runs/scif1-browse/`.
+- The MENU badge follows the firmware-controlled button LED. TAG LIST
+  uses the corresponding DATA FL legend. Evidence is under `runs/scif1-menu/`.
+- The artist, waveform, saved memory positions, progress, and current cue
+  use MAIN text, status, and auxiliary frames. The analyzed USB fixture
+  and captures are under `runs/scif1-playing/`.
 
 ## What is still incomplete
 
-Live adapter input reaches track number, time, REMAIN, BPM, pitch percentage
-and range, MASTER TEMPO, mode, text rows, and selection tags. Most other lamps, artist
-metadata, waveform, and strip masks remain unmapped. The loaded preview's waveform is an offline fixture. INFO is currently inferred from loaded
-mode. See the plan for explicit known-state APIs and reset work.
+The renderer still needs panel-side evidence for exact scroll timing,
+blink behavior, and the unobserved character glyphs. The long-name
+SCIF1 probe is under `runs/scif1-panel-boundary/`.
 The photographed font is not a complete arbitrary charset. Some glyphs and the
 final p stem are approximate because of glare/obscured dots. Optics remain
 approximate. The user has no deck at hand and will supply video later.
@@ -80,7 +94,7 @@ approximate. The user has no deck at hand and will supply video later.
   `loaded --photo-readouts` fixture; never wire its values into live state.
 - `vfd.c`/`vfd.h`: graphic-console adapter and legacy diagnostic accessor.
 - `panel_peer.c`: SCIF1 transaction handling and opt-in MAIN TX capture.
-- `panel_display.c` and `panel_display.h`: shared text/header decoder.
+- `panel_display.c` and `panel_display.h`: shared display decoder.
 - `scripts/debug/cdj850_scif1_replay.c`: offline reader for captured transactions.
 
 SSU0 is the audio DSP link. `vfd_note_tx()` is retained diagnostic compatibility,

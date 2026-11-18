@@ -4,6 +4,7 @@
 #define CDJ850_VFD_H
 #include "cdj_common.h"
 #include "vfd_pitch.h"
+#include "vfd_playing.h"
 #include "vfd_time.h"
 
 /* Create the deck window. Safe headless (no window without a display). */
@@ -34,6 +35,17 @@ void vfd_note_pitch(const Cdj850Pitch *pitch);
 
 /* MASTER TEMPO lamp from the SCIF1 status flags. */
 void vfd_note_master_tempo(bool enabled);
+
+/* A.CUE lamp from the SCIF1 status flags. */
+void vfd_note_auto_cue(bool enabled);
+
+/* Navigation lamps from the SCIF1 status flags. */
+void vfd_note_info(bool enabled);
+void vfd_note_browse(bool enabled);
+void vfd_note_tag_list(bool enabled);
+void vfd_note_menu(bool enabled);
+
+void vfd_note_playing(const Cdj850Playing *playing);
 
 /* Selection tags decoded from the SCIF1 text records (bit 5 highlights). */
 void vfd_note_panel_tags(const uint8_t tags[3]);

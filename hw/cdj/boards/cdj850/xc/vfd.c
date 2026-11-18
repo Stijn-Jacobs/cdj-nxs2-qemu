@@ -145,6 +145,42 @@ void vfd_note_master_tempo(bool enabled)
     vfd.dirty = true;
 }
 
+void vfd_note_auto_cue(bool enabled)
+{
+    vfd.display.auto_cue = enabled;
+    vfd.dirty = true;
+}
+
+void vfd_note_info(bool enabled)
+{
+    vfd.display.info_lamp = enabled;
+    vfd.dirty = true;
+}
+
+void vfd_note_browse(bool enabled)
+{
+    vfd.display.browse_lamp = enabled;
+    vfd.dirty = true;
+}
+
+void vfd_note_menu(bool enabled)
+{
+    vfd.display.menu_lamp = enabled;
+    vfd.dirty = true;
+}
+
+void vfd_note_tag_list(bool enabled)
+{
+    vfd.display.tag_list_lamp = enabled;
+    vfd.dirty = true;
+}
+
+void vfd_note_playing(const Cdj850Playing *playing)
+{
+    vfd.display.playing = *playing;
+    vfd.dirty = true;
+}
+
 void vfd_note_panel_tags(const uint8_t tags[3])
 {
     memcpy(vfd.display.tags, tags, sizeof(vfd.display.tags));

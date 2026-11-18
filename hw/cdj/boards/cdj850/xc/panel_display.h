@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include "panel_wire.h"
 #include "vfd_pitch.h"
+#include "vfd_playing.h"
 #include "vfd_time.h"
 
 #define PANEL_DISP_ROWS 3
@@ -22,9 +23,15 @@ typedef struct PanelDisplayState {
     unsigned updates;
     Cdj850Time time;
     Cdj850Pitch pitch;
+    Cdj850Playing playing;
     uint16_t bpm;
     bool bpm_known;
     bool master_tempo;
+    bool auto_cue;
+    bool info_lamp;
+    bool browse_lamp;
+    bool tag_list_lamp;
+    bool menu_lamp;
     uint8_t track_number;
     bool track_known;
     bool valid;
@@ -42,6 +49,8 @@ typedef struct PanelDisplay {
     bool header_only;
     bool have_pitch_flags;
     uint8_t pitch_sign, pitch_decimal_flags, pitch_range_flags;
+    uint8_t pending_waveform[CDJ850_OVERVIEW_COLUMNS];
+    unsigned next_wave_part;
 } PanelDisplay;
 
 typedef enum PanelDisplayField {
@@ -52,6 +61,12 @@ typedef enum PanelDisplayField {
     PANEL_DISPLAY_BPM,
     PANEL_DISPLAY_PITCH,
     PANEL_DISPLAY_MASTER_TEMPO,
+    PANEL_DISPLAY_AUTO_CUE,
+    PANEL_DISPLAY_INFO,
+    PANEL_DISPLAY_BROWSE,
+    PANEL_DISPLAY_TAG_LIST,
+    PANEL_DISPLAY_MENU,
+    PANEL_DISPLAY_PLAYING,
 } PanelDisplayField;
 
 typedef void (*PanelDisplayUpdate)(const PanelDisplayState *state,

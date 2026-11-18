@@ -30,6 +30,10 @@ static void publish_header(PanelDisplay *display, PanelDisplayUpdate update,
     bool changed = header_changed(display);
 
     display->header_only = false;
+    if (display->state.header[2] != display->pending_header[2]) {
+        display->state.playing.artist_known = false;
+        display->state.playing.artist[0] = '\0';
+    }
     memcpy(display->state.header, display->pending_header, PANEL_FRAME_LEN);
     display->state.valid = true;
     if (changed) {
@@ -44,7 +48,13 @@ static void try_publish_text(PanelDisplay *display, PanelDisplayUpdate update,
         .updates = display->state.updates + 1,
         .time = display->state.time,
         .pitch = display->state.pitch,
+        .playing = display->state.playing,
         .master_tempo = display->state.master_tempo,
+        .auto_cue = display->state.auto_cue,
+        .info_lamp = display->state.info_lamp,
+        .browse_lamp = display->state.browse_lamp,
+        .tag_list_lamp = display->state.tag_list_lamp,
+        .menu_lamp = display->state.menu_lamp,
         .bpm = display->state.bpm,
         .bpm_known = display->state.bpm_known,
         .track_known = display->state.track_known,
@@ -80,6 +90,15 @@ static void try_publish_text(PanelDisplay *display, PanelDisplayUpdate update,
                    memcmp(next.rows, display->state.rows, sizeof(next.rows));
 
     memcpy(next.header, display->pending_header, sizeof(next.header));
+    /* MAIN's loaded-track row 2 uses attribute 0x07 for the artist.
+     * Both text records and their header are published in this update. */
+    next.playing.artist_known = next.header[2] == 0x0a &&
+                                next.attrs[1][0] == 0x07 && next.rows[1][0];
+    if (next.playing.artist_known) {
+        memcpy(next.playing.artist, next.rows[1], sizeof(next.playing.artist));
+    } else {
+        next.playing.artist[0] = '\0';
+    }
     display->state = next;
     display->next_sub = 0;
     update(&display->state, PANEL_DISPLAY_ROWS, changed, opaque);
@@ -138,6 +157,19 @@ void cdj850_panel_display_feed(PanelDisplay *display, const uint8_t tx[16],
     try_publish_text(display, update, opaque);
 }
 
+static void clear_playing(PanelDisplay *display, PanelDisplayUpdate update,
+                          void *opaque)
+{
+    Cdj850Playing *playing = &display->state.playing;
+
+    display->next_wave_part = 0;
+    if (playing->artist_known || playing->waveform_known ||
+        playing->strips_known || playing->memory_lamp) {
+        memset(playing, 0, sizeof(*playing));
+        update(&display->state, PANEL_DISPLAY_PLAYING, true, opaque);
+    }
+}
+
 static void publish_track(PanelDisplay *display, bool known, uint8_t number,
                           PanelDisplayUpdate update, void *opaque)
 {
@@ -146,6 +178,7 @@ static void publish_track(PanelDisplay *display, bool known, uint8_t number,
     if (state->track_known == known && state->track_number == number) {
         return;
     }
+    clear_playing(display, update, opaque);
     state->track_known = known;
     state->track_number = number;
     update(state, PANEL_DISPLAY_TRACK, true, opaque);
@@ -242,6 +275,61 @@ static void publish_master_tempo(PanelDisplay *display, bool enabled,
     }
 }
 
+static void publish_auto_cue(PanelDisplay *display, bool enabled,
+                             PanelDisplayUpdate update, void *opaque)
+{
+    PanelDisplayState *state = &display->state;
+
+    if (state->auto_cue != enabled) {
+        state->auto_cue = enabled;
+        update(state, PANEL_DISPLAY_AUTO_CUE, true, opaque);
+    }
+}
+
+static void publish_info(PanelDisplay *display, bool enabled,
+                         PanelDisplayUpdate update, void *opaque)
+{
+    PanelDisplayState *state = &display->state;
+
+    if (state->info_lamp != enabled) {
+        state->info_lamp = enabled;
+        update(state, PANEL_DISPLAY_INFO, true, opaque);
+    }
+}
+
+static void publish_browse(PanelDisplay *display, bool enabled,
+                           PanelDisplayUpdate update, void *opaque)
+{
+    PanelDisplayState *state = &display->state;
+
+    if (state->browse_lamp != enabled) {
+        state->browse_lamp = enabled;
+        update(state, PANEL_DISPLAY_BROWSE, true, opaque);
+    }
+}
+
+static void publish_menu(PanelDisplay *display, bool enabled,
+                           PanelDisplayUpdate update, void *opaque)
+{
+    PanelDisplayState *state = &display->state;
+
+    if (state->menu_lamp != enabled) {
+        state->menu_lamp = enabled;
+        update(state, PANEL_DISPLAY_MENU, true, opaque);
+    }
+}
+
+static void publish_tag_list(PanelDisplay *display, bool enabled,
+                           PanelDisplayUpdate update, void *opaque)
+{
+    PanelDisplayState *state = &display->state;
+
+    if (state->tag_list_lamp != enabled) {
+        state->tag_list_lamp = enabled;
+        update(state, PANEL_DISPLAY_TAG_LIST, true, opaque);
+    }
+}
+
 void cdj850_panel_display_reset_readouts(PanelDisplay *display, uint64_t ns,
                                         PanelDisplayUpdate update, void *opaque)
 {
@@ -252,6 +340,103 @@ void cdj850_panel_display_reset_readouts(PanelDisplay *display, uint64_t ns,
     display->have_pitch_flags = false;
     publish_pitch(display, (Cdj850Pitch){0}, update, opaque);
     publish_master_tempo(display, false, update, opaque);
+    publish_auto_cue(display, false, update, opaque);
+    publish_info(display, false, update, opaque);
+    publish_browse(display, false, update, opaque);
+    clear_playing(display, update, opaque);
+    publish_tag_list(display, false, update, opaque);
+    publish_menu(display, false, update, opaque);
+}
+
+static void panel_playing_status(PanelDisplay *display, const uint8_t *tx,
+                                 PanelDisplayUpdate update, void *opaque)
+{
+    Cdj850Playing *playing = &display->state.playing;
+    /* MAIN 0x0c0637cc emits a count of progress columns. 0x0c0642cc
+     * emits the one-based cue column, or zero for no cue. */
+    unsigned progress = tx[4] <= CDJ850_OVERVIEW_COLUMNS ? tx[4] : 0;
+    unsigned cue = tx[10] <= CDJ850_OVERVIEW_COLUMNS ? tx[10] : 0;
+    bool memory_lamp = (tx[11] & 0x10) != 0;
+    bool changed = playing->memory_lamp != memory_lamp;
+
+    for (unsigned i = 0; i < CDJ850_OVERVIEW_COLUMNS; i++) {
+        bool past = i < progress;
+        bool cue_here = i + 1 == cue;
+
+        changed |= playing->position[i] != past || playing->cue[i] != cue_here;
+        playing->position[i] = past;
+        playing->cue[i] = cue_here;
+    }
+    playing->memory_lamp = memory_lamp;
+    playing->cue_lamp = cue != 0;
+    if (changed) {
+        playing->strips_known = true;
+        update(&display->state, PANEL_DISPLAY_PLAYING, true, opaque);
+    }
+}
+
+static void panel_auxiliary(PanelDisplay *display, const uint8_t *tx,
+                            PanelDisplayUpdate update, void *opaque)
+{
+    Cdj850Playing *playing = &display->state.playing;
+
+    if (tx[0] != 0x60 && (tx[0] < 0x70 || tx[0] > 0x77)) {
+        return;
+    }
+    if (cdj850_panel_sum8ec(tx, 15) != tx[15]) {
+        if (tx[0] != 0x60) {
+            display->next_wave_part = 0;
+        }
+        return;
+    }
+
+    if (tx[0] == 0x60) {
+        /* 0x0c06664e packs saved cue positions into 13 MSB-first bytes. */
+        bool changed = false;
+
+        for (unsigned i = 0; i < CDJ850_OVERVIEW_COLUMNS; i++) {
+            bool lit = (tx[2 + i / 8] & (0x80 >> (i % 8))) != 0;
+
+            changed |= playing->memory[i] != lit;
+            playing->memory[i] = lit;
+        }
+        if (changed) {
+            playing->strips_known = true;
+            update(&display->state, PANEL_DISPLAY_PLAYING, true, opaque);
+        }
+        return;
+    }
+
+    /* 0x0c0662ae sends a 100-column overview starting at 0x70 byte 3.
+     * A new first frame supersedes incomplete data. Subsequent frames
+     * contribute bytes 1..14, with the final four samples on 0x77. */
+    unsigned part = tx[0] - 0x70;
+    if (part && part != display->next_wave_part) {
+        display->next_wave_part = 0;
+        return;
+    }
+    unsigned offset = part ? 12 + 14 * (part - 1) : 0;
+    unsigned length = part == 7 ? 4 : part ? 14 : 12;
+    const uint8_t *samples = tx + (part ? 1 : 3);
+
+    for (unsigned i = 0; i < length; i++) {
+        if (samples[i] > 15) {
+            display->next_wave_part = 0;
+            return;
+        }
+        display->pending_waveform[offset + i] = (samples[i] + 2) / 3;
+    }
+    display->next_wave_part = part < 7 ? part + 1 : 0;
+    if (part == 7 && memcmp(playing->waveform, display->pending_waveform,
+                            sizeof(playing->waveform)) != 0) {
+        memcpy(playing->waveform, display->pending_waveform,
+               sizeof(playing->waveform));
+        playing->waveform_known = false;
+        for (unsigned i = 0; i < CDJ850_OVERVIEW_COLUMNS; i++) {
+            playing->waveform_known |= playing->waveform[i] != 0;
+        }
+        update(&display->state, PANEL_DISPLAY_PLAYING, true, opaque);
+    }
 }
 
 static void panel_status(PanelDisplay *display, const uint8_t tx[PANEL_FRAME_LEN],
@@ -292,6 +477,15 @@ static void panel_status(PanelDisplay *display, const uint8_t tx[PANEL_FRAME_LEN
         display->have_pitch_flags = true;
         /* MAIN 0x0c06405a sets MT in the flags copied at 0x0c065e42. */
         publish_master_tempo(display, (tx[11] & 0x80) != 0, update, opaque);
+        /* MAIN 0x0c0642c6 sets the A.CUE bit copied at 0x0c065e4e. */
+        publish_auto_cue(display, (tx[12] & 1) != 0, update, opaque);
+        /* MAIN 0x0c063444..0x0c063480 sets the four navigation LEDs.
+         * The copy at 0x0c065e26 puts those bits in this byte. */
+        publish_browse(display, (tx[7] & 0x10) != 0, update, opaque);
+        publish_tag_list(display, (tx[7] & 0x20) != 0, update, opaque);
+        publish_info(display, (tx[7] & 0x40) != 0, update, opaque);
+        publish_menu(display, (tx[7] & 0x80) != 0, update, opaque);
+        panel_playing_status(display, tx, update, opaque);
         /* MAIN 0x0c063bce copies the TIME mode to the page 2 flags. */
         time.remain_known = true;
         time.remain = (tx[13] & 1) != 0;
@@ -304,14 +498,20 @@ void cdj850_panel_display_transaction(PanelDisplay *display, uint64_t start_ns,
                                      const uint8_t tx[][PANEL_FRAME_LEN],
                                      PanelDisplayUpdate update, void *opaque)
 {
+    bool fresh = !display->readout_reset_ns || start_ns > display->readout_reset_ns;
+
     if (count < 2) {
         display->have_pitch_flags = false;
+        display->next_wave_part = 0;
         return;
     }
-    if (!display->readout_reset_ns || start_ns > display->readout_reset_ns) {
+    if (fresh) {
         panel_status(display, tx[0], update, opaque);
     }
     for (unsigned i = 0; i < count; i++) {
+        if (fresh) {
+            panel_auxiliary(display, tx[i], update, opaque);
+        }
         cdj850_panel_display_feed(display, tx[i], update, opaque);
     }
     /* A solitary header is itself an update. Wait as the panel peer does
@@ -379,6 +579,36 @@ void cdj850_panel_display_format(char *out, size_t size,
     } else if (field == PANEL_DISPLAY_MASTER_TEMPO) {
         snprintf(out, size, "cdj850-panel: display master_tempo=%u (%" PRIu64 " ms)",
                  (unsigned)state->master_tempo, ms);
+    } else if (field == PANEL_DISPLAY_AUTO_CUE) {
+        snprintf(out, size, "cdj850-panel: display auto_cue=%u (%" PRIu64 " ms)",
+                 (unsigned)state->auto_cue, ms);
+    } else if (field == PANEL_DISPLAY_INFO) {
+        snprintf(out, size, "cdj850-panel: display info=%u (%" PRIu64 " ms)",
+                 (unsigned)state->info_lamp, ms);
+    } else if (field == PANEL_DISPLAY_BROWSE) {
+        snprintf(out, size, "cdj850-panel: display browse=%u (%" PRIu64 " ms)",
+                 (unsigned)state->browse_lamp, ms);
+    } else if (field == PANEL_DISPLAY_MENU) {
+        snprintf(out, size, "cdj850-panel: display menu=%u (%" PRIu64 " ms)",
+                 (unsigned)state->menu_lamp, ms);
+    } else if (field == PANEL_DISPLAY_TAG_LIST) {
+        snprintf(out, size, "cdj850-panel: display tag_list=%u (%" PRIu64 " ms)",
+                 (unsigned)state->tag_list_lamp, ms);
+    } else if (field == PANEL_DISPLAY_PLAYING) {
+        const Cdj850Playing *playing = &state->playing;
+        unsigned memory = 0, position = 0, cue = 0;
+
+        for (unsigned i = 0; i < CDJ850_OVERVIEW_COLUMNS; i++) {
+            memory += playing->memory[i];
+            position += playing->position[i];
+            if (playing->cue[i]) {
+                cue = i + 1;
+            }
+        }
+        snprintf(out, size,
+                 "cdj850-panel: display playing wave=%u memory=%u position=%u "
+                 "cue=%u (%" PRIu64 " ms)",
+                 (unsigned)playing->waveform_known, memory, position, cue, ms);
     } else if (field == PANEL_DISPLAY_ROWS) {
         const uint8_t (*a)[3] = state->attrs;
 

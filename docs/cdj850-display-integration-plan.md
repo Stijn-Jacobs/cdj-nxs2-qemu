@@ -1,6 +1,6 @@
 # CDJ-850 display integration plan
 
-The isolated QEMU baseline and SCIF1 replay are verified for text, track number, time, BPM, pitch, and MASTER TEMPO.
+The isolated QEMU baseline and SCIF1 replay are verified for text, track number, time, BPM, pitch, MASTER TEMPO, A.CUE, the navigation lamps, and now-playing metadata and overview.
 Prepared 2026-11-18. Companion: [handoff](cdj850-display-handoff.md).
 
 ## Isolation contract
@@ -45,8 +45,8 @@ The original source and build paths remain outside the integration worktree.
 | Console | Private QEMU boot and 1280x480 QMP captures verified | VNC and virtual-deck frontend checks pending |
 | Text | SCIF1 text records feed all three rows; tag bit 5 highlights selection | Most text attributes are retained by panel peer but not forwarded to renderer |
 | Browser | 100x27 matrix, proportional glyphs, nine-dot bands, five-dot rail | Font evidence covers photographed characters, not the entire charset |
-| Fixed legends | Photo-traced REMAIN, INFO, BROWSE, TAG/LIST, A.CUE, MT, WIDE, MEMORY, CUE, BPM, M/S/F | REMAIN, MT, and pitch range follow live status. Other active states need mapping |
-| Playing | Title band/note, explicit artist/overview/strip fields | Only title/mode currently reach adapter; artist, overview and strip masks are fixture-only |
+| Fixed legends | Photo-traced REMAIN, INFO, BROWSE, TAG/LIST, A.CUE, MT, WIDE, MEMORY, CUE, BPM, M/S/F | REMAIN, MT, A.CUE, navigation lamps, and pitch range follow live status. Other active states need mapping |
+| Playing | Title band/note, explicit artist/overview/strip fields | Title, artist, overview, progress, MEMORY and CUE reach the adapter |
 | Numeric/pitch | Live track number, M/S/F time, REMAIN, whole BPM, and signed pitch with range | Other lamp decoding pending |
 | Reference fixtures | Loaded photo values plus approximate sampled waveform | Never treat fixture data as decoded firmware traffic |
 | Persistence | Render state is currently static host state | Reset and migration behavior must be defined; VM save/restore is not established |
@@ -54,8 +54,7 @@ The original source and build paths remain outside the integration worktree.
 `vfd_note_tx()` is legacy **SSU0 audio-DSP diagnostics**, not a display data
 source. The real panel is **SCIF1**. Older bring-up notes claiming otherwise
 are superseded. Do not modify DSP/SSI/interrupt timing to make a display fixture
-appear live. INFO activation from mode 0x0a is presently a mode-based assumption,
-not a decoded lamp bit.
+appear live. INFO follows the status bit described in step 4.
 
 ## Delivery sequence
 
@@ -139,7 +138,8 @@ transaction sequence, start and end virtual nanoseconds, frame count, and a
 `timestamp:hex` pair for every 16-byte MAIN TX frame in wire order. The file
 includes closed zero- or one-frame windows and all received bytes, including
 bad checksums. An `R <virtual ns>` record invalidates the track, time, BPM,
-pitch, and MASTER TEMPO on a warm reset. Earlier captures without reset records can still be replayed.
+pitch, MASTER TEMPO, A.CUE, navigation lamps, and the now-playing overview on a warm reset. Earlier captures without
+reset records can still be replayed.
 A final `LIMIT` line marks a capture stopped at the size cap. An in-flight
 window at exit is outside the capture.
 
@@ -190,8 +190,8 @@ published display state stays intact.
   TIME, tempo range, Master Tempo, INFO, PLAY, CUE, and DISC inputs. All 22
   live entries matched replay, including the three-row DISC confirmation.
   Frames `0x70`–`0x77` were present. Header byte 11 alternated between
-  `0x20` and `0x00` around INFO, but the transition does not establish its
-  meaning. Leave it unmapped pending an isolated repeat and builder evidence.
+  `0x20` and `0x00` around INFO. The later isolated probe also captured
+  that header transition in BROWSE and identified the lamp in status page `0x02`.
 - All 41 CDJ-850 tests passed, including the independent framebuffer smoke test.
   The local logs, recordings, input timeline, and firmware and binary hashes
   are under `runs/scif1-replay/`.
@@ -364,23 +364,164 @@ checkpoints. The full QEMU and replay framebuffers matched byte for byte.
 The captures, framebuffer hashes, and build provenance are under
 `runs/scif1-master-tempo/`.
 
-#### Additional fields (pending)
+#### A.CUE indicator
 
-Extend the typed adapter API for indicators and `FlPlaying`.
+The service manual digest for RRV4128 lists AUTO CUE as a flash-backed key
+status with a factory default of OFF (§8.2). The panel uses the shared
+TIME MODE/AUTO CUE key (§10.8/§10.9).
+
+PyGhidra traced the held-key path in MAIN to the AUTO CUE latch at
+`0x0CE6D0DF`, written at `0x0C0D91E4`. The display writer sets bit 0
+of staging byte `0x0C9D0AF1` at `0x0C0642C6`. The page builder at
+`0x0C065E46`–`0x0C065E4E` copies it to zero-based byte 12 of MAIN TX
+page `0x02`. The short-press path updates REMAIN in byte 13.
+
+The raw probe for MAIN 1.13 held the existing `time` input for 1600 ms
+twice on the DISC screen. Byte 12 went from `0x50` to `0x51` to `0x50`.
+A 200 ms press changed the REMAIN bit while A.CUE stayed dark. The display
+uses the A.CUE bit from complete, checksummed status windows. It clears on
+warm reset until fresh status arrives.
+
+```sh
+source ./env.sh
+/usr/local/bin/python3.11 -m pytest -q \
+  tests/test_cdj850_usb.py::test_live_scif1_auto_cue_matches_replay \
+  tests/test_cdj850_scif1_replay.py::test_replay_auto_cue_status_and_reset
+```
+
+Live QEMU and replay framebuffers matched byte for byte at all four
+checkpoints. Both holds toggled A.CUE while REMAIN stayed off. The
+captures, framebuffer hashes, and build provenance are under
+`runs/scif1-auto-cue/`.
+
+#### INFO indicator
+
+The service manual digest for RRV4128 places INFO on the Panel CPU's KEY4
+ladder (§10.8/§10.9). The service button test also lists its LED separately
+from the diagnostic text (§6, printed page 37).
+
+PyGhidra traced the navigation selection at `0x0CE6D0FD`. MAIN's writer
+in `0x0C062FFC` sets staging byte `0x0C9D0AEB` bit 6 at `0x0C063450`
+when the selector is 0. The writer uses bit 4 for selector 1 and bit 5
+for selector 3. The copy at `0x0C065E1A`–`0x0C065E26` puts those bits
+in zero-based byte 7 of MAIN TX page `0x02`.
+
+In the USB probe, byte 7 was `0x4f` on the loaded INFO page, `0x1f` in
+BROWSE, and `0x2f` in TAG LIST. INFO restored `0x4f` from both views.
+The DISC key brought up a confirmation dialog in text mode `0x07`, and
+the INFO bit stayed set. Text-header byte 11 also toggled `0x20` within
+both BROWSE and INFO, so the renderer uses the status bit for the blue
+INFO legend and border. INFO starts dark and clears on warm reset
+until fresh status arrives.
+
+```sh
+source ./env.sh
+/usr/local/bin/python3.11 -m pytest -q \
+  tests/test_cdj850_usb.py::test_live_scif1_navigation_lamps_match_replay \
+  tests/test_cdj850_scif1_replay.py::test_replay_navigation_status_and_reset
+```
+
+The full live and replay framebuffers matched byte for byte at all seven
+checkpoints, including the DISC confirmation dialog. The captures,
+framebuffer hashes, and build provenance are under `runs/scif1-info/`.
+
+#### BROWSE indicator
+
+The service manual digest for RRV4128 places the BROWSE key on the Panel
+CPU's KEY4 ladder (§10.8/§10.9). The service button test lists its LED
+and the BROWSE diagnostic text (§6, printed page 37).
+
+PyGhidra traced the navigation selector at `0x0CE6D0FD`. When selector 1
+is active in the supported source states, MAIN sets bit 4 of staging byte
+`0x0C9D0AEB` at `0x0C063444`. The copy at `0x0C065E1A`–`0x0C065E26`
+places it in zero-based byte 7 of MAIN TX page `0x02`.
+
+SCIF1 captures show byte 7 at `0x1f` for NO DISC, the USB root, and the
+BROWSE file list. It is `0x4f` in INFO and `0x2f` in the empty TAG LIST.
+NO DISC and the empty TAG LIST both have text mode `0x08`. The blue
+BROWSE legend and border now follow the validated status bit. Reset clears
+the lamp until fresh status arrives.
+
+The navigation tests above cover both BROWSE and INFO. The BROWSE run
+includes the USB root and checks the BROWSE border and glyphs. The full
+live and replay framebuffers matched byte for byte at all eight checkpoints.
+Captures, hashes, and build provenance are under `runs/scif1-browse/`.
+
+#### MENU and TAG LIST
+
+The service manual digest lists MENU and TAG LIST in KEY4 and identifies
+their LEDs in the service button test. The DFLB schematic calls the separate
+MENU button lamp `UTILITY_LED` (§10.8, printed page 81). The all-on DATA FL
+photo shows the TAG LIST legend. The renderer represents the MENU button
+lamp as a blue badge in the lower-right margin.
+
+On MAIN v1.13, holding MENU opens UTILITY and changes status page `0x02`
+byte 7 from `0x1f` to `0x8f`. The lamp stays on after release and goes
+dark when a subsequent press closes UTILITY. PyGhidra shows the navigation
+writer setting bit 7 of staging byte `0x0C9D0AEB` at `0x0C063480`. Selector
+3 sets TAG LIST bit 5 at `0x0C06345C`. The shared page builder copies both
+bits to byte 7 of page `0x02`.
+
+TAG LIST lit in the empty list with byte 7 at `0x2f`, then cleared when INFO
+took over. Live and replay framebuffers matched at four MENU checkpoints
+and eight navigation checkpoints. The captures, hashes, and build evidence
+are under `runs/scif1-menu/`.
+
+#### Now-playing overview, artist, and cue strips
+
+The analyzed USB fixture contains two synthetic tracks with the artist
+`SCIF ARTIST`. GRID128 carries three saved memory cues. GRID96 has an
+independent waveform and an empty memory list.
+
+| Field | MAIN source |
+| --- | --- |
+| Artist | Mode `0x0a`, text row 2 with attribute `0x07`. The row builder at `0x0C0660D4` serializes the attribute and text. |
+| Waveform | `0x0C0662AE` packs 100 samples from `0x0C9D1199` into frames `0x70`–`0x77`. Samples start at byte 3 on `0x70`, run through bytes 1–14 on `0x71`–`0x76`, and end with bytes 1–4 on `0x77`. |
+| MEMORY | `0x0C06664E` packs normalized saved-cue columns MSB first, serialized by `0x0C0664A8` into bytes 2–14 of frame `0x60`. Status page `0x02` byte 11 bit 4 drives the caption. |
+| Progress | `0x0C0637CC` emits a count from 0 to 100 in page `0x02` byte 4. |
+| CUE | `0x0C0642CC` emits the one-based cue column in page `0x02` byte 10. Zero leaves the cue marker and caption dark. |
+
+The renderer groups the firmware's 15 waveform levels into five dot heights
+with three levels per height. The decoder publishes an overview after all
+eight checksummed parts arrive in order. Track number changes and warm reset
+clear cached data. A valid empty waveform or memory bitmap clears that field.
+The next track's title can arrive before its overview, so its waveform stays
+dark until the new burst is complete.
+
+```sh
+source ./env.sh
+CDJ850_PLAYING_TEST_IMAGE="$CDJ_ROOT/runs/scif1-playing/probe/export.img" \
+  /usr/local/bin/python3.11 -m pytest -q \
+    tests/test_cdj850_usb.py::test_live_scif1_playing_fields_match_replay \
+    tests/test_cdj850_scif1_replay.py::test_replay_overview_ignores_partial_and_pre_reset_packets
+```
+
+Full QMP and replay framebuffers matched for GRID128, its current CUE point,
+GRID96, and USB unload. GRID128 displayed saved memory columns 12, 36, and
+66. The fixture generator, input timeline, captures, hashes, and build
+evidence are under `runs/scif1-playing/`. All 59 CDJ-850 tests passed
+across the initial run and the targeted reruns.
+
+#### Panel-side behavior (evidence limit)
+
+Keep the typed `Cdj850Playing` state backed by capture evidence.
 Use explicit known/valid flags and atomic complete-message updates. Clear stale
 metadata/waveform/strip/lamp state on source/track transitions and reset. Keep
 photo fixture initialization confined to the preview tool.
 
-Continue with fixed indicator states, then artist/title attributes, waveform,
-and lower strip messages. Apply actual text
-attributes once mapped; do not equate a renderer row with a semantic field
-without protocol evidence. Lower strip names currently describe appearance,
-not proven hardware semantics. Preserve the two-line diagnostic accessor while
+The long-name probe held a 62-character title and a 45-character artist
+on the deck for more than 18 seconds and pressed INFO again. Each mode
+`0x0a` update carried the same full strings. Header byte 11 changed,
+but the capture contained no successive text slices. The service manual
+identifies IC1007 (PEG799A8) as the processor that drives the DATA FL.
+The available firmware image contains MAIN, and the captures end at the
+MAIN-to-panel link. Exact scrolling cadence, remaining animation timing,
+and the original glyph rendering need the panel firmware or a synchronized
+capture of its glass output. The probe is under `runs/scif1-panel-boundary/`. Preserve the two-line diagnostic accessor while
 existing tests/scripts depend on it.
 
 Acceptance per field: known-good and malformed-message tests, replay fixture,
 live capture comparison, and an explicit test that absent data remains absent.
-Do not report full now-playing support while its main data is fixture-only.
 
 ### 5. Verify frontend, reset and timing (pending)
 

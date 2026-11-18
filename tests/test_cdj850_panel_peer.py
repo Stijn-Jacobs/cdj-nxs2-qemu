@@ -93,6 +93,13 @@ STUBS = {
         "void vfd_note_bpm(bool known, uint16_t bpm);\n"
         "void vfd_note_pitch(const Cdj850Pitch *pitch);\n"
         "void vfd_note_master_tempo(bool enabled);\n"
+        "void vfd_note_auto_cue(bool enabled);\n"
+        "void vfd_note_info(bool enabled);\n"
+        "#include \"vfd_playing.h\"\n"
+        "void vfd_note_playing(const Cdj850Playing *playing);\n"
+        "void vfd_note_browse(bool enabled);\n"
+        "void vfd_note_tag_list(bool enabled);\n"
+        "void vfd_note_menu(bool enabled);\n"
         "void vfd_note_track_number(bool known, uint8_t number);\n"
         "void vfd_note_panel_tags(const uint8_t tags[3]);\n"
         "void vfd_note_panel_text(uint8_t mode, const char *l0, const char *l1, const char *l2);\n"
@@ -112,6 +119,7 @@ HARNESS = r"""
 #include "panel_peer.h"
 #include "vfd_time.h"
 #include "vfd_pitch.h"
+#include "vfd_playing.h"
 
 uint64_t stub_vms_ns = 0;
 static uint8_t vfd_last_mode = 0xff;
@@ -122,6 +130,12 @@ void vfd_note_time(const Cdj850Time *time) { (void)time; }
 void vfd_note_bpm(bool known, uint16_t bpm) { (void)known; (void)bpm; }
 void vfd_note_pitch(const Cdj850Pitch *pitch) { (void)pitch; }
 void vfd_note_master_tempo(bool enabled) { (void)enabled; }
+void vfd_note_auto_cue(bool enabled) { (void)enabled; }
+void vfd_note_info(bool enabled) { (void)enabled; }
+void vfd_note_browse(bool enabled) { (void)enabled; }
+void vfd_note_playing(const Cdj850Playing *playing) { (void)playing; }
+void vfd_note_tag_list(bool enabled) { (void)enabled; }
+void vfd_note_menu(bool enabled) { (void)enabled; }
 void vfd_note_track_number(bool known, uint8_t number) { (void)known; (void)number; }
 void vfd_note_panel_tags(const uint8_t tags[3]) { (void)tags; }
 
