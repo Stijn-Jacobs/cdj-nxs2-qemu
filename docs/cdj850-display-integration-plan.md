@@ -42,14 +42,14 @@ The original source and build paths remain outside the integration worktree.
 
 | Area | Implemented | Integration gap |
 |---|---|---|
-| Console | Private QEMU boot and 1280x480 QMP captures verified | VNC and virtual-deck frontend checks pending |
+| Console | Private QEMU boot, 1280x480 VNC RFB, QMP screendumps, and desktop face/jog display verified | Physical-player video checks for panel-side scroll/blink/waveform timing pending |
 | Text | SCIF1 text records feed all three rows; tag bit 5 highlights selection | Most text attributes are retained by panel peer but not forwarded to renderer |
 | Browser | 100x27 matrix, proportional glyphs, nine-dot bands, five-dot rail | Font evidence covers photographed characters, not the entire charset |
 | Fixed legends | Photo-traced REMAIN, INFO, BROWSE, TAG/LIST, A.CUE, MT, WIDE, MEMORY, CUE, BPM, M/S/F | REMAIN, MT, A.CUE, navigation lamps, and pitch range follow live status. Other active states need mapping |
 | Playing | Title band/note, explicit artist/overview/strip fields | Title, artist, overview, progress, MEMORY and CUE reach the adapter |
 | Numeric/pitch | Live track number, M/S/F time, REMAIN, whole BPM, and signed pitch with range | Other lamp decoding pending |
 | Reference fixtures | Loaded photo values plus approximate sampled waveform | Never treat fixture data as decoded firmware traffic |
-| Persistence | Render state is currently static host state | Reset and migration behavior must be defined; VM save/restore is not established |
+| Persistence | Display/VFD/peripheral warm `system_reset` invalidation + clean reboot and VMState save/restore (`test_cdj850_snapshot.py`) verified | Physical-player comparison across live power/standby flows pending |
 
 `vfd_note_tx()` is legacy **SSU0 audio-DSP diagnostics**, not a display data
 source. The real panel is **SCIF1**. Older bring-up notes claiming otherwise
@@ -533,26 +533,28 @@ existing tests/scripts depend on it.
 Acceptance per field: known-good and malformed-message tests, replay fixture,
 live capture comparison, and an explicit test that absent data remains absent.
 
-### 5. Verify frontend, reset and timing (pending)
+### 5. Verify frontend, reset and timing (completed; hardware video items deferred)
 
-Check direct console and VNC/virtual-deck paths for dynamic framebuffer size,
-aspect ratio, inactive segments and label tint. The app can use VNC; do not
-assume this board writes the other models' RGB565 frame-file format. Check
-ordinary text and inverse text with long titles, punctuation and unknown glyphs.
+Verified across direct QEMU console, `1280x480` VNC RFB + QMP screendumps, and
+the desktop virtual-deck app face (`app/faces/cdj850.json`,
+`app/cdj850_panel.py`, `tests/test_app_faces.py`): dynamic `FlCanvas`
+padded-stride bounds (`640x240`, `1320x500`, `test_cdj850_vfd_render.py`),
+inactive segment and red/blue label tinting, and long (>60 char), inverse
+(`0x25`), punctuation, high-byte (`0x80..0xfe`), and control (`1..31`) glyphs.
 
-Define reset invalidation and state reconstruction. Either add complete
-migration state for the display and its producer, or explicitly keep saved-deck
-support unsupported for this board. Optimize redraws on actual state changes
-only after correctness is established.
+Reset invalidation, warm `system_reset` reboot recovery (`ae65363` resetting
+DSP56371/SHI/INTC/on-chip peripherals + readout/VFD clearing in `vfd.c`),
+VMState save/restore (`test_cdj850_snapshot.py`), change-only VFD redraw guards
+(`vfd.c`, `test_cdj850_vfd.py::test_change_only_redraws`), and automated live
+rekordbox export coverage (`test_live_scif1_bpm_matches_replay` and
+`test_live_scif1_playing_fields_match_replay` in `tests/test_cdj850_usb.py`) are
+implemented and verified.
 
-The user will provide a physical-player video later. Until then, scrolling,
-other panel-side blink behavior and waveform animation remain unverified.
-Do not invent timings and call them 1:1 behavior.
-
-Acceptance: documented static visual coverage, replay/live evidence, reset
-checks and frontend smoke tests. Keep visual tolerances for geometry distinct
-from photo bloom, glare and exposure. Broader DSP/audio validation is required
-before merging an updated DSP baseline; this display work does not establish it.
+Remaining hardware-reference gaps (waiting on physical-player video from the
+user): IC1007-side scrolling cadence, other panel-side blink behavior, and
+waveform animation timing. Do not invent timings and call them 1:1 behavior.
+Broader DSP/audio real-time performance validation also remains separate from
+this display work and is tracked separately.
 
 ## Return path
 
