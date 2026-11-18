@@ -37,9 +37,12 @@ on an emulated Pro DJ Link network, where MASTER and SYNC work between them.
 Plug in a MIDI controller and it plays them, or use the [virtual deck](docs/using-the-deck.md#virtual-deck).
 
 Seven older players have experimental emulation. The **CDJ-850** is in
-active bring-up in this fork: it boots its own firmware, browses and loads
-from USB, and its emulated DSP56371 plays the audio correctly, though not
-yet in real time (see [CDJ-850](#cdj-850)). The [status table](#supported-players)
+active bring-up in this fork: it boots through its flash bootloader and RTOS,
+browses and loads from USB, supports CUE, loops, memory cues, pitch fader and
+jog bend/scratch, renders the reconstructed DATA FL display, supports live
+save/restore and mod patching (`tempo_wide`, `dsp_probe`), and runs its own
+DSP56371 program (exact offline audio under `-icount`; host-dependent in real
+time — see [CDJ-850](#cdj-850)). The [status table](#supported-players)
 separates usable features from ongoing work.
 
 > This is a fork of [Stijn-Jacobs/cdj-nxs2-qemu](https://github.com/Stijn-Jacobs/cdj-nxs2-qemu)
@@ -106,7 +109,7 @@ show the firmware interface, not a claim of feature parity.
 | **CDJ-2000NXS** | 🧪 Experimental | Loads and plays from USB in real time with the DSP module setup builds. PLAY, CUE, tempo and jog work. Two decks link. |
 | **CDJ-900** | 🧪 Experimental | Loads and plays from USB; its display shows the overview, playhead and time. |
 | **CDJ-2000** | 🧪 Experimental | Loads and plays from USB in real time with the DSP module setup builds. PLAY, CUE, tempo and jog work. Two decks link. |
-| **CDJ-850** | 🧪 Experimental (bring-up) | Boots the real firmware, browses and loads from USB, plays, pauses and restarts (VINYL brake). The emulated DSP56371 outputs the correct audio (exact under `-icount` with `CDJ850_DSP_IPS=2048`; real-time `CDJ850_DSP_IPS=750` runs on a worker thread and depends on host single-thread speed). DATA FL display reconstructed; input is scripted panel events. See [CDJ-850](#cdj-850). |
+| **CDJ-850** | 🧪 Experimental (bring-up) | Boots the real firmware through flash (`PERSIST=1` keeps settings), browses/loads from USB, plays with DSP56371 audio (exact under `-icount` with `CDJ850_DSP_IPS=2048`; real-time `CDJ850_DSP_IPS=750` depends on host speed). CUE, loops, memory cues, pitch fader, jog bend/scratch, `savevm`/snapshot restore, desktop face/keyboard input, DATA FL display reconstruction, and mod framework integration work. See [CDJ-850](#cdj-850). |
 
 <!-- feature-matrix:start -->
 <details>
@@ -122,21 +125,21 @@ show the firmware interface, not a claim of feature parity.
 | Sound | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | ⚠️<sup>10</sup> |
 | Real time with the setup DSP module | ✅ | ✅ | ⚠️<sup>1</sup> | ✅ | ⚠️<sup>2</sup> | ✅ | · | ✅ | ❌<sup>10</sup> |
 | **Display** | | | | | | | | |
-| Waveform / overview | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
-| Tempo and BPM readout | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Waveform / overview | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️<sup>11</sup> |
+| Tempo and BPM readout | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️<sup>12</sup> |
 | **Transport** | | | | | | | | |
 | PLAY / pause | ✅ | ✅ | ⚠️<sup>3</sup> | ✅ | ⚠️<sup>3</sup> | ✅ | ✅ | ✅ | ✅ |
-| CUE | ✅ | ✅ | · | ✅ | · | ✅ | · | ✅ | · |
+| CUE | ✅ | ✅ | · | ✅ | · | ✅ | · | ✅ | ✅ |
 | **Tempo** | | | | | | | | |
-| Tempo fader | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | · |
-| MASTER TEMPO | ⚠️<sup>4</sup> | ⚠️<sup>5</sup> | ⚠️<sup>5</sup> | ⚠️<sup>5</sup> | ⚠️<sup>5</sup> | · | · | · | · |
+| Tempo fader | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | ✅ |
+| MASTER TEMPO | ⚠️<sup>4</sup> | ⚠️<sup>5</sup> | ⚠️<sup>5</sup> | ⚠️<sup>5</sup> | ⚠️<sup>5</sup> | · | · | · | ⚠️<sup>13</sup> |
 | **Jog** | | | | | | | | |
-| Pitch bend | ✅ | · | · | ✅ | · | ✅ | · | ✅ | · |
-| Vinyl / scratch | ⚠️<sup>6</sup> | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | · |
+| Pitch bend | ✅ | · | · | ✅ | · | ✅ | · | ✅ | ✅ |
+| Vinyl / scratch | ⚠️<sup>6</sup> | ✅ | ✅ | ✅ | ✅ | ✅ | · | ✅ | ✅ |
 | Needle search | ✅ | · | · | · | ➖ | · | ➖ | · | ➖ |
 | **Performance** | | | | | | | | |
 | Hot cues | ✅ | · | · | · | ➖ | · | ➖ | · | ➖ |
-| Loops | ⚠️<sup>7</sup> | · | · | · | · | · | · | · | · |
+| Loops | ⚠️<sup>7</sup> | · | · | · | · | · | · | · | ✅ |
 | Beat jump | · | · | · | · | ➖ | ➖ | ➖ | ➖ | ➖ |
 | Slip | ⚠️<sup>8</sup> | · | · | · | · | · | · | ➖ | ➖ |
 | **Interface** | | | | | | | | |
@@ -156,6 +159,9 @@ Firmware: CDJ-2000NXS2 1.87, XDJ-1000MK2 1.45, XDJ-700 1.15, XDJ-1000 1.13, CDJ-
 8. The slipped playback is not checked yet.
 9. The CDJ-850 has no Ethernet port.
 10. The DSP output is correct (checked under `-icount` with `CDJ850_DSP_IPS=2048`). Real-time playback (`CDJ850_DSP_IPS=750`, ~66.2 MIPS) runs the DSP on a worker thread; the predecoded interpreter reaches ~95 MIPS on unthrottled CPUs (~53 MIPS at a 1.9 GHz thermal cap), while default `CDJ850_DSP_IPS=256` avoids host overload.
+11. The playing overview, artist line, cue/memory strips, and cue/memory lamps decode and render in SCIF1 replay (`test_cdj850_scif1_replay.py`); live rekordbox export playback and the jog display are not yet covered.
+12. Tempo pitch percentage and range (`±6`/`±10`/`±16`/`WIDE`) are verified live (`test_cdj850_usb.py`); BPM decoding and rendering are verified on SCIF1 captures in replay tests.
+13. MASTER TEMPO key toggle and lamp are tested live (`test_cdj850_usb.py`); audio throughput with MASTER TEMPO active is not measured yet.
 
 </details>
 <!-- feature-matrix:end -->
@@ -172,18 +178,33 @@ this project (`hw/cdj/boards/cdj850/dsp56300.c`).
 
 **What works, measured:**
 
-- Boot through the bootloader in flash, RTOS start, panel link and DSP upload.
+- Boot through the bootloader in flash, RTOS start, panel link and DSP upload;
+  service USB updater tested against flash `RY/BY#` (`PC2`).
 - USB stick: mount, browse, move the cursor and load a track.
-- Playback: the firmware auto-plays a freshly loaded track. In VINYL mode
-  (the default) PLAY brakes the deck to a stop and PLAY again spins it back to
-  1.0×. The DSP's output is a clean, correctly pitched signal. In CDJ mode a
-  pause keeps replaying a short window around the pause point, as the real
-  unit does.
-- The DATA FL display reconstructs the glass from photos of a real unit.
-  It shows browser text, selection, track number, elapsed or remaining time,
-  and BPM when MAIN sends a reading.
+- Transport and deck controls: PLAY/pause (VINYL brake & spin-up, CDJ pause loop),
+  CUE, LOOP IN / OUT / RELOOP, MEMORY / CALL / DELETE, pitch fader (`±6`/`±10`/`±16`/`WIDE`),
+  CDJ jog pitch bend, and VINYL top touch + scratch direction.
+- Live input and virtual deck: host keyboard shortcuts, desktop app face profile
+  ([`app/faces/cdj850.json`](app/faces/cdj850.json)), lamp TX over `cdj_pnl_stateout`,
+  live UDP control socket (`CDJ_PANEL_KEYSOCK`), and scripted `CDJ850_PANEL_SCRIPT`
+  events (`pitch=`, `fader=`, `jog`, `vinyl=`).
+- The DATA FL display reconstructs the glass from hardware photos and SCIF1 captures:
+  3-line browser text and selection tags, track number, elapsed/remaining time,
+  pitch % / range, BPM, playing overview/strips, and panel lamps (`MASTER TEMPO`,
+  `A.CUE`, `INFO`, `BROWSE`, `TAG LIST`, `MENU`, `MEMORY`, `CUE`).
+- Save/restore and persistence: QMP `savevm`/`migrate` snapshot restore with USB
+  storage attached (`usb`, `intc`, `dsp_shi`, `vfd`, `panel_peer`, `dsp56300`), and
+  `PERSIST=1` per-deck flash copies preserving the `0x3F8000` user settings sector.
+- Firmware modding and repacking: `C850MAIN.UPD` repacker (`scripts/firmware/c850_repack.py`),
+  SH-2A big-endian `bootcrit` / `validate.py`, `patch_main.py --flash` / `patch_update.py --model cdj850`,
+  4-stage DSP56371 SHI segment patching and boot check (`DspShiProfile`), and initial mods
+  ([`mods/tempo_wide`](mods/tempo_wide/mod.conf), [`mods/dsp_probe`](mods/dsp_probe/mod.conf)).
 
-**Not yet:** reliable real-time audio on thermally throttled laptops (`CDJ850_DSP_IPS` defaults to `256`; set `CDJ850_DSP_IPS=750` on fast/unthrottled hosts or use `-icount` + `2048` for exact offline audio), the full waveform overview, and the CD servo. Pitch fader, jog, CUE/loop/memory controls, `CDJ_PANEL_KEYSOCK`/host keyboard input, `savevm`/snapshot restore, and the CDJ-850 mod framework profile (`tempo_wide`, `dsp_probe`) are integrated.
+**Not yet:** reliable real-time audio on thermally throttled laptops (`CDJ850_DSP_IPS`
+defaults to `256`; set `CDJ850_DSP_IPS=750` on fast/unthrottled hosts or use `-icount` + `2048`
+for exact offline audio), the jog display and remaining unmapped panel/metadata fields,
+Panel CPU firmware extraction (panel side is emulated as a behavioral peer), the CD servo,
+and testing packed updates on physical hardware.
 
 **Run it:**
 
@@ -192,23 +213,28 @@ this project (`hw/cdj/boards/cdj850/dsp56300.c`).
 ./start.sh --model cdj850
 ```
 
-Drive the panel with `CDJ850_PANEL_SCRIPT`, a comma-separated list of
-`<ms>:<button>[:<hold_ms>]` presses and `<ms>:rot+N` / `<ms>:rot-N` turns of
-the browse encoder, in virtual milliseconds. This one inserts the stick,
-opens it, moves down one entry, loads the track, and presses PLAY twice
-(brake, restart):
+Keep the emulated flash (including user settings at `0x3F8000`) across launches with
+`PERSIST=1 ./start.sh --model cdj850`. Drive the panel interactively with the QEMU
+window keyboard or virtual deck app (`CDJ_PANEL_KEYSOCK`), or script events in virtual
+milliseconds with `CDJ850_PANEL_SCRIPT`:
 
 ```sh
 CDJ850_PANEL_SCRIPT=6000:usb,9000:enter,11000:rot+1,13000:enter,19000:play,24000:play \
   ./start.sh --model cdj850
 ```
 
-Use `<ms>:fader=<0-1023>` to move the TEMPO fader. The center is 512.
-Use the `tempo` button to cycle the firmware's available pitch ranges.
+Pitch and jog script actions accept `<ms>:fader=<0-1023>` (`512` centre),
+`<ms>:pitch=<0x0000-0xffff>` / `pitch+/-N`, `<ms>:jog+/-N[:period]` / `jog=0`, and
+`<ms>:vinyl=<0-255>`. Button names include `play`, `cue`, `usb`, `enter`, `back`,
+`browse`, `vinyl`, `master_tempo`, `tempo`, `time`, `eject`, the loop and beat buttons,
+and the track/search keys; the full list is in `hw/cdj/boards/cdj850/xc/panel_peer.c`.
 
-Button names include `play`, `cue`, `usb`, `enter`, `back`, `browse`,
-`vinyl`, `master_tempo`, `eject`, the loop and beat buttons and the
-track/search keys; the full list is in `hw/cdj/boards/cdj850/xc/panel_peer.c`.
+To patch a `C850MAIN.UPD` update with CDJ-850 mods and run static/boot-critical checks:
+
+```sh
+python3 mods/patch_update.py --model cdj850 path/to/C850MAIN.UPD C850MAIN_MOD.UPD tempo_wide dsp_probe
+python3 mods/validate.py --model cdj850 --stock path/to/C850MAIN.UPD C850MAIN_MOD.UPD
+```
 
 **For firmware modding**, two things make runs repeatable:
 
@@ -221,10 +247,10 @@ track/search keys; the full list is in `hw/cdj/boards/cdj850/xc/panel_peer.c`.
   sample to produce the exact audio. `CDJ850_DSP_DEBUG=1` prints the DSP's
   state every 500 ms of virtual time.
 
-**Tests:** `python3 -m pytest tests/test_cdj850_*.py`. The live test boots
-the firmware under icount with the script above and checks each step from MAIN's
-RAM (browse, load, auto-play, brake to a stop, restart); the DSP opcode tests
-use real firmware encodings. Tests that need the firmware or a built emulator
+**Tests:** `python3 -m pytest tests/test_cdj850_*.py`. The CDJ-850 suite covers
+unit/C-harness tests (`panel_peer`, `panel_link`, `vfd`, `vfd_render`, `scif1_replay`,
+`dsp56300`, `c850_repack`) alongside live QEMU `-icount` end-to-end tests (`usb`,
+`controls`, `snapshot`, `mods`). Tests that need `C850MAIN.UPD` or a built emulator
 skip without them.
 
 The bring-up log, with every address, decoded handler and environment knob, is
