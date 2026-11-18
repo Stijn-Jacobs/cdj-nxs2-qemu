@@ -106,7 +106,7 @@ show the firmware interface, not a claim of feature parity.
 | **CDJ-2000NXS** | 🧪 Experimental | Loads and plays from USB in real time with the DSP module setup builds. PLAY, CUE, tempo and jog work. Two decks link. |
 | **CDJ-900** | 🧪 Experimental | Loads and plays from USB; its display shows the overview, playhead and time. |
 | **CDJ-2000** | 🧪 Experimental | Loads and plays from USB in real time with the DSP module setup builds. PLAY, CUE, tempo and jog work. Two decks link. |
-| **CDJ-850** | 🧪 Experimental (bring-up) | Boots the real firmware, browses and loads from USB, plays, pauses and restarts (VINYL brake). The emulated DSP56371 outputs the correct audio, but its interpreter runs well below real time. DATA FL display reconstructed; input is scripted panel events. See [CDJ-850](#cdj-850). |
+| **CDJ-850** | 🧪 Experimental (bring-up) | Boots the real firmware, browses and loads from USB, plays, pauses and restarts (VINYL brake). The emulated DSP56371 outputs the correct audio (exact under `-icount` with `CDJ850_DSP_IPS=2048`; real-time `CDJ850_DSP_IPS=750` runs on a worker thread and depends on host single-thread speed). DATA FL display reconstructed; input is scripted panel events. See [CDJ-850](#cdj-850). |
 
 <!-- feature-matrix:start -->
 <details>
@@ -155,7 +155,7 @@ Firmware: CDJ-2000NXS2 1.87, XDJ-1000MK2 1.45, XDJ-700 1.15, XDJ-1000 1.13, CDJ-
 7. Loops engage in only some runs.
 8. The slipped playback is not checked yet.
 9. The CDJ-850 has no Ethernet port.
-10. The DSP output is correct (checked under `-icount`), but the DSP56300 interpreter runs at about 46 MIPS where real time needs about 66.
+10. The DSP output is correct (checked under `-icount` with `CDJ850_DSP_IPS=2048`). Real-time playback (`CDJ850_DSP_IPS=750`, ~66.2 MIPS) runs the DSP on a worker thread; the predecoded interpreter reaches ~95 MIPS on unthrottled CPUs (~53 MIPS at a 1.9 GHz thermal cap), while default `CDJ850_DSP_IPS=256` avoids host overload.
 
 </details>
 <!-- feature-matrix:end -->
@@ -183,8 +183,7 @@ this project (`hw/cdj/boards/cdj850/dsp56300.c`).
   photos of a real unit (no Pioneer font ROM is used), showing the browser text
   and selection highlight that MAIN sends.
 
-**Not yet:** real-time audio (the DSP interpreter runs at about 70 % of the
-speed it needs), the waveform overview, BPM and time readouts, CUE, the tempo
+**Not yet:** reliable real-time audio on thermally throttled laptops (`CDJ850_DSP_IPS` defaults to `256`; set `CDJ850_DSP_IPS=750` on fast/unthrottled hosts or use `-icount` + `2048` for exact offline audio), the waveform overview, BPM and time readouts, CUE, the tempo
 fader and the jog. There is no keyboard mapping yet; the panel is driven by
 scripted events.
 

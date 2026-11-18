@@ -276,6 +276,48 @@ int main(int argc, char **argv)
     d->pc = 0; d->p[0] = 0x044a13;
     step_one(d);
     assert(d->r[3] == 0x15 && d->r[2] == 0x10);
+
+    /* Instruction cache invalidation on P-RAM overwrite:
+     * 1) Overwriting an already-executed 1-word opcode via mem_write_p(). */
+    d->pc = 0x40; d->x0 = 0x111111; d->y0 = 0x222222; d->a = 0;
+    mem_write_p(d, 0x40, 0x200041); /* TFR X0,A */
+    step_one(d);
+    assert(d->a == pack_acc24(0x111111));
+    mem_write_p(d, 0x40, 0x200051); /* TFR Y0,A */
+    d->pc = 0x40;
+    step_one(d);
+    assert(d->a == pack_acc24(0x222222));
+
+    /* 2) Overwriting only the extension word of a cached 2-word instruction. */
+    d->r[1] = 0x50; d->r[7] = 0x334455;
+    mem_write_p(d, 0x42, 0x0b7197); /* MOVE R7,Y:(R1+disp) */
+    mem_write_p(d, 0x43, 4);
+    d->pc = 0x42;
+    step_one(d);
+    assert(d->y[0x54] == 0x334455 && d->pc == 0x44);
+    mem_write_p(d, 0x43, 7);
+    d->r[7] = 0x667788;
+    d->pc = 0x42;
+    step_one(d);
+    assert(d->y[0x57] == 0x667788 && d->pc == 0x44);
+
+    /* 3) Re-entering boot ROM via JMP $FF0000 and reloading the same P-RAM via SHI. */
+    mem_write_p(d, 0x50, 0x0af080); /* JMP >$FF0000 */
+    mem_write_p(d, 0x51, DSP_BOOT_ROM);
+    d->pc = 0x50;
+    assert(!step_one(d) && d->halted && d->boot_state == BOOT_COUNT);
+    /* Upload 2 words @P:0x40: TFR X0,A (0x200041), STOP (0x000086). */
+    const uint8_t seg[] = {
+        0x00, 0x00, 0x02,  /* count = 2 */
+        0x00, 0x00, 0x40,  /* addr/entry = 0x40 */
+        0x20, 0x00, 0x41,  /* TFR X0,A */
+        0x00, 0x00, 0x86,  /* STOP */
+    };
+    for (size_t i = 0; i < sizeof(seg); i++) {
+        dsp56300_shi_tx(seg[i]);
+    }
+    assert(d->boot_state == BOOT_RUN && d->stop_mode);
+    assert(d->a == pack_acc24(0x111111));
     free(d);
     return 0;
 }

@@ -124,7 +124,7 @@ Environment knobs added by these commits (all read once at start-up):
 | CDJ850_IRQ_IDLE=`0xNN` | 0xC0 | Idle level of IRQ0-7 pins, bit n = IRQn (default: IRQ7/DSPDREQ and IRQ6/USB_CDETFLG high; 0x80 = the old level, which reads as a USB over-current). |
 | ~~CDJ850_DSP_BOOT_HLE=1~~ | removed | Obsolete (2026-11-17): the DSP56300 core (dsp56300.c) runs the uploaded program, which drives DSPDREQ itself. Formerly: toggle DSPDREQ after each DSP SHI segment (idle high: 0,1,0,1). Stand-in for the DSP program. |
 | CDJ850_DSP_DEBUG=1 | off | DSP core diagnostics: DSPDREQ edges, SHI RX transitions, SHI TX (first 40), unimplemented ops, ESAI RX/TX counters and TX peak per 500 ms, ESAI vectors/registers once at tick 3000. |
-| CDJ850_DSP_IPS=`n` | 64 | DSP instructions per ESAI slot (88.2 kHz). Real-time audio needs about 750 (~66 MIPS); 64 runs the DSP at ~8 % speed. Without `-icount` the host cannot sustain that yet (interpreter ~46 MIPS); with `-icount shift=2,sleep=off` use 2048 to check audio exactly. |
+| CDJ850_DSP_IPS=`n` | 256 | DSP instructions per ESAI slot (88.2 kHz). Real-time audio needs about 750 (~66.2 MIPS); default 256 (~22.6 MIPS) keeps live non-`icount` responsive while higher values depend on host CPU headroom. Without `-icount`, DSP execution runs on a dedicated worker thread (`dsp_worker_thread`, paced against `QEMU_CLOCK_VIRTUAL`); with `-icount`, `dsp_audio_tick` runs synchronously in lockstep—use `CDJ850_DSP_IPS=2048` for exact deterministic audio. |
 | CDJ_DSP_AUDIO=1 | off | Open the DSP's ESAI TX0 as a host audio voice (`cdj850-dsp-esai0`); needs `-audio driver=…`. |
 | CDJ850_PF16_HIGH=1 | off | OBSOLETE (2026-11-17): PF16 is a MAIN output (PFIORH = 0x0001) that MAIN drives itself; PFPRH now reads it back from PFDRH (e47bad7). Forcing it high only hides the real level. |
 | CDJ850_DSP_PLAY_PF=`n` | unset = MAIN PF16 | Overrides the DSP PF10 (PLAY) source with MAIN PFDRL bit `n`. Default since e47bad7 is MAIN PF16 (PFDRH bit 0), per service manual 10.2/10.4. Leave unset. |
@@ -1865,4 +1865,61 @@ speed 0) -> PLAY restarts (state 3, speed 0x080000). 8/8 passes (5 serial,
 
 `CDJ850_DSP_DEBUG` status lines now print every 500 ms of virtual time and
 carry the virtual time (ticks no longer have a fixed length).
+
+### DSP56371 predecoded icache, worker thread & default `256` IPS (2026-11-18)
+
+Added a predecoded instruction cache, hot-path optimizations, and off-BQL
+non-`icount` execution in `hw/cdj/boards/cdj850/dsp56300.c`:
+
+1. **Predecoded icache + computed-goto `dsp_exec()`.** `icache[DSP_PRAM_SIZE]`
+   caches `DspInsn` descriptors populated by `dsp_icache_fill()` across
+   computed-goto `DspOpKind` handlers (including `*_NOALU` parallel-move fast
+   paths). `mem_write_p()` invalidates `addr` and `addr - 1` (for 2-word ops),
+   `DSP_FETCH` checks `slot->op != d->p[pc]` to catch direct `d->p[]` writes
+   (such as SHI segment reloads and `JMP $FF0000` boot-ROM re-entry), and
+   2-word instructions read `dsp_ext(d, pc)` dynamically.
+2. **Hot-path cleanups.** `CDJ850_DSP_DEBUG` and `CDJ850_DSP_PLAY_PF` are now
+   cached once in `dsp56300_init()`. `agu_add()` adds a power-of-2 modulo fast
+   path (`(m & (m + 1)) == 0`), `eval_ea()` reads `d->n[rrr]` only for modes
+   `0, 1, 5`, `read_acc24_limited()`/`set_ccr56()`/`set_ccr_logic()` are marked
+   `always_inline`, and `.cold`-inducing `__builtin_expect` hints were removed.
+3. **Stock segment-4 cadence & non-`icount` worker thread.** Disassembly of
+   stock `dsp_seg4_app.bin` shows zero `WAIT`/`STOP` instructions, so the DSP
+   continuously spends ~750 insns/slot (~66.2 M IPS). Running `CDJ850_DSP_IPS=750`
+   on the synchronous BQL tick starved MAIN (~413 ms/tick catch-up spiral). When
+   `!icount_enabled()`, execution now runs on `dsp_worker_thread()` in chunks
+   (`DSP_WORKER_CHUNK = 22`), paced against `QEMU_CLOCK_VIRTUAL`:
+   - `QemuMutex lock` + `host_waiting` (`dsp_host_lock()`/`dsp_host_unlock()`)
+     guard SHI transactions and VM state/exit hooks (`dsp_vm_state_cb`,
+     `dsp_exit_cb`).
+   - `rx_lock` protects `dsp56300_esai_rx_push()` (`xc/ssi.c`).
+   - `irq_lock` + `irq7_q[32]` + `dsp_irq_bh()` deliver `cdj850_intc_set_pin(7,
+     lvl)` under the BQL.
+   - `main_pfdr` mirrors PF16 atomically from `cdj850_port_write()` via
+     `dsp56300_set_pf()` (`dsp56300.h`, `xc/port.c`).
+   Under `-icount`, synchronous `dsp_audio_tick()` lockstep is preserved unchanged.
+4. **Default `CDJ850_DSP_IPS` raised `64 -> 256`.** Provides ~4x faster DSP
+   block feeding (~22.6 M IPS) in default interactive runs with headroom against
+   thermal throttling; `-icount shift=2,sleep=off` + `CDJ850_DSP_IPS=2048`
+   remains the deterministic firmware-testing mode.
+
+Benchmarks & verification:
+- Standalone benchmarks (`bench_dsp`, `bench_seg4`): pre-final constant tweak
+  at unthrottled turbo (~3.2–3.5 GHz) reached `295.24 M IPS` (`tight_nop_jmp`, vs
+  `131.36` baseline), `57.06 M IPS` (`mac_xy_modulo_loop`, vs `42.31`),
+  `141.63 M IPS` (`mixed_control_alu`, vs `57.99`), and `94.67 M IPS` / `349.4 us`
+  per 500 us tick on `seg4` (vs `65.22 M IPS` / `507.1 us` baseline). Post-edit
+  under host thermal cap (`1.90 GHz`): `157.13`, `47.11`, `85.82`, and
+  `53.22 M IPS` (`621.5 us/tick`).
+- Live non-`icount` playback at `CDJ850_DSP_IPS=750` (throttled `1.90 GHz` host):
+  MAIN booted, mounted USB, and played `BETA.wav` at 1:1 virtual/wall-clock pace
+  without starving MAIN (`1073008` WAV frames / `24.33 s @ 44100 Hz`, mild
+  underrun gaps and `-4%` ASRC bend when pinned to 750 below 66.2 M IPS).
+  `CDJ850_DSP_IPS=256` runs 1:1 (`30.68 s` wall / `30.58 s` virtual) with ample
+  host headroom (at the ~1/3 DSP block budget).
+- Regression tests (`tests/test_cdj850_dsp.py` incl. 3 new P-RAM icache
+  invalidation / `JMP $FF0000` reload tests, plus `panel_seq`, `vfd`): `15 passed`
+  (`3.59 s`); `tests/test_cdj850_usb.py` (`-icount` + default `256` IPS):
+  `9 passed` (`57.68 s`).
+
 
