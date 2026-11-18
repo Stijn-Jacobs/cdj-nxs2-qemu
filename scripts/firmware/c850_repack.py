@@ -3,18 +3,21 @@
 """Unpack, repack and check the CDJ-850's C850MAIN.UPD.
 
     c850_repack.py unpack <in.UPD> <image.bin>
-    c850_repack.py pack   <base.UPD> <image.bin> <out.UPD>
+    c850_repack.py pack   [--version D.DD] <base.UPD> <image.bin> <out.UPD>
     c850_repack.py check  <file.UPD>
 
 What the firmware itself does with the file (notes/cdj850-layout.md,
 "Update container rules", has the addresses):
 
-* The updater in MAIN (0x0C08EC44, USB mode) reads C:/C850MAIN.UPD into a
-  0xFF-filled 4 MB buffer and programs flash 0x000000-0x3EFFFF from it, 64 KB
-  sector by sector, with a read-back compare. It checks no checksum, label,
-  model or version, and it rewrites the boot region too -- so `pack` takes
-  everything below the packed MAIN from a base file and refuses a base whose
-  boot region is not the shipped one.
+* The updater in MAIN (0x0C08EC44) reads C:/C850MAIN.UPD into a 0xFF-filled
+  4 MB buffer and programs flash from it, 64 KB sector by sector, with a
+  read-back compare. The service-mode USB update (USB SELECT + RELOOP at
+  power-on) writes 0x060000-0x3EFFFF and skips a file whose version at
+  0x60010 equals the running one; a second mode the firmware also has
+  writes from 0x000000, boot region included. No checksum, label or model
+  check -- so `pack` takes everything below the packed MAIN from a base
+  file and refuses a base whose boot region is not the shipped one. Bump
+  the version (`--version`) or the deck will skip the update.
 * The bootloader's second stage (boot.bin 0x10000, run at 0x0DDEFA20) reads
   a BE32 length at flash 0x60020, adds up the bytes 0x60020..0x60024+len and
   compares the low 16 bits with the BE16 that follows the stream. On a match
@@ -34,6 +37,7 @@ Standard library only; nothing here writes outside the named output file.
 """
 import hashlib
 import os
+import re
 import struct
 import sys
 
@@ -91,7 +95,20 @@ def normalise_image(image):
     return image
 
 
-def build_upd(base, image, check_boot=True):
+VERSION_OFF = LABEL_OFF + 16   # b"1.13" in a NUL-padded 16-byte field
+
+
+def set_version(base, version):
+    """base with the label's version replaced. The deck skips an update
+    whose version matches the running one on the first character and the
+    two after the dot (0x0C08EC44), so keep the shipped D.DD shape."""
+    if not re.fullmatch(r"[0-9]\.[0-9]{2}", version):
+        raise ValueError("version %r is not D.DD (like 1.13)" % version)
+    field = version.encode("ascii").ljust(16, b"\0")
+    return base[:VERSION_OFF] + field + base[VERSION_OFF + 16:]
+
+
+def build_upd(base, image, check_boot=True, version=None):
     """A new update file: base's bytes below 0x60020 (boot, recovery,
     label), then length, LZSS stream, checksum and the 64 KB zero pad."""
     if len(base) < PACKED_OFF:
@@ -102,6 +119,8 @@ def build_upd(base, image, check_boot=True):
             raise ValueError(
                 "base boot region is not the shipped v1.13 one (sha256 %s);"
                 " the updater reflashes it, refusing" % got)
+    if version is not None:
+        base = set_version(base, version)
     image = normalise_image(bytes(image))
     stream = pack_tree(image)
     packed = struct.pack(">I", len(stream)) + stream
@@ -172,10 +191,13 @@ def main(argv):
         print("unpacked 0x%x bytes, sha256 %s"
               % (len(image), hashlib.sha256(image).hexdigest()))
         return 0
+    version = None
+    if cmd == "pack" and len(args) >= 2 and args[0] == "--version":
+        version, args = args[1], args[2:]
     if cmd == "pack" and len(args) == 3:
         base, image = _read(args[0]), _read(args[1])
         try:
-            out = build_upd(base, image)
+            out = build_upd(base, image, version=version)
         except ValueError as e:
             print("c850_repack: %s" % e, file=sys.stderr)
             return 1

@@ -41,8 +41,9 @@
  *   the parse above; key-press events (RX[0] high nibble + value) are
  *   Task 9's via panel_send_key once a key is actually injected (until
  *   then the panel is idle and reports none).
- * - Handshake ACK (driver 0x0C08E8AE): waits for PC2 = 1 (xc/port.c
- *   straps it; the level is what the driver's own comparison dictates).
+ * - (Corrected 2026-11-18) PC2, polled by 0x0C08E8AE, is not a panel
+ *   handshake: 0x0C08E8AE / 0x0C08E842 are the NOR flash program / erase
+ *   routines and PC2 is the flash RY/BY# line (xc/port.c).
  *
  * Identity note: SCIF0 (0xFFFE8000, RX interrupt armed) is a separate
  * ASCII command console ("?", digits, CR per its RX handler), not the

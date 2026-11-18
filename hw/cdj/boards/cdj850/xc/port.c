@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "cdj_common.h"
+#include "hw/block/flash.h"
+#include "hw/core/sysbus.h"
 #include "../dsp56300.h"
 #include "../dsp56371.h"
 #include "intc.h"
@@ -13,7 +15,13 @@
  * the last-written value (power-on zero), except the panel-handshake input
  * below, which the firmware parks on.
  *
- * +0x11E panel-handshake input, bit 2 = peer ready (strapped high).
+ * +0x11E bit 2 (PC2): the NOR flash RY/BY# line (2026-11-18). The two
+ * routines that poll it are the flash driver: 0x0C08E842 sector erase and
+ * 0x0C08E8AE word program, whose "probe patterns" below are the CFI unlock
+ * cycles (0xAA/0x55 to 0x20000AAA/0x20000554, the uncached CS0 mirror of
+ * flash 0xAAA/0x554). It reads ready unless the flash model is busy
+ * (cdj850_flash_ready). The old notes follow for the record; their
+ * panel-handshake reading of this pin was wrong.
  * Boot parks in an infinite loop at 0x0C08E8F2 (Task 6e): movi20 #0xE391E
  * sign-extends to r0 = 0xFFFE391E, then mov.w @(r0,r11),r6 with r11 = 0
  * reads this word and waits for bit 2 (extu.w; shar; shar; bld #0,r2;
@@ -162,6 +170,53 @@ static uint16_t cdj850_port_pe_pins(void)
            (cdj850_intc_get_pin(7) ? 1u << 11 : 0);
 }
 
+/*
+ * RY/BY# of the NOR flash (IC101, S29GL032N): ready unless the chip is in
+ * the middle of an embedded erase or program. QEMU's CFI02 model keeps
+ * its state private, so this uses the chip's own toggle-bit test: in
+ * read-array (ROMD) mode the chip is idle; otherwise two status reads
+ * whose DQ6 differs mean an embedded operation is running (CFI02 toggles
+ * DQ6 only for erase/program). "Not ROMD" alone is not enough: after a
+ * word program CFI02 is idle but only returns to ROMD lazily, after a few
+ * dozen reads. The probe reads are what real polling software does and
+ * also let an idle chip drop back to read-array mode.
+ * CDJ850_FLASH_RYBY=0 restores the old always-ready strap.
+ */
+static bool cdj850_flash_ready(void)
+{
+    static MemoryRegion *flash_mr;
+    static int enabled = -1;
+
+    if (enabled < 0) {
+        const char *e = getenv("CDJ850_FLASH_RYBY");
+        enabled = !(e && e[0] == '0');
+    }
+    if (!enabled) {
+        return true;
+    }
+    if (!flash_mr) {
+        Object *o = object_resolve_path_type("", TYPE_PFLASH_CFI02, NULL);
+        if (!o) {
+            return true;
+        }
+        flash_mr = sysbus_mmio_get_region(SYS_BUS_DEVICE(o), 0);
+    }
+    if (memory_region_is_romd(flash_mr)) {
+        return true;
+    }
+    {
+        uint64_t a = 0, b = 0;
+
+        memory_region_dispatch_read(flash_mr, 0, &a, MO_16,
+                                    MEMTXATTRS_UNSPECIFIED);
+        memory_region_dispatch_read(flash_mr, 0, &b, MO_16,
+                                    MEMTXATTRS_UNSPECIFIED);
+        /* DQ6 sits in whichever byte lane the 16-bit bus returns the
+         * status byte on (the big-endian part puts it high). */
+        return !((a ^ b) & 0x4040);
+    }
+}
+
 static uint64_t cdj850_port_read(void *opaque, hwaddr off, unsigned size)
 {
     Cdj850Port *s = opaque;
@@ -171,11 +226,16 @@ static uint64_t cdj850_port_read(void *opaque, hwaddr off, unsigned size)
     for (i = 0; i < size; i++) {
         v = (v << 8) | s->reg[(off + i) & (CDJ850_PORT_SIZE - 1)];
     }
-    /* The handshake input reflects the peer, not the output latch: reads
-     * OR in the strapped-ready level on top of the stored value. */
+    /* The flash RY/BY# input reflects the NOR chip, not the output latch:
+     * the stored bit is dropped and the pin level put in its place. */
     for (i = 0; i < size; i++) {
         if (((off + i) & (CDJ850_PORT_SIZE - 1)) == CDJ850_PORT_READY_OFF) {
-            v |= (uint64_t)CDJ850_PORT_READY_BIT << ((size - 1 - i) * 8);
+            unsigned sh = (size - 1 - i) * 8;
+
+            v &= ~((uint64_t)CDJ850_PORT_READY_BIT << sh);
+            if (cdj850_flash_ready()) {
+                v |= (uint64_t)CDJ850_PORT_READY_BIT << sh;
+            }
         }
     }
     /* Board-driven input pins (see the table above). */
