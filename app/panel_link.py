@@ -6,7 +6,8 @@ takes the same `<off>:<val>:<dur_ms>:<op>` datagrams the host keyboard sends
 (hw/cdj/common/cdj_panelkeys.h), and sends MAIN's own frame to the panel MCU
 as `pnl <hex>` to CDJ_PANEL_STATESOCK (common/cdj_pnl_stateout.c). That frame
 carries the panel's lamps, which the face lights from the bits measured for
-each key. The interface is RelayLink's, so a deck view sends through either.
+each key. The CDJ-850 also sends its second status page as `pnl2 <hex>`.
+The interface is RelayLink's, so a deck view sends through either.
 """
 
 import socket
@@ -25,6 +26,7 @@ class PanelLink:
         self.status = f"panel: UDP {port}"
         self.frame = None
         self.seen = float("-inf")
+        self.page2 = (None, float("-inf"))
         self.closed = False
         self.state = None
         if state_port:
@@ -55,12 +57,15 @@ class PanelLink:
         except OSError:
             return False
 
-    def lit(self, off, mask):
+    def latest_frame(self, now, page=1):
+        """MAIN's last report, while the deck is still publishing."""
+        frame, seen = self.page2 if page == 2 else (self.frame, self.seen)
+        return frame if now - seen <= STALE_S else None
+
+    def lit(self, off, mask, page=1):
         """True while MAIN's latest panel frame sets any bit of `mask` in byte `off`."""
-        frame = self.frame
-        if frame is None or time.monotonic() - self.seen > STALE_S or off >= len(frame):
-            return False
-        return bool(frame[off] & mask)
+        frame = self.latest_frame(time.monotonic(), page)
+        return bool(frame and off < len(frame) and frame[off] & mask)
 
     def _listen(self):
         while not self.closed:
@@ -71,10 +76,14 @@ class PanelLink:
             except OSError:
                 return
             kind, _, payload = msg.decode("ascii", "replace").partition(" ")
-            if kind != "pnl":
+            if kind not in ("pnl", "pnl2"):
                 continue
             try:
-                self.frame = bytes.fromhex(payload.strip())
+                frame = bytes.fromhex(payload)
             except ValueError:
                 continue
-            self.seen = time.monotonic()
+            now = time.monotonic()
+            if kind == "pnl2":
+                self.page2 = frame, now
+            else:
+                self.frame, self.seen = frame, now

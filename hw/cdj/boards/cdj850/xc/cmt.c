@@ -57,6 +57,7 @@ static struct Cdj850IrqQueue {
     int64_t present_ns;
     int64_t warn_ns;
     unsigned warned_stuck;
+    bool debug;
 } cdj850_irq;
 
 static void cdj850_irq_pump(void *opaque);
@@ -86,11 +87,17 @@ static void cdj850_ack(SuperHCPU *cpu, uint16_t vec)
     cdj850_irq_pump(NULL);        /* let anything queued behind it through */
 }
 
+/* SH7263 Table 6.4: at the same IPR level, the lower vector number wins. */
+static inline bool cdj850_irq_higher(uint8_t la, uint16_t va,
+                                     uint8_t lb, uint16_t vb)
+{
+    return la > lb || (la == lb && va < vb);
+}
+
 static void cdj850_irq_pump(void *opaque)
 {
     CPUState *cs;
     unsigned i, best = CDJ850_IRQ_QUEUE_LEN;
-    int best_level = -1;
 
     (void)opaque;
     if (!cdj850_irq.cpu) {
@@ -113,8 +120,10 @@ static void cdj850_irq_pump(void *opaque)
         if (!cdj850_irq.q[i].used) {
             continue;
         }
-        if ((int)cdj850_irq.q[i].level > best_level) {
-            best_level = cdj850_irq.q[i].level;
+        if (best == CDJ850_IRQ_QUEUE_LEN ||
+            cdj850_irq_higher(cdj850_irq.q[i].level, cdj850_irq.q[i].vec,
+                              cdj850_irq.q[best].level,
+                              cdj850_irq.q[best].vec)) {
             best = i;
         }
     }
@@ -122,7 +131,8 @@ static void cdj850_irq_pump(void *opaque)
     if (best != CDJ850_IRQ_QUEUE_LEN &&
         (cs->interrupt_request & CPU_INTERRUPT_HARD) &&
         cdj850_irq.cur_valid &&
-        cdj850_irq.q[best].level > cdj850_irq.cur_level) {
+        cdj850_irq_higher(cdj850_irq.q[best].level, cdj850_irq.q[best].vec,
+                          cdj850_irq.cur_level, cdj850_irq.cur_vec)) {
         /* Preempt: the standing request goes back into the queue. */
         unsigned n = (cdj850_irq.tail + 1) % CDJ850_IRQ_QUEUE_LEN;
 
@@ -157,7 +167,7 @@ static void cdj850_irq_pump(void *opaque)
         /* A vCPU spinning in a self-chained TB does not notice a new
          * request until it is kicked. */
         qemu_cpu_kick(cs);
-        if (getenv("CDJ850_IRQ_DEBUG")) {
+        if (cdj850_irq.debug) {
             info_report("cdj850: present vector %u level %u at %" PRId64 " ms",
                         e->vec, e->level,
                         cdj850_irq.present_ns / 1000000);
@@ -498,10 +508,32 @@ static const VMStateDescription vmstate_cdj850_cmt = {
     }
 };
 
+static void cdj850_irq_reset(void *opaque)
+{
+    memset(cdj850_irq.q, 0, sizeof(cdj850_irq.q));
+    cdj850_irq.head = cdj850_irq.tail = 0;
+    cdj850_irq.cur_valid = false;
+    if (cdj850_irq.pump) {
+        timer_del(cdj850_irq.pump);
+    }
+}
+
+static void cdj850_cmt_reset(void *opaque)
+{
+    Cdj850Cmt *s = opaque;
+
+    s->cmstr = s->cmcsr0 = s->cmcnt0 = s->cmcor0 = 0;
+    s->cmcsr1 = s->cmcnt1 = s->cmcor1 = 0;
+    s->period_ns = s->next_ns = 0;
+    timer_del(s->timer);
+}
+
 void cdj850_cmt_init(MemoryRegion *sysmem, SuperHCPU *cpu)
 {
     Cdj850Cmt *s;
 
+    cdj850_irq.debug = getenv("CDJ850_IRQ_DEBUG") != NULL;
+    qemu_register_reset(cdj850_irq_reset, NULL);
     vmstate_register_any(NULL, &vmstate_cdj850_irq, &cdj850_irq);
 
     /* CDJ850_CMT_OFF=1 leaves the timer unimplemented (no RTOS tick). */
@@ -514,6 +546,7 @@ void cdj850_cmt_init(MemoryRegion *sysmem, SuperHCPU *cpu)
     s = g_new0(Cdj850Cmt, 1);
     s->cpu = cpu;
     s->timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, cmt_fire, s);
+    qemu_register_reset(cdj850_cmt_reset, s);
     vmstate_register_any(NULL, &vmstate_cdj850_cmt, s);
     memory_region_init_io(&s->iomem, NULL, &cmt_ops, s, "cdj850.cmt",
                           CDJ850_CMT_SIZE);

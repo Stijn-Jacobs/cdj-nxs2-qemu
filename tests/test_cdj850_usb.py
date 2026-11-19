@@ -5,6 +5,7 @@ MMIO and interrupt checks use a synthetic ROM. The live tests use prepared
 firmware with disposable USB media and examine firmware state or the graphic
 console through QMP.
 """
+import importlib.util
 import json
 import math
 import os
@@ -14,6 +15,7 @@ import shutil
 import socket
 import struct
 import subprocess
+import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -770,10 +772,77 @@ def test_live_scif1_time_matches_replay(tmp_path, scif1_replay_exe):
     )
 
 
-def test_live_scif1_bpm_matches_replay(tmp_path, scif1_replay_exe):
-    image = os.environ.get("CDJ850_BPM_TEST_IMAGE")
+@pytest.fixture(scope="module")
+def _scif1_rekordbox_export_image(tmp_path_factory):
+    root = Path(__file__).resolve().parent.parent
+    baken = root / "tools" / "baken" / "baken"
+    baken_path = str(baken) if baken.is_file() else shutil.which("baken")
+    if (not baken_path
+            or importlib.util.find_spec("pyfatfs") is None
+            or importlib.util.find_spec("numpy") is None):
+        return None
+    work = tmp_path_factory.mktemp("scif1_rb_export")
+    spec_path = work / "spec.json"
+    img_path = work / "export.img"
+    spec_path.write_text(json.dumps({
+        "device_name": "DISPLAYTEST",
+        "playlist": "Display Test",
+        "tracks": [
+            {"title": "GRID128", "bpm": 128, "first_downbeat": 0,
+             "bars": 16, "memory_cues": [3, 7, 12]},
+            {"title": "GRID96", "bpm": 96, "first_downbeat": 0,
+             "bars": 16},
+        ],
+    }), encoding="utf-8")
+    builder = (
+        "import sys, wave, numpy as np\n"
+        "sys.path.insert(0, sys.argv[1])\n"
+        "import make_test_stick as stick\n"
+        "def render(track, path):\n"
+        "    rate = 44100\n"
+        "    t = np.arange(round(stick.track_length(track) * rate)) / rate\n"
+        "    period = 60 / track['bpm']\n"
+        "    phase = t % period\n"
+        "    sig = 0.65 * np.sin(2 * np.pi * 55 * phase) * np.exp(-25 * phase)\n"
+        "    sig += 0.2 * np.sin(2 * np.pi * 1500 * phase) * np.exp(-65 * phase)\n"
+        "    samples = np.rint(sig * 32767).astype('<i2')\n"
+        "    with wave.open(path, 'wb') as wav:\n"
+        "        wav.setparams((2, 2, rate, 0, 'NONE', 'not compressed'))\n"
+        "        wav.writeframes(np.repeat(samples, 2).tobytes())\n"
+        "    return True\n"
+        "stick.ARTIST = 'SCIF ARTIST'\n"
+        "stick.have_ffmpeg = lambda: True\n"
+        "stick.render_audio = render\n"
+        "stick.file_name = lambda number, title: f'{title}.wav'\n"
+        "raise SystemExit(stick.main([\n"
+        "    '--spec', sys.argv[2],\n"
+        "    '--out', sys.argv[3],\n"
+        "    '--image', sys.argv[4],\n"
+        "    '--size-mb', '32',\n"
+        "    '--baken', sys.argv[5],\n"
+        "]))\n"
+    )
+    subprocess.run(
+        [
+            sys.executable, "-c", builder,
+            str(root / "scripts" / "media"),
+            str(spec_path),
+            str(work / "wav-stick"),
+            str(img_path),
+            baken_path,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    return str(img_path)
+
+
+def test_live_scif1_bpm_matches_replay(tmp_path, scif1_replay_exe, _scif1_rekordbox_export_image):
+    image = os.environ.get("CDJ850_BPM_TEST_IMAGE") or _scif1_rekordbox_export_image
     if not image:
-        pytest.skip("set CDJ850_BPM_TEST_IMAGE to the GRID128/GRID96 rekordbox export")
+        pytest.skip("set CDJ850_BPM_TEST_IMAGE or install baken/pyfatfs/numpy")
     script = ("6000:usb:200,7600:rot+2,9000:enter:200,11500:enter:200,"
               "17000:next:200,22500:usb_stop:1500")
     capture = tmp_path / "bpm.scif1"
@@ -1181,10 +1250,10 @@ def _captured_playing_packets(prefix):
     return memory, waveform
 
 
-def test_live_scif1_playing_fields_match_replay(tmp_path, scif1_replay_exe):
-    image = os.environ.get("CDJ850_PLAYING_TEST_IMAGE")
+def test_live_scif1_playing_fields_match_replay(tmp_path, scif1_replay_exe, _scif1_rekordbox_export_image):
+    image = os.environ.get("CDJ850_PLAYING_TEST_IMAGE") or _scif1_rekordbox_export_image
     if not image:
-        pytest.skip("set CDJ850_PLAYING_TEST_IMAGE to the SCIF ARTIST export")
+        pytest.skip("set CDJ850_PLAYING_TEST_IMAGE or install baken/pyfatfs/numpy")
     script = ("6000:usb:200,7600:rot+2,9000:enter:200,11500:enter:200,"
               "15000:play:200,16800:cue:200,20300:next:200,25000:usb_stop:1500")
     capture = tmp_path / "playing.scif1"

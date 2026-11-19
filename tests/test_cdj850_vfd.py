@@ -55,9 +55,11 @@ STUBS = {
         "    void (*invalidate)(void *opaque);\n"
         "    bool (*gfx_update)(void *opaque);\n"
         "} GraphicHwOps;\n"
+        "extern const GraphicHwOps *stub_vfd_ops;\n"
+        "extern unsigned stub_vfd_updates;\n"
         "static inline QemuConsole *qemu_graphic_console_create(void *a, int b,\n"
         "    const GraphicHwOps *c, void *d)\n"
-        "{ (void)a; (void)b; (void)c; (void)d; return (QemuConsole *)0x1; }\n"
+        "{ (void)a; (void)b; (void)d; stub_vfd_ops = c; return (QemuConsole *)0x1; }\n"
         "static inline void *qemu_create_displaysurface(int w, int h)\n"
         "{ (void)w; (void)h; return (void *)0x2; }\n"
         "static inline void qemu_console_set_surface(QemuConsole *c, void *s)\n"
@@ -68,7 +70,7 @@ STUBS = {
         "{ (void)c; return (DisplaySurface *)0x3; }\n"
         "static inline void qemu_console_update(QemuConsole *c, int x, int y,\n"
         "    int w, int h)\n"
-        "{ (void)c; (void)x; (void)y; (void)w; (void)h; }\n"
+        "{ (void)c; (void)x; (void)y; (void)w; (void)h; stub_vfd_updates++; }\n"
         "#endif\n"
     ),
     "ui/surface.h": (
@@ -109,10 +111,107 @@ STUBS = {
 }
 
 HARNESS = r"""
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "ui/console.h"
 #include "vfd.h"
+
+const GraphicHwOps *stub_vfd_ops;
+unsigned stub_vfd_updates;
+
+static void check_change_only_redraw(void)
+{
+    stub_vfd_updates = 0;
+    assert(stub_vfd_ops && stub_vfd_ops->gfx_update);
+    stub_vfd_ops->gfx_update(NULL);
+    unsigned base = stub_vfd_updates;
+    assert(base == 1);
+
+    /* Identical updates after initial render must not re-dirty the surface. */
+    stub_vfd_ops->gfx_update(NULL);
+    assert(stub_vfd_updates == base);
+
+    vfd_note_panel_text(0x01, "ALPHA", "BETA", "GAMMA");
+    stub_vfd_ops->gfx_update(NULL);
+    assert(stub_vfd_updates == base + 1);
+    vfd_note_panel_text(0x01, "ALPHA", "BETA", "GAMMA");
+    stub_vfd_ops->gfx_update(NULL);
+    assert(stub_vfd_updates == base + 1);
+
+    const uint8_t tags[3] = {0x25, 0x02, 0x03};
+    vfd_note_panel_tags(tags);
+    stub_vfd_ops->gfx_update(NULL);
+    assert(stub_vfd_updates == base + 2);
+    vfd_note_panel_tags(tags);
+    stub_vfd_ops->gfx_update(NULL);
+    assert(stub_vfd_updates == base + 2);
+
+    vfd_note_track_number(true, 12);
+    stub_vfd_ops->gfx_update(NULL);
+    assert(stub_vfd_updates == base + 3);
+    vfd_note_track_number(true, 12);
+    stub_vfd_ops->gfx_update(NULL);
+    assert(stub_vfd_updates == base + 3);
+
+    Cdj850Time t = {.minutes = 1, .seconds = 2, .frames = 3, .known = true};
+    vfd_note_time(&t);
+    stub_vfd_ops->gfx_update(NULL);
+    assert(stub_vfd_updates == base + 4);
+    vfd_note_time(&t);
+    stub_vfd_ops->gfx_update(NULL);
+    assert(stub_vfd_updates == base + 4);
+
+    vfd_note_bpm(true, 128);
+    stub_vfd_ops->gfx_update(NULL);
+    assert(stub_vfd_updates == base + 5);
+    vfd_note_bpm(true, 128);
+    stub_vfd_ops->gfx_update(NULL);
+    assert(stub_vfd_updates == base + 5);
+
+    Cdj850Pitch p = {.value = 600, .decimals = 2, .range = 10};
+    vfd_note_pitch(&p);
+    stub_vfd_ops->gfx_update(NULL);
+    assert(stub_vfd_updates == base + 6);
+    vfd_note_pitch(&p);
+    stub_vfd_ops->gfx_update(NULL);
+    assert(stub_vfd_updates == base + 6);
+
+    vfd_note_master_tempo(true);
+    vfd_note_auto_cue(true);
+    vfd_note_info(true);
+    vfd_note_browse(true);
+    vfd_note_tag_list(true);
+    vfd_note_menu(true);
+    stub_vfd_ops->gfx_update(NULL);
+    assert(stub_vfd_updates == base + 7);
+    vfd_note_master_tempo(true);
+    vfd_note_auto_cue(true);
+    vfd_note_info(true);
+    vfd_note_browse(true);
+    vfd_note_tag_list(true);
+    vfd_note_menu(true);
+    stub_vfd_ops->gfx_update(NULL);
+    assert(stub_vfd_updates == base + 7);
+
+    Cdj850Playing pl = {.artist_known = true, .artist = "ARTIST",
+                        .waveform_known = true, .strips_known = true,
+                        .memory_lamp = true};
+    pl.waveform[0] = 3;
+    pl.memory[5] = 1;
+    vfd_note_playing(&pl);
+    stub_vfd_ops->gfx_update(NULL);
+    assert(stub_vfd_updates == base + 8);
+    vfd_note_playing(&pl);
+    stub_vfd_ops->gfx_update(NULL);
+    assert(stub_vfd_updates == base + 8);
+
+    /* Explicit console invalidate must still redraw even with unchanged state. */
+    stub_vfd_ops->invalidate(NULL);
+    stub_vfd_ops->gfx_update(NULL);
+    assert(stub_vfd_updates == base + 9);
+}
 
 static int hexval(int c)
 {
@@ -172,8 +271,14 @@ int main(int argc, char **argv)
         printf("L0:[%s]\nL1:[%s]\n", l0, l1);
         return 0;
     }
-    for (int i = 1; i < argc; i++)
-        run_segment(argv[i]);
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "REDRAW_CHECK") == 0) {
+            check_change_only_redraw();
+            printf("REDRAW_OK\n");
+        } else {
+            run_segment(argv[i]);
+        }
+    }
     return 0;
 }
 """
@@ -285,4 +390,10 @@ def test_panel_text_modes(vfd_exe):
     assert lines[1] == "L1:[SCIF1 mode 0x01]"
     assert lines[2] == "L0:[ALPHA.wav]"
     assert lines[3] == "L1:[BETA.wav | GAMMA.wav]"
+    assert err == ""
+
+
+def test_change_only_redraws(vfd_exe):
+    out, err = vfd_exe("REDRAW_CHECK")
+    assert "REDRAW_OK" in out.splitlines()
     assert err == ""

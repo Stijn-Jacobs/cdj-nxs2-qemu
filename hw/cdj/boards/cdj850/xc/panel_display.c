@@ -334,6 +334,11 @@ void cdj850_panel_display_reset_readouts(PanelDisplay *display, uint64_t ns,
                                         PanelDisplayUpdate update, void *opaque)
 {
     display->readout_reset_ns = ns;
+    display->have_header = false;
+    display->header_only = false;
+    display->next_sub = 0;
+    display->payload_len = 0;
+    display->quiet_transactions = 0;
     publish_track(display, false, 0, update, opaque);
     publish_time(display, &(Cdj850Time){0}, update, opaque);
     publish_bpm(display, 0, update, opaque);

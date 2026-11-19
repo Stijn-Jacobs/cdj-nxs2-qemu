@@ -8,6 +8,7 @@
 #include "loader.h"
 #include "port.h"
 #include "trace.h"
+#include "usb.h"
 
 /*
  * Ports/PFC at 0xFFFE3800: plain storage so configuration readbacks and
@@ -315,6 +316,9 @@ static void cdj850_port_write(void *opaque, hwaddr off, uint64_t val,
     if (off <= CDJ850_PFDRL_OFF + 1 && off + size > CDJ850_PFDRL_OFF) {
         dsp56300_shi_cs(!(cdj850_port_pfdrl() & (1u << 3)));
     }
+    if (off <= CDJ850_PBDRL_OFF + 1 && off + size > CDJ850_PBDRL_OFF) {
+        cdj850_usb_mux(cdj850_port_pbdrl());
+    }
     if (cdj850_trace()) {
         info_report("cdj850: port write +0x%x size %u = 0x%x at pc=0x%08x "
                     "%" PRIu64 " ms", (unsigned)off, size, (unsigned)val,
@@ -339,12 +343,22 @@ static const VMStateDescription vmstate_cdj850_port = {
     }
 };
 
+static void cdj850_port_reset(void *opaque)
+{
+    Cdj850Port *s = opaque;
+
+    /* MAIN_XBUSY stays low until the firmware sets up the panel link. */
+    memset(s->reg, 0, sizeof(s->reg));
+    cdj850_usb_mux(0);
+}
+
 void cdj850_port_init(MemoryRegion *sysmem, SuperHCPU *cpu)
 {
     Cdj850Port *s = g_new0(Cdj850Port, 1);
 
     s->cpu = cpu;
     cdj850_port = s;
+    qemu_register_reset(cdj850_port_reset, s);
     vmstate_register_any(NULL, &vmstate_cdj850_port, s);
     memory_region_init_io(&s->iomem, NULL, &cdj850_port_ops, s,
                           "cdj850.port", CDJ850_PORT_SIZE);

@@ -244,6 +244,17 @@ static const VMStateDescription vmstate_cdj850_loader = {
     }
 };
 
+static void loader_reset(void *opaque)
+{
+    /* The empty-drive model starts from its homing position on power-up. */
+    ld.x = LOADER_X_START;
+    ld.v = ld.u = ld.drive_pct = 0;
+    ld.lps1 = ld.lps2 = true;
+    ld.lps2_was_low = ld.homed = false;
+    ld.next_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + LOADER_STEP_NS;
+    timer_mod(ld.timer, ld.next_ns);
+}
+
 void cdj850_loader_init(void)
 {
     const char *sw = getenv("CDJ850_LOADER_SW");
@@ -263,10 +274,8 @@ void cdj850_loader_init(void)
                     "switches read open");
         return;
     }
-    ld.x = LOADER_X_START;
     ld.timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, loader_tick, NULL);
     vmstate_register_any(NULL, &vmstate_cdj850_loader, &ld);
-    loader_switches();
-    ld.next_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) + LOADER_STEP_NS;
-    timer_mod(ld.timer, ld.next_ns);
+    qemu_register_reset(loader_reset, NULL);
+    loader_reset(NULL);
 }

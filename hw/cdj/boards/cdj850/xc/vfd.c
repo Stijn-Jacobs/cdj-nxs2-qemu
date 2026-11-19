@@ -115,12 +115,22 @@ void vfd_note_panel_text(uint8_t mode, const char *l0, const char *l1,
     const char *s0 = (l0 && l0[0]) ? l0 : "";
     const char *s1 = (l1 && l1[0]) ? l1 : "";
     const char *s2 = (l2 && l2[0]) ? l2 : "";
+    char next_rows[3][sizeof(vfd.display.rows[0])];
+
+    memset(next_rows, 0, sizeof(next_rows));
+    snprintf(next_rows[0], sizeof(next_rows[0]), "%s", s0);
+    snprintf(next_rows[1], sizeof(next_rows[1]), "%s", s1);
+    snprintf(next_rows[2], sizeof(next_rows[2]), "%s", s2);
+    if (vfd.display.has_text && vfd.display.mode == mode &&
+        strcmp(vfd.display.rows[0], next_rows[0]) == 0 &&
+        strcmp(vfd.display.rows[1], next_rows[1]) == 0 &&
+        strcmp(vfd.display.rows[2], next_rows[2]) == 0) {
+        return;
+    }
 
     vfd.display.has_text = true;
     vfd.display.mode = mode;
-    snprintf(vfd.display.rows[0], sizeof(vfd.display.rows[0]), "%s", s0);
-    snprintf(vfd.display.rows[1], sizeof(vfd.display.rows[1]), "%s", s1);
-    snprintf(vfd.display.rows[2], sizeof(vfd.display.rows[2]), "%s", s2);
+    memcpy(vfd.display.rows, next_rows, sizeof(next_rows));
     vfd.has_panel_text = true;
     if (!s0[0] && s1[0] && !s2[0]) {
         snprintf(vfd.line[0], sizeof(vfd.line[0]), "%.*s", VFD_COLS, s1);
@@ -141,6 +151,10 @@ void vfd_note_panel_text(uint8_t mode, const char *l0, const char *l1,
 
 void vfd_note_track_number(bool known, uint8_t number)
 {
+    if (vfd.display.track_known == known &&
+        vfd.display.track_number == number) {
+        return;
+    }
     vfd.display.track_known = known;
     vfd.display.track_number = number;
     vfd.dirty = true;
@@ -148,12 +162,23 @@ void vfd_note_track_number(bool known, uint8_t number)
 
 void vfd_note_time(const Cdj850Time *time)
 {
+    const Cdj850Time *cur = &vfd.display.time;
+
+    if (cur->minutes == time->minutes && cur->seconds == time->seconds &&
+        cur->frames == time->frames && cur->known == time->known &&
+        cur->remain_known == time->remain_known &&
+        cur->remain == time->remain) {
+        return;
+    }
     vfd.display.time = *time;
     vfd.dirty = true;
 }
 
 void vfd_note_bpm(bool known, uint16_t bpm)
 {
+    if (vfd.display.bpm_known == known && vfd.display.bpm == bpm) {
+        return;
+    }
     vfd.display.bpm_known = known;
     vfd.display.bpm = bpm;
     vfd.dirty = true;
@@ -161,54 +186,96 @@ void vfd_note_bpm(bool known, uint16_t bpm)
 
 void vfd_note_pitch(const Cdj850Pitch *pitch)
 {
+    const Cdj850Pitch *cur = &vfd.display.pitch;
+
+    if (cur->value == pitch->value && cur->decimals == pitch->decimals &&
+        cur->range == pitch->range) {
+        return;
+    }
     vfd.display.pitch = *pitch;
     vfd.dirty = true;
 }
 
 void vfd_note_master_tempo(bool enabled)
 {
+    if (vfd.display.master_tempo == enabled) {
+        return;
+    }
     vfd.display.master_tempo = enabled;
     vfd.dirty = true;
 }
 
 void vfd_note_auto_cue(bool enabled)
 {
+    if (vfd.display.auto_cue == enabled) {
+        return;
+    }
     vfd.display.auto_cue = enabled;
     vfd.dirty = true;
 }
 
 void vfd_note_info(bool enabled)
 {
+    if (vfd.display.info_lamp == enabled) {
+        return;
+    }
     vfd.display.info_lamp = enabled;
     vfd.dirty = true;
 }
 
 void vfd_note_browse(bool enabled)
 {
+    if (vfd.display.browse_lamp == enabled) {
+        return;
+    }
     vfd.display.browse_lamp = enabled;
     vfd.dirty = true;
 }
 
 void vfd_note_menu(bool enabled)
 {
+    if (vfd.display.menu_lamp == enabled) {
+        return;
+    }
     vfd.display.menu_lamp = enabled;
     vfd.dirty = true;
 }
 
 void vfd_note_tag_list(bool enabled)
 {
+    if (vfd.display.tag_list_lamp == enabled) {
+        return;
+    }
     vfd.display.tag_list_lamp = enabled;
     vfd.dirty = true;
 }
 
 void vfd_note_playing(const Cdj850Playing *playing)
 {
+    const Cdj850Playing *cur = &vfd.display.playing;
+
+    if (cur->artist_known == playing->artist_known &&
+        (!playing->artist_known ||
+         strncmp(cur->artist, playing->artist, sizeof(cur->artist)) == 0) &&
+        cur->waveform_known == playing->waveform_known &&
+        memcmp(cur->waveform, playing->waveform, sizeof(cur->waveform)) == 0 &&
+        cur->strips_known == playing->strips_known &&
+        memcmp(cur->memory, playing->memory, sizeof(cur->memory)) == 0 &&
+        memcmp(cur->position, playing->position, sizeof(cur->position)) == 0 &&
+        memcmp(cur->cue, playing->cue, sizeof(cur->cue)) == 0 &&
+        cur->memory_lamp == playing->memory_lamp &&
+        cur->cue_lamp == playing->cue_lamp) {
+        return;
+    }
     vfd.display.playing = *playing;
     vfd.dirty = true;
 }
 
 void vfd_note_panel_tags(const uint8_t tags[3])
 {
+    if (memcmp(vfd.display.tags, tags, sizeof(vfd.display.tags)) == 0) {
+        return;
+    }
     memcpy(vfd.display.tags, tags, sizeof(vfd.display.tags));
     vfd.dirty = true;
 }

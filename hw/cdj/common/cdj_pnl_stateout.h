@@ -8,4 +8,7 @@
  * as "panel-state"). */
 void cdj_pnl_stateout(const uint8_t *frame, unsigned len);
 
+/* Publish the CDJ-850's second status page as "pnl2 <hex>". */
+void cdj_pnl_stateout_page2(const uint8_t *frame, unsigned len);
+
 #endif

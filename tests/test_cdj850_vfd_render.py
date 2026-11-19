@@ -167,6 +167,60 @@ int main(void) {
     for (int y = 0; y < 12; y++) {
         for (int x = 8; x < 16; x++) assert(guard.data[y * 16 + x] == 0xa5);
     }
+    /* Long titles (>60 chars), inverse text, punctuation, high-byte/control
+     * glyphs, and larger/smaller padded-stride canvases must stay bounded. */
+    memset(&s, 0, sizeof(s));
+    s.has_text = true;
+    s.mode = 0x01;
+    s.tags[0] = 0x25;
+    s.tags[1] = 0x02;
+    s.tags[2] = 0x03;
+    snprintf(s.rows[0], sizeof(s.rows[0]), "%s",
+             "VERY LONG TITLE WITH PUNCTUATION [01:23.45] +-_/%() \xb1 END_OVERFLOW_1234567890_ABCDEF");
+    for (int i = 0; i < 64; i++) {
+        s.rows[1][i] = (char)(0x80 + i * 2);
+        s.rows[2][i] = (char)(1 + (i % 31));
+    }
+    s.rows[1][64] = '\0';
+    s.rows[2][64] = '\0';
+    draw(&s);
+    /* Selection band on row 0 stays lit across the right edge without overflow. */
+    assert(dot(99, 8) == FL_BLUE);
+    assert(dot(99, 17) == FL_OFF);
+    /* Loaded mode (0x0a) with >60-char title and artist containing high bytes. */
+    s.mode = 0x0a;
+    s.playing.artist_known = true;
+    snprintf(s.playing.artist, sizeof(s.playing.artist), "%s",
+             "ARTIST NAME OVER 60 CHARS LONG [128 BPM] +-_/%() \xff\xfe\x80\x01 END");
+    draw(&s);
+    assert(dot(99, 0) == FL_BLUE);
+    /* Smaller and larger padded-stride surfaces with guard sentinels. */
+    static struct { uint8_t before[64], buf[640 * (1320 * 4 + 64)], after[64]; } dyn;
+    memset(&dyn, 0x5a, sizeof(dyn));
+    int widths[] = {640, 1320};
+    int heights[] = {240, 500};
+    for (int k = 0; k < 2; k++) {
+        int w = widths[k], h = heights[k], stride = w * 4 + 64;
+        memset(&dyn, 0x5a, sizeof(dyn));
+        FlCanvas dc = {dyn.buf, w, h, stride};
+        fl_render(&dc, &s);
+        for (int i = 0; i < 64; i++) {
+            assert(dyn.before[i] == 0x5a && dyn.after[i] == 0x5a);
+        }
+        for (int y = 0; y < h; y++) {
+            for (int x = w * 4; x < stride; x++) {
+                assert(dyn.buf[y * stride + x] == 0x5a);
+            }
+        }
+        uint32_t bg0 = 0;
+        memcpy(&bg0, dyn.buf, 4);
+        assert(bg0 == FL_BG);
+        if (w > FL_WIDTH) {
+            uint32_t edge = 0;
+            memcpy(&edge, dyn.buf + (FL_WIDTH + 8) * 4, 4);
+            assert(edge == FL_BG);
+        }
+    }
     puts("render checks passed");
 }
 '''

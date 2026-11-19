@@ -66,6 +66,7 @@ typedef struct {
     MemoryRegion iomem;
     SuperHCPU *cpu;
     uint8_t reg[CDJ850_INTC_SIZE];
+    uint8_t idle_pins;       /* power-on/idle levels for IRQ0-7 pins */
     uint8_t pins;            /* current level of the IRQ0-7 pins */
     uint8_t flags;           /* IRQRR latched requests */
     uint8_t read_set;        /* flags the firmware has read as 1 */
@@ -310,6 +311,16 @@ static void intc_pulse_setup(Cdj850Intc *s)
     }
 }
 
+static void cdj850_intc_reset(void *opaque)
+{
+    Cdj850Intc *s = opaque;
+
+    memset(s->reg, 0, sizeof(s->reg));
+    s->pins = s->idle_pins;
+    s->flags = s->read_set = 0;
+    timer_del(s->level_timer);
+}
+
 void cdj850_intc_init(MemoryRegion *sysmem, SuperHCPU *cpu)
 {
     Cdj850Intc *s = g_new0(Cdj850Intc, 1);
@@ -336,9 +347,11 @@ void cdj850_intc_init(MemoryRegion *sysmem, SuperHCPU *cpu)
      * in low-level mode, so the brief low-level window proves nothing about
      * the resting level. CDJ850_IRQ_IDLE overrides.
      */
-    s->pins = idle ? strtoul(idle, NULL, 0) : 0xC0;
+    s->idle_pins = idle ? strtoul(idle, NULL, 0) : 0xC0;
+    s->pins = s->idle_pins;
     s->level_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL, intc_level_settle, s);
     cdj850_intc = s;
+    qemu_register_reset(cdj850_intc_reset, s);
     vmstate_register_any(NULL, &vmstate_cdj850_intc, s);
     memory_region_init_io(&s->iomem, NULL, &cdj850_intc_ops, s,
                           "cdj850.intc", CDJ850_INTC_SIZE);

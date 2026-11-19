@@ -7,6 +7,7 @@
 #include "panel_display.h"
 #include "port.h"
 #include "scif.h"
+#include "system/runstate.h"
 #include "trace.h"
 #include "vfd.h"
 #include <errno.h>
@@ -82,6 +83,8 @@
 #define PANEL_JOG_PERIOD_DEF    556u      /* 0xD904 / 556 = 100% platter speed */
 #define PANEL_LIVE_LEN          32
 #define PANEL_LIVE_PRESS_MAX    64
+#define PANEL_STATUS_POWER      8
+#define PANEL_STATUS_STANDBY    0x01
 
 typedef enum {
     PANEL_IDLE,         /* waiting for MAIN_XBUSY / the next period */
@@ -188,6 +191,8 @@ static struct {
     int64_t due_ns;             /* when the pending frame was due */
     uint32_t seq;               /* transaction number, 1-based, for logs */
     bool reported;
+    bool standby;                /* MAIN requested auto standby */
+    bool wake_pending;
     uint8_t last_tx[PANEL_NFRAMES][PANEL_FRAME_LEN];
     uint8_t cur_tx[PANEL_TX_MAX][PANEL_FRAME_LEN];
 
@@ -424,6 +429,15 @@ static void panel_live_prune(uint64_t now_ms)
     panel.live_press_n = keep;
 }
 
+static void panel_wake(void)
+{
+    if (!panel.wake_pending) {
+        panel.wake_pending = true;
+        /* The always-powered panel starts MAIN again when the deck is used. */
+        qemu_system_reset_request(SHUTDOWN_CAUSE_SUBSYSTEM_RESET);
+    }
+}
+
 void cdj850_panel_peer_feed_key(const char *msg, uint64_t now_ms)
 {
     char op[16] = "or";
@@ -459,6 +473,14 @@ void cdj850_panel_peer_feed_key(const char *msg, uint64_t now_ms)
                 p->held = false;
                 p->dur_ms = held_ms > 25 ? held_ms : 25;
             }
+        }
+        return;
+    }
+    if (panel.standby) {
+        if (val > 0 && val <= UINT8_MAX &&
+            (off == 0x0d || (off >= 0x11 && off <= 0x17)) &&
+            (!strcmp(op, "hold") || !strcmp(op, "or"))) {
+            panel_wake();
         }
         return;
     }
@@ -555,8 +577,10 @@ void cdj850_panel_peer_build_rx(unsigned frame, uint8_t f[16])
     uint64_t now_ms = cdj850_vms();
 
     if (frame == 0) {
-        panel_script_run(now_ms);
-        panel_drain_keys(now_ms);
+        if (!panel.standby) {
+            panel_script_run(now_ms);
+            panel_drain_keys(now_ms);
+        }
         panel_live_prune(now_ms);
         cdj850_panel_build_rx1(f, now_ms);
     } else if (frame == 1) {
@@ -797,7 +821,11 @@ static void panel_script_run(uint64_t now_ms)
 
         switch (ev->kind) {
         case PANEL_ACT_PRESS:
-            cdj850_panel_peer_set_button(ev->name, true);
+            if (panel.standby) {
+                panel_wake();
+            } else {
+                cdj850_panel_peer_set_button(ev->name, true);
+            }
             info_report("cdj850-panel: input press %s at %" PRIu64 " ms",
                         ev->name, now_ms);
             break;
@@ -906,20 +934,48 @@ void cdj850_panel_peer_reset_readouts(void)
     uint64_t ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
     uint64_t ms = ns / 1000000;
 
+    if (panel.standby || panel.wake_pending) {
+        /* Wake consumes the press. MAIN boots with all buttons released. */
+        memset(panel.btn_rx1, 0, sizeof(panel.btn_rx1));
+        memset(panel.btn_rx2, 0, sizeof(panel.btn_rx2));
+        panel.live_press_n = 0;
+        panel.standby = false;
+        panel.wake_pending = false;
+    }
     if (capture.file && panel.seq) {
         char line[32];
         int len = snprintf(line, sizeof(line), "R %" PRIu64 "\n", ns);
 
         panel_capture_write(line, len);
     }
+    panel.state = PANEL_IDLE;
+    panel.frame = 0;
+    panel.start_ns = 0;
+    panel.due_ns = 0;
+    memset(panel.cur_tx, 0, sizeof(panel.cur_tx));
+    memset(panel.logged_status, 0, sizeof(panel.logged_status));
+    if (panel.timer) {
+        timer_mod(panel.timer, ns + panel.period_ns);
+    }
     cdj850_panel_display_reset_readouts(&panel.display, ns, panel_publish_display,
                                      &ms);
+}
+
+static void panel_note_status(const uint8_t tx[PANEL_FRAME_LEN])
+{
+    if (tx[0] == CDJ850_PANEL_TYPE2 &&
+        cdj850_panel_sum8ec(tx, 15) == tx[15]) {
+        /* MAIN 0x0c0eeb12 sets the auto-standby request in status page 2. */
+        panel.standby = (tx[PANEL_STATUS_POWER] & PANEL_STATUS_STANDBY) != 0;
+        cdj_pnl_stateout_page2(tx, PANEL_FRAME_LEN);
+    }
 }
 
 void cdj850_panel_peer_feed_display_tx(const uint8_t tx[16])
 {
     uint64_t ms = cdj850_vms();
 
+    panel_note_status(tx);
     cdj850_panel_display_feed(&panel.display, tx, panel_publish_display, &ms);
 }
 
@@ -967,6 +1023,8 @@ static void panel_end_transaction(void)
     cdj850_intc_set_pin(PNL_XBUSY_IRQ, false);
     panel_capture_transaction(end_ns);
     if (panel.frame >= 2) {
+        const uint8_t *status = panel.cur_tx[0];
+
         panel.transactions++;
         /* Log MAIN's status changes independently of the text display. */
         if (panel.cur_tx[0][0] == 0x01 &&
@@ -978,6 +1036,7 @@ static void panel_end_transaction(void)
             memcpy(panel.logged_status, panel.cur_tx[0], 4);
         }
         memcpy(panel.last_tx, panel.cur_tx, sizeof(panel.last_tx));
+        panel_note_status(status);
         for (i = 0; i < panel.frame; i++) {
             if (panel.cur_tx[i][0] == 0x01) {
                 cdj_pnl_stateout(panel.cur_tx[i], PANEL_FRAME_LEN);
@@ -1048,6 +1107,15 @@ static void panel_tick(void *opaque)
     (void)opaque;
 
     if (panel.state == PANEL_IDLE) {
+        /* The panel can receive a wake press even if MAIN stops clocking. */
+        if (panel.standby) {
+            panel_script_run(now / 1000000);
+            panel_drain_keys(now / 1000000);
+            if (panel.wake_pending) {
+                panel_schedule(panel.period_ns);
+                return;
+            }
+        }
         if (!cdj850_port_main_xbusy()) {
             panel_schedule(panel.period_ns);
             return;
@@ -1109,10 +1177,19 @@ static const VMStateDescription vmstate_cdj850_live_press = {
     }
 };
 
+static int panel_pre_load(void *opaque)
+{
+    /* Version 4 snapshots did not record the standby request. */
+    panel.standby = false;
+    panel.wake_pending = false;
+    return 0;
+}
+
 static const VMStateDescription vmstate_cdj850_panel = {
     .name = "cdj850-panel-peer",
-    .version_id = 4,
+    .version_id = 5,
     .minimum_version_id = 4,
+    .pre_load = panel_pre_load,
     .fields = (const VMStateField[]) {
         VMSTATE_TIMER_PTR(timer, typeof(panel)),
         VMSTATE_UINT32(state, typeof(panel)),
@@ -1143,6 +1220,7 @@ static const VMStateDescription vmstate_cdj850_panel = {
         VMSTATE_UINT32(script_next, typeof(panel)),
         VMSTATE_BUFFER_UNSAFE(display, typeof(panel), 0, sizeof(panel.display)),
         VMSTATE_UINT8_ARRAY(logged_status, typeof(panel), 4),
+        VMSTATE_BOOL_V(standby, typeof(panel), 5),
         VMSTATE_END_OF_LIST()
     }
 };

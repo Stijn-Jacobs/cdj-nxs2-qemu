@@ -1922,4 +1922,62 @@ Benchmarks & verification:
   (`3.59 s`); `tests/test_cdj850_usb.py` (`-icount` + default `256` IPS):
   `9 passed` (`57.68 s`).
 
+### Phase 2 DSP56371 real-time path & direct-threaded interpreter (2026-11-19)
 
+Addressed the two bottlenecks preventing `CDJ850_DSP_IPS=750` (~66.2 M IPS)
+real-time execution under `!icount_enabled()` (Intel Core i5-1038NG7 @
+2.00 GHz host):
+
+1. **SSI/DMAC/worker block-feed latency (`xc/ssi.c`, `dsp56300.c`, `xc/dmac.c`, `xc/cmt.c`):**
+   Under `-icount`, `CDJ850_DSP_IPS=512` already sustained `94,500` RX/s
+   (`525.0 blocks/s`, `99.91%` nonzero) normal and `99,343` RX/s (`100.0%`
+   nonzero) `MASTER TEMPO`, whereas non-`-icount` starved at `60–66 kHz`
+   RX (`355.7 blocks/s`) because `cdj850_ssi_tx_tick()` shifted only ~22
+   slots per `250 us` virtual timer tick. In `!icount_enabled()`,
+   `cdj850_ssi_tx_tick()` now drains up to `128` words per tick while
+   `dsp56300_esai_rx_count(0/1) < 160` (`-icount` keeps its exact
+   virtual-clock slot pacing), `dsp_worker_thread()` lowers its idle
+   `g_usleep(250 -> 100)`, and `dmac.c`/`cmt.c` cache debug env flags at init.
+2. **Direct-threaded `DspInsn`, loop fast-path, and inlined hot ALU (`dsp56300.c`):**
+   - Replaced `DspInsn._pad` with `const void *fn` (storing `dispatch[kind]`
+     in `dsp_icache_fill()`) and dropped per-step `d->p[pc]` reloads in
+     production builds (`!DSP_TEST_COMMON`), keeping `.op` verification under
+     `DSP_TEST_COMMON`. Moved wild-PC logging into `dsp_icache_fill()`.
+   - Replaced the per-instruction `REP`/`DO`/yield/`stop_sp` checks in
+     `DSP_STEP_END()` with `loop_trig` (`rep_pc + 1`, `la + 1`, or
+     `0xFFFFFFFF`), `mem_write_y_yield()` (checking `yield_requested` only
+     on `addr >= DSP_IO_BASE`), and a tight `REP` inner loop in `lbl_step_slow`.
+   - Split `DSP_OP_PAR_XY_DUAL_MAC` (`exec_alu_mac()` directly), added
+     branchless `set_ccr56_nocv()`, and inlined hot non-MAC ALU ops via
+     `exec_alu_other_fast()`.
+3. **Default `CDJ850_DSP_IPS` raised `256 -> 750` (~66.2 M IPS).**
+
+Measured BEFORE vs AFTER (60 s 44.1 kHz stereo sine WAV, `vms >= 18000 ms` steady window, `pitch=+5.10%` in MT):
+- `-icount shift=2,sleep=off`, `IPS=2048` normal (10.0 s virtual):
+  `58.71 s -> 22.89 s` wall (`2.57x`, `94,500 RX/s`, `88,200 TX0/s`, `99.91%` nonzero, bit-identical).
+- `-icount shift=2,sleep=off`, `IPS=2048` `MASTER TEMPO` +5.10% (10.0 s virtual):
+  `28.86 s -> 24.07 s` wall (`1.20x`, `99,319.4 RX/s`, `88,200 TX0/s`, `100.0%` nonzero, bit-identical).
+- Non-`-icount` threaded, `IPS=750` `MASTER TEMPO` +5.10% (~9.5 s wall):
+  `43,627.6 -> 101,460.7 RX/s`, `59,733.9 -> 88,196.6 TX0/s`, `100.0%` nonzero at `rt_ratio = 1.000` (was -32% underrun).
+- Non-`-icount` threaded, `IPS=750` normal (~9.5 s wall):
+  `74,488.2 -> 105,791.0 RX/s`, `88,197.3 -> 88,205.2 TX0/s` at `rt_ratio = 0.9999`, though burst block pacing still leaves ~`10–18%` zero-sample gaps (`82.27%` nonzero, `dreq0 = 623/s` vs `525/s` in `-icount`, `X38=0x4` vs `0xa`).
+
+### Step 9: BH lockstep SSI draining, `IPS=512` default, and SH7263 IRQ tie-breaking (2026-11-19)
+
+Eliminated the macOS timer-quantization gaps, stereo phase skew, and IRQ7/DEI permanent audio stalls under `!icount_enabled()`:
+
+1. **BH-driven atomic 90-pair stereo-lockstep SSI drain (`xc/ssi.{h,c}`, `xc/dmac.{h,c}`, `dsp56300.{h,c}`):**
+   - On macOS (`CONFIG_PPOLL` unset), `g_poll()` rounds sub-ms `QEMUTimer` sleeps to ~1 ms, so two timer hops exceeded the DSP's ~2 ms hunting timeout and 1.905 ms block period.
+   - Added `qemu_bh_schedule(s->tx_bh)` wakeup (`cdj850_ssi_kick()`, `cdj850_ssi_notify_rx_space()`), raised ESAI RX `FIFO_CAP` `256 -> 512`, required `< 384` headroom once before draining so a full 90-pair block (`180` words, including word 44 after `DMATCR=0`) drains atomically, and pushed `RX0`/`RX1` together under one `rx_lock` via `dsp56300_esai_rx_push_pair()`.
+   - In `dsp_run_slot()`, popped ESAI RX only when both enabled channels have data (`!need1 || ssi_rx[1].count > 0`) and notified SSI when dropping below `384`.
+   - Isolated `SSI0_TX`/`SSI1_TX` from `dmac_run()` under `!icount_enabled()`, cleared `tx_full`/`tx_half` when `SSICR.EN` drops to `0`, kept stereo lockstep whenever the peer channel is active or DMA-pending (falling back to single-channel drain only when the peer is completely idle, preserving `test_ssi_dma_transmit_requests`), and lowered default `CDJ850_DSP_IPS` `750 -> 512` (~45.2 MIPS).
+2. **SH7263 Table 6.4 equal-level interrupt tie-breaking (`xc/cmt.c`):**
+   - `cdj850_irq_pump()` previously broke equal-priority ties by queue order, so when `CMT0` (vector 142, level 8) preempted `DEI1` (vector 112, level 7) right as `DEI1`+`DEI2` (vector 116, level 7) raised together at block end, `cur_vec=112` was pushed behind `116`, letting `DEI2` re-enable `IRQ7` before `DEI1` cleared `CHCR1.TE`, deadlocking audio with `IRQ7` masked.
+   - Added `cdj850_irq_higher()` so lower vector number wins at equal priority (matching SH7263 Table 6.4).
+
+Verification after final edits:
+- Build: `./build.sh display` exited 0 with no new warnings.
+- Regression tests:
+  - `tests/test_cdj850_usb.py -k "ssi_dma"`: `2 passed` (0.39 s).
+  - Earlier on the same `xc/cmt.c` build (stereo path unchanged): `tests/test_cdj850_dsp.py` + `tests/test_cdj850_snapshot.py` (`2 passed`) and `tests/test_cdj850_usb.py` `source_select_browse_load_and_play` + `master_tempo_matches_replay` (`2 passed`).
+- Threaded `CDJ850_DSP_IPS=512` check (sequential, under heavy external host load avg `64.18 79.57 52.01`): `threaded_ips512_normal` played continuously without stalls (`loaded=true`, `353,700` RX words / `37,165.1/s`, `371,312` TX0 words / `39,015.7/s`, `87.57%` nonzero, `rt_ratio=0.9998`, `max_peak=0x2edf00`). (`threaded_ips512_mt_pitch` mounted USB slowly at `8802 ms` under load avg `64.18` before the fixed `13000:enter` script key, while `test_master_tempo_matches_replay` passed.)

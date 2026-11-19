@@ -394,6 +394,16 @@ static const VMStateDescription vmstate_cdj850_scif = {
     }
 };
 
+static void cdj850_scif_reset(void *opaque)
+{
+    Cdj850Scif *s = opaque;
+
+    memset(s->reg, 0, sizeof(s->reg));
+    s->tx_n = s->rx_n = s->rx_head = 0;
+    s->tdfe = s->tend = true;
+    s->irq_line = false;
+}
+
 static void cdj850_scif_one(MemoryRegion *sysmem, SuperHCPU *cpu,
                             hwaddr base, unsigned unit, const char *name)
 {
@@ -402,10 +412,10 @@ static void cdj850_scif_one(MemoryRegion *sysmem, SuperHCPU *cpu,
     s->cpu = cpu;
     s->unit = unit;
     if (unit == 1) {
-        s->tdfe = true;         /* SCFSR reset value: TDFE = TEND = 1 */
-        s->tend = true;
         cdj850_scif1 = s;
     }
+    qemu_register_reset(cdj850_scif_reset, s);
+    cdj850_scif_reset(s);
     vmstate_register_any(NULL, &vmstate_cdj850_scif, s);
     memory_region_init_io(&s->iomem, NULL,
                           unit == 1 ? &cdj850_scif1_ops : &cdj850_scif_ops,

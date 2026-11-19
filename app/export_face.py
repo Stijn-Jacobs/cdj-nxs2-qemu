@@ -35,7 +35,7 @@ import art as ART  # noqa: E402
 import controls as C  # noqa: E402
 import face as F  # noqa: E402
 import layout as L  # noqa: E402
-from face_art import FaceArt  # noqa: E402
+from face_art import make_face_art  # noqa: E402
 from frames import LCD_SIZE  # noqa: E402
 from relay_link import leds  # noqa: E402
 
@@ -166,7 +166,7 @@ def export(out_dir, model=NXS2, deck_label="DECK 1"):
         keys = [(k, looks[k.name], k.lamp) for k in L.KEYS]
     else:
         f = F.load(model)
-        art = FaceArt(scale, f, deck_label)
+        art = make_face_art(scale, f, deck_label)
         body = art.body().convert("RGBA")
         _paste(body, art.jog_sprite(0))
         if f.slider_off is not None:
