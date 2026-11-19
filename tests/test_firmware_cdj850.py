@@ -21,6 +21,11 @@ def _find_c850():
 
 C850 = _find_c850()
 stock = pytest.mark.skipif(not C850.is_file(), reason="C850MAIN.UPD is not on this machine")
+_EXTRACT = pathlib.Path("extract/cdj850")
+local_extract = pytest.mark.skipif(
+    not ((_EXTRACT / "main_flat.bin").is_file()
+         and (_EXTRACT / "dsp_init_image.bin").is_file()),
+    reason="extract/cdj850 firmware extracts are not on this machine (gitignored)")
 
 
 @stock
@@ -79,6 +84,7 @@ def test_c850_dsp_decode_synthetic():
     assert decode_image(recs) == bytes(expected) == b"\x3c\x07\xa5"
 
 
+@local_extract
 def test_c850_unpack_map():
     # Packed-MAIN -> SDRAM decoder map (Task 8d): unpack the prepared
     # main_flat.bin and pin length + SHA (reads the local extract only,
@@ -133,6 +139,7 @@ def test_c850_shi_helpers_synthetic():
     assert scan_headers(bad) == []
 
 
+@local_extract
 def test_c850_shi_init_image_misfit():
     # Task 8e: the recorded 519-B image (local extract, SHA-pinned) owns
     # no SHI framing (UM App. A) and no DSP563xx code markers in either
@@ -155,6 +162,7 @@ def test_c850_shi_init_image_misfit():
     assert exact_fit_offsets(img) == []  # no offset fits count+address
 
 
+@local_extract
 def test_c850_shi_negative_search():
     # Rigorous redo: full-length bytes.find of the 519-B image over the
     # packed AND unpacked MAIN finds nothing (all offsets, not first-hit).
@@ -171,6 +179,7 @@ def test_c850_shi_negative_search():
     assert find_all(unpacked, img) == []
 
 
+@local_extract
 def test_c850_shi_header_scan_pins():
     # Header-scan class pins on the verified unpacked image: structural
     # candidates exist (SH code/table aliasing) but none is a genuine
