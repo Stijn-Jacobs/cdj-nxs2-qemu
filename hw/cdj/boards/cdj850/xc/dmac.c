@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "cdj_common.h"
+#include "exec/icount.h"
 #include "qemu/timer.h"
 #include "cmt.h"
 #include "dmac.h"
@@ -168,6 +169,11 @@ static bool dmac_armed(Cdj850Dmac *s, unsigned ch)
            ((chcr >> 8) & 0xf) == 0x8;
 }
 
+static inline bool dmac_is_ssi(uint8_t dmars)
+{
+    return dmars == CDJ850_DMARS_SSI0_TX || dmars == CDJ850_DMARS_SSI1_TX;
+}
+
 static void dmac_run_channel(Cdj850Dmac *s, unsigned ch)
 {
     unsigned base = 0x10 * ch;
@@ -211,7 +217,8 @@ static void dmac_run(void *opaque)
     unsigned ch;
 
     for (ch = 0; ch < CDJ850_DMAC_CHANS; ch++) {
-        if (dmac_armed(s, ch)) {
+        if (dmac_armed(s, ch) &&
+            (icount_enabled() || !dmac_is_ssi(dmac_dmars(s, ch)))) {
             dmac_run_channel(s, ch);
         }
     }
@@ -223,6 +230,10 @@ void cdj850_dmac_request(uint8_t dmars)
     unsigned ch;
 
     if (!s) {
+        return;
+    }
+    if (!icount_enabled() && dmac_is_ssi(dmars)) {
+        cdj850_ssi_kick();
         return;
     }
     for (ch = 0; ch < CDJ850_DMAC_CHANS; ch++) {
@@ -249,6 +260,23 @@ void cdj850_dmac_serve(uint8_t dmars)
             dmac_run_channel(s, ch);
         }
     }
+}
+
+bool cdj850_dmac_has_pending(uint8_t dmars)
+{
+    Cdj850Dmac *s = cdj850_dmac;
+    unsigned ch;
+
+    if (!s) {
+        return false;
+    }
+    for (ch = 0; ch < CDJ850_DMAC_CHANS; ch++) {
+        if (dmac_armed(s, ch) && dmac_dmars(s, ch) == dmars &&
+            rd32(s, 0x10 * ch + 8) != 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static uint64_t cdj850_dmac_read(void *opaque, hwaddr off, unsigned size)
@@ -307,10 +335,15 @@ static void cdj850_dmac_write(void *opaque, hwaddr off, uint64_t val,
     }
     /* Arming a channel (or DME) may meet a request already standing. */
     for (ch = 0; ch < CDJ850_DMAC_CHANS; ch++) {
-        if (dmac_armed(s, ch) && dmac_source_active(dmac_dmars(s, ch)) &&
-            !timer_pending(s->run)) {
-            timer_mod(s->run, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
-                      CDJ850_DMAC_DELAY_NS);
+        uint8_t dmars = dmac_dmars(s, ch);
+
+        if (dmac_armed(s, ch) && dmac_source_active(dmars)) {
+            if (!icount_enabled() && dmac_is_ssi(dmars)) {
+                cdj850_ssi_kick();
+            } else if (!timer_pending(s->run)) {
+                timer_mod(s->run, qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+                          CDJ850_DMAC_DELAY_NS);
+            }
         }
     }
 }

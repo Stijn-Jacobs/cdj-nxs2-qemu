@@ -17,4 +17,5 @@ void cdj850_dmac_init(MemoryRegion *sysmem, SuperHCPU *cpu);
 void cdj850_dmac_request(uint8_t dmars);
 /* The same, served now, inside the caller's access (USB transmit). */
 void cdj850_dmac_serve(uint8_t dmars);
+bool cdj850_dmac_has_pending(uint8_t dmars);
 #endif

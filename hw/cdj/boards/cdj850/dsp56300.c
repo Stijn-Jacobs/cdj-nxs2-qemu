@@ -11,6 +11,9 @@
 #include "dsp56300.h"
 #include "xc/intc.h"
 #include "xc/port.h"
+#ifndef DSP_TEST_COMMON
+#include "xc/ssi.h"
+#endif
 #include "xc/trace.h"
 
 /*
@@ -81,7 +84,7 @@
 #define SAISR_TFS       (1u << 13)
 #define SAISR_TDE       (1u << 15)
 
-#define FIFO_CAP        256u
+#define FIFO_CAP        512u
 
 typedef struct {
     uint32_t buf[FIFO_CAP];
@@ -3314,20 +3317,35 @@ static void dsp_run_slot(Dsp56300 *d)
     if ((rcr & 1) && (!(rcr & (1u << 22)) || dsp_esai_irq_ready(d))) {
         uint32_t w0 = 0, w1 = 0;
         bool have = false;
+        bool need1 = (rcr & 2u) != 0;
+#ifndef DSP_TEST_COMMON
+        bool notify_ssi = false;
+#endif
 
 #ifndef DSP_TEST_COMMON
         if (d->threaded) {
             qemu_mutex_lock(&d->rx_lock);
         }
 #endif
-        if (d->ssi_rx[0].count > 0 || d->ssi_rx[1].count > 0) {
+        if (d->ssi_rx[0].count > 0 && (!need1 || d->ssi_rx[1].count > 0)) {
             fifo_pop(&d->ssi_rx[0], &w0);
-            fifo_pop(&d->ssi_rx[1], &w1);
+            if (need1) {
+                fifo_pop(&d->ssi_rx[1], &w1);
+            }
             have = true;
+#ifndef DSP_TEST_COMMON
+            if (d->threaded && d->ssi_rx[0].count < 384 &&
+                (!need1 || d->ssi_rx[1].count < 384)) {
+                notify_ssi = true;
+            }
+#endif
         }
 #ifndef DSP_TEST_COMMON
         if (d->threaded) {
             qemu_mutex_unlock(&d->rx_lock);
+            if (notify_ssi) {
+                cdj850_ssi_notify_rx_space();
+            }
         }
 #endif
         if (have) {
@@ -3769,11 +3787,11 @@ void dsp56300_set_pf(uint16_t pfdrh, uint16_t pfdrl)
 #endif
 }
 
-void dsp56300_esai_rx_push(unsigned ch, uint32_t word24)
+void dsp56300_esai_rx_push_pair(bool has0, uint32_t w0, bool has1, uint32_t w1)
 {
     Dsp56300 *d = dsp;
 
-    if (!d || ch > 1) {
+    if (!d || (!has0 && !has1)) {
         return;
     }
 #ifndef DSP_TEST_COMMON
@@ -3781,13 +3799,27 @@ void dsp56300_esai_rx_push(unsigned ch, uint32_t word24)
         qemu_mutex_lock(&d->rx_lock);
     }
 #endif
-    d->esai_rx_words++;
-    fifo_push(&d->ssi_rx[ch], word24);
+    if (has0) {
+        d->esai_rx_words++;
+        fifo_push(&d->ssi_rx[0], w0);
+    }
+    if (has1) {
+        d->esai_rx_words++;
+        fifo_push(&d->ssi_rx[1], w1);
+    }
 #ifndef DSP_TEST_COMMON
     if (d->threaded) {
         qemu_mutex_unlock(&d->rx_lock);
     }
 #endif
+}
+
+void dsp56300_esai_rx_push(unsigned ch, uint32_t word24)
+{
+    if (ch > 1) {
+        return;
+    }
+    dsp56300_esai_rx_push_pair(ch == 0, word24, ch == 1, word24);
 }
 
 unsigned dsp56300_esai_rx_count(unsigned ch)
@@ -3833,7 +3865,7 @@ void dsp56300_init(void)
     {
         const char *e = getenv("CDJ850_DSP_IPS");
 
-        d->slot_budget = e && atoi(e) > 0 ? (unsigned)atoi(e) : 750;
+        d->slot_budget = e && atoi(e) > 0 ? (unsigned)atoi(e) : 512;
     }
     d->debug_enabled = getenv("CDJ850_DSP_DEBUG") != NULL;
     {

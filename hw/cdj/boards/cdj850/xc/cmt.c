@@ -87,11 +87,17 @@ static void cdj850_ack(SuperHCPU *cpu, uint16_t vec)
     cdj850_irq_pump(NULL);        /* let anything queued behind it through */
 }
 
+/* SH7263 Table 6.4: at the same IPR level, the lower vector number wins. */
+static inline bool cdj850_irq_higher(uint8_t la, uint16_t va,
+                                     uint8_t lb, uint16_t vb)
+{
+    return la > lb || (la == lb && va < vb);
+}
+
 static void cdj850_irq_pump(void *opaque)
 {
     CPUState *cs;
     unsigned i, best = CDJ850_IRQ_QUEUE_LEN;
-    int best_level = -1;
 
     (void)opaque;
     if (!cdj850_irq.cpu) {
@@ -114,8 +120,10 @@ static void cdj850_irq_pump(void *opaque)
         if (!cdj850_irq.q[i].used) {
             continue;
         }
-        if ((int)cdj850_irq.q[i].level > best_level) {
-            best_level = cdj850_irq.q[i].level;
+        if (best == CDJ850_IRQ_QUEUE_LEN ||
+            cdj850_irq_higher(cdj850_irq.q[i].level, cdj850_irq.q[i].vec,
+                              cdj850_irq.q[best].level,
+                              cdj850_irq.q[best].vec)) {
             best = i;
         }
     }
@@ -123,7 +131,8 @@ static void cdj850_irq_pump(void *opaque)
     if (best != CDJ850_IRQ_QUEUE_LEN &&
         (cs->interrupt_request & CPU_INTERRUPT_HARD) &&
         cdj850_irq.cur_valid &&
-        cdj850_irq.q[best].level > cdj850_irq.cur_level) {
+        cdj850_irq_higher(cdj850_irq.q[best].level, cdj850_irq.q[best].vec,
+                          cdj850_irq.cur_level, cdj850_irq.cur_vec)) {
         /* Preempt: the standing request goes back into the queue. */
         unsigned n = (cdj850_irq.tail + 1) % CDJ850_IRQ_QUEUE_LEN;
 
