@@ -16,7 +16,7 @@
  * elsewhere/later (post-park, unmapped). The 519 B recorded image kept at
  * extract/cdj850/dsp_init_image.bin is therefore a servo init image;
  * the filename is a misnomer retained for the bytes (see
- * notes/cdj850-layout.md; SHA pin unchanged).
+ * docs/cdj850-modding.md; SHA pin unchanged).
  *
  * What this models (Task 8c step 2):
  *

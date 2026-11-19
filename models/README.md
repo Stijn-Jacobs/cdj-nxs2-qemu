@@ -12,7 +12,7 @@ of their own. The default is `cdj2000nxs2`.
 | `xdj1000.conf` | XDJ-1000 | v1.13, `XDJ1000.UPD` | experimental |
 | `cdj900nxs.conf` | CDJ-900NXS | v1.31, `C900NXS.UPD` | experimental |
 | `cdj2000nxs.conf` | CDJ-2000NXS | v1.44, `C2KNXS.UPD` | experimental |
-| `cdj850.conf` | CDJ-850 | v1.13, `C850MAIN.UPD` | bring-up |
+| `cdj850.conf` | CDJ-850 | v1.13, `C850MAIN.UPD` | experimental |
 | `cdj900.conf` | CDJ-900 | v4.32, four `C900*.UPD` files | experimental |
 | `cdj2000.conf` | CDJ-2000 | v4.33, four `C2K*.UPD` files | experimental |
 

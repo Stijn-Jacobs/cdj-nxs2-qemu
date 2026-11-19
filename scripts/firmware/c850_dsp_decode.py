@@ -3,7 +3,7 @@
 
 Source: MAIN's Port-E bit-bang upload driver, observed live through the
 `hw/cdj/boards/cdj850/dsp56371.c` record buffer (`$CDJ850_DSP_RECORD`);
-see `notes/cdj850-layout.md` ("DSP init image") and the Task 8c report.
+see `docs/cdj850-modding.md` and `dsp56371.c`.
 Every decoded byte was driven by MAIN — nothing is invented here.
 
 Record entry: 20-byte packed little-endian

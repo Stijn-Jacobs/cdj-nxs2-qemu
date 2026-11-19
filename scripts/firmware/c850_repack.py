@@ -6,8 +6,8 @@
     c850_repack.py pack   [--version D.DD] <base.UPD> <image.bin> <out.UPD>
     c850_repack.py check  <file.UPD>
 
-What the firmware itself does with the file (notes/cdj850-layout.md,
-"Update container rules", has the addresses):
+What the firmware itself does with the file (docs/cdj850-modding.md,
+"Firmware Container (C850MAIN.UPD), Flash Layout & Bootloader", has the addresses):
 
 * The updater in MAIN (0x0C08EC44) reads C:/C850MAIN.UPD into a 0xFF-filled
   4 MB buffer and programs flash from it, 64 KB sector by sector, with a

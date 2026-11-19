@@ -41,7 +41,7 @@
  *
  * Boot: through Pioneer's own bootloader in the NOR flash, the way the real
  * unit starts. make_flash_cdj850.py lays boot.bin at flash 0 and main_flat.bin
- * at 0x60000 (the updater's own offsets, per notes/cdj850-layout.md) in an
+ * at 0x60000 (the updater's own offsets, per docs/cdj850-modding.md) in an
  * otherwise-erased 4 MB image. SH-2A power-on reset loads PC from the vector
  * at 0 and SP from the vector at 4 (SH-2A Software Manual §3; SH7263 hardware
  * manual §5.2.3); the image holds PC = 0x00000100, SP = 0xFFF90000, with the
@@ -148,7 +148,7 @@ static void cdj850_reset(void *opaque)
      * 0xFFF86638 into r4, then an ldc of a from-zero SR clears RB)
      * strands its r4/r5 in bank 1 and registers base 0 instead: every
      * pool-2 alloc NULLs and RTOS init halts with E_SYS at 0x0C0B8DBE
-     * (see notes/cdj850-bringup.md, Task 6c). Clear the SH-4-only bits
+     * (see docs/cdj850-modding.md, §1). Clear the SH-4-only bits
      * at reset. MD stays set (the translator forces privileged mode
      * for SH-2A and keys memidx off it); IMASK stays set per the
      * manual.

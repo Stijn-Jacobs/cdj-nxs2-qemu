@@ -40,7 +40,18 @@ from test_cdj850_usb import (
     _qmp_read,
 )
 
-C850 = Path("/Users/julius/Documents/cdj850-emu/C850MAIN.UPD")
+def _find_c850():
+    env = os.environ.get("C850_UPD")
+    if env:
+        return Path(env)
+    for rel in ("C850MAIN.UPD", "extract/cdj850/C850MAIN.UPD", "fw/C850MAIN.UPD"):
+        cand = (ROOT / rel).resolve()
+        if cand.is_file():
+            return cand
+    return ROOT / "C850MAIN.UPD"
+
+
+C850 = _find_c850()
 FLASH_BIN = ROOT / "extract" / "cdj850" / "flash_cdj850.bin"
 UNPACKED_BIN = ROOT / "extract" / "cdj850" / "main_unpacked.bin"
 

@@ -2,16 +2,16 @@
 
 Digest of the Pioneer CDJ-850 service manual (order no. RRV4128, July 2010;
 ManualsLib copy, 127 PDF pages, kept outside the repo as
-`~/Documents/cdj850-emu/f70e4d.pdf`). Code comments cite it as
+`f70e4d.pdf`). Code comments cite it as
 "service manual f70e4d.pdf". **Page numbers below are the manual's own
 printed page numbers**; the PDF page is printed page + 4.
 
-This file is for agents working on the emulator. It records what the manual
+This file is a reference for working on the emulator. It records what the manual
 says, with a section reference for each fact, so you rarely need to open
 the PDF. Where the emulator already models something, the file is named.
 Things the manual does *not* settle are marked **open**.
 
-Rendering pages yourself: `pdftoppm` is not installed on this Mac. Split the
+Rendering pages yourself: if `pdftoppm` is not installed on macOS, split the
 page out with pypdf, then render it with
 `sips -s format png -Z 3200 page.pdf --out page.png`. Crop schematics with
 `sips -c H W --cropOffset Y X`.
@@ -234,11 +234,10 @@ LED in the key test (see below).
 **Emulator note.** `./start.sh --service` and `docs/using-the-deck.md`
 describe the NXS2's combination (TEMPO RANGE + MEMORY). On the CDJ-850 the
 keys are read by the panel CPU, which the emulator stands in for over
-SCIF1. Mode entry therefore depends on what the panel reports at the first
-link exchange. `$CDJ850_PANEL_RX` (`xc/panel_link.c`) is the test hook for
-"keys held at power-on", but the real key-event frame format is still
-**open**, so no combination is wired yet. The manual tells you which keys
-to emulate. It does not tell you the frame bytes.
+SCIF1 (`xc/panel_peer.c`). Mode entry is scripted by holding the key
+combination at `0 ms` with `CDJ850_PANEL_SCRIPT` (for example,
+`CDJ850_PANEL_SCRIPT=0:+usb,0:+reloop,8000:-usb,8000:-reloop` enters mode 4,
+the USB firmware updater; see [docs/cdj850-modding.md](cdj850-modding.md)).
 
 ### 5.1 Panel diagnosis screen (mode 1, §6.3 [1])
 
@@ -284,9 +283,9 @@ The key's LED lights while it is held. Key → LED → displayed name
 | Tempo slider | — | bar on the playing-address (■) | moving to − grows it |
 | VINYL SPEED ADJUST | — | VOLUME bar, 8 steps | full CW → jog load mode |
 
-The display-integration work (branch `codex/display-integration`,
-`docs/cdj850-display-handoff.md`) notes an "all-on service mode" display
-legend (2295). That matches the all-on test page here.
+The display-integration work ([docs/cdj850-modding.md](cdj850-modding.md))
+notes an "all-on service mode" display legend reference photo. That matches the
+all-on test page here.
 
 ### 5.2 Jog load measurement (mode 1a, §8.4, printed p.55)
 
@@ -486,7 +485,7 @@ V+12, V+5R6, V+1R2, V+1R25, V+3R3_S, V-10_A, V+3R3_SW, V+6R6_FL and V+38.
 | PCB layouts | 94–117 |
 | PCB parts list | 118–122 |
 
-**Open questions the manual cannot answer:** panel-link frame format and
-key codes; the servo command set on SRVBUS; the flash layout of the
-boot/loader block vs. the program area; where in flash the UTILITY settings
-live. All of these need the firmware or a hardware capture.
+**Questions the manual does not answer (see [docs/cdj850-modding.md](cdj850-modding.md) for the firmware-derived maps):**
+panel-link frame format and key codes; the servo command set on SRVBUS; the
+flash layout of the boot/loader block vs. the program area; where in flash the
+UTILITY settings live.

@@ -6,7 +6,7 @@
 
 /* DATA FL layout reconstruction; SCIF1 text comes from panel_peer.c.
  * SSU0 traffic is audio-DSP traffic, retained only in vfd_text diagnostics.
- * See notes/cdj850-display-roadmap.md for reference photos and limitations. */
+ * See docs/cdj850-modding.md for SCIF1 display framing and limitations. */
 #include "vfd_render.h"
 
 #define VFD_COLS        40

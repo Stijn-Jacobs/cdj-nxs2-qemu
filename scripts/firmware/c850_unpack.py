@@ -10,7 +10,7 @@ decodes it to 0x0C000000; the output matches a live-boot
 0x10000/0x100000/0x18BF2C; BSS/heap diverge at runtime from 0x1C14DC
 as expected; verified 2026-10-13).
 
-Map (all values pinned, see notes/cdj850-layout.md):
+Map (all values pinned, see docs/cdj850-modding.md):
   packed field  main_flat 0x20-0x19E70A (len BE32 0x0019E6E6 + stream;
                 = UPD 0x060020-0x1FE70A)
   unpacked      SDRAM 0x0C000000-0x0C39231E (3744542 B)

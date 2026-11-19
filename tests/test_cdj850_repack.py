@@ -11,7 +11,17 @@ import struct
 
 import pytest
 
-C850 = "/Users/julius/Documents/cdj850-emu/C850MAIN.UPD"
+def _find_c850():
+    env = os.environ.get("C850_UPD")
+    if env:
+        return env
+    for p in ("C850MAIN.UPD", "extract/cdj850/C850MAIN.UPD", "fw/C850MAIN.UPD"):
+        if os.path.exists(p):
+            return p
+    return "C850MAIN.UPD"
+
+
+C850 = _find_c850()
 STOCK_SHA = "12ed34539d844e4c3d9230eebccbc31f0b6ff2ac4d813455084987c53beac3b7"
 
 

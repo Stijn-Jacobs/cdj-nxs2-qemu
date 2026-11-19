@@ -3,7 +3,7 @@
 
 Hand-assembles (big-endian) one sequence per 32-bit group Task 4 found the
 CDJ-850 firmware (big-endian SH-2A) to use and QEMU 9.1.0's sh4 translator
-to mistranslate as illegal (notes/cdj850-sh-insns.md, SH2A_ONLY_USED):
+to mistranslate as illegal (docs/cdj850-modding.md, §1, SH2A_ONLY_USED):
 
 - movi20   0000nnnniiii0000  (imm20 sign-extended)
 - movi20s  0000nnnniiii0001  (imm20 sign-extended, << 8)

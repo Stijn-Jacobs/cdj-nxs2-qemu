@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Assemble the CDJ-850's 4 MB NOR flash image from the prepared firmware.
 
-The updater's own offsets (notes/cdj850-layout.md): boot.bin at flash 0, the
+The updater's own offsets (docs/cdj850-modding.md): boot.bin at flash 0, the
 MAIN region at 0x60000, erased (0xFF) elsewhere. The updater never programs
 past 0x200000, so the top half stays erased. The board boots through the
 bootloader at flash 0 (MAIN_BOOT=flash).

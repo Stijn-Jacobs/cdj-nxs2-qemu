@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """CDJ-850 VFD frame decode (Task VFD-1): synthetic-frame render tests.
 
-The panel link carries binary control frames, not text (see
-notes/cdj850-bringup.md, Task VFD-1 section): the 6-byte panel exchange
+The SSU0 link carries binary control frames, not text (see
+docs/cdj850-modding.md, §6): the 6-byte DSP exchange
 (TX staging 0x0C7F671B, TX[0].bit7 always set by the TX-prep helper at
 0x0C005D54) plus 16-bit command words. The panel CPU renders glass content
 from these; MAIN sends indices only. vfd.c therefore passes the frame

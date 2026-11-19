@@ -87,8 +87,9 @@ def sh2a_first_offsets(path):
 
 
 def main(argv):
+    import os
     from c850_decode import read_upd
-    path = argv[1] if len(argv) > 1 else "/Users/julius/Documents/cdj850-emu/C850MAIN.UPD"
+    path = argv[1] if len(argv) > 1 else os.environ.get("C850_UPD", "C850MAIN.UPD")
     words = _words(read_upd(path))
     counts = sh2a_only_counts(path)
     first = sh2a_first_offsets(path)

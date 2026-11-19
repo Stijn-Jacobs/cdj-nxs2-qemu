@@ -1,11 +1,29 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """CDJ-850: pin the C850MAIN.UPD container profile values (size, hash, label)."""
 import hashlib
+import os
 import pathlib
+import pytest
 
-C850 = pathlib.Path("/Users/julius/Documents/cdj850-emu/C850MAIN.UPD")
+ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
+def _find_c850():
+    env = os.environ.get("C850_UPD")
+    if env:
+        return pathlib.Path(env)
+    for rel in ("C850MAIN.UPD", "extract/cdj850/C850MAIN.UPD", "fw/C850MAIN.UPD"):
+        cand = (ROOT / rel).resolve()
+        if cand.is_file():
+            return cand
+    return ROOT / "C850MAIN.UPD"
+
+
+C850 = _find_c850()
+stock = pytest.mark.skipif(not C850.is_file(), reason="C850MAIN.UPD is not on this machine")
+
+
+@stock
 def test_c850_header():
     from c850_decode import find_main_label, read_upd
     data = read_upd(str(C850))
@@ -15,6 +33,7 @@ def test_c850_header():
     assert data[0x60000:0x60000+12] == b"CDJ-850 MAIN"
 
 
+@stock
 def test_prepare_c850():
     # Real entry is launcher.firmware.prepare (brief's `run_steps` does not
     # exist); call signature mirrors test_prepare_names_the_model_on_a_hash_mismatch.
@@ -24,9 +43,10 @@ def test_prepare_c850():
     assert pathlib.Path(out, "extract", "main_flat.bin").is_file()
 
 
+@stock
 def test_c850_sh_coverage():
     from c850_sh_scan import sh2a_only_counts
-    counts = sh2a_only_counts("/Users/julius/Documents/cdj850-emu/C850MAIN.UPD")
+    counts = sh2a_only_counts(str(C850))
     assert counts, "scanner found no candidate SH-2A-only opcodes at all (scanner broken?)"
 
 

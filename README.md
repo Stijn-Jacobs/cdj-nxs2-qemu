@@ -236,8 +236,8 @@ python3 mods/validate.py --model cdj850 --stock path/to/C850MAIN.UPD C850MAIN_MO
 ```
 
 Run the model's tests with `python3 -m pytest tests/test_cdj850_*.py`. The live
-tests need the built emulator and the prepared firmware. The bring-up notes
-cover the panel protocol, hardware model and test results. [CDJ-850 bring-up notes](notes/cdj850-bringup.md)
+tests need the built emulator and the prepared firmware. The modding and reverse-engineering reference
+covers the panel protocol, hardware model, memory map and mod hooks. [CDJ-850 reverse engineering & modding](docs/cdj850-modding.md)
 
 </details>
 
@@ -341,6 +341,10 @@ The pages describe the CDJ-2000NXS2 unless they say otherwise.
   on this PC
 - [Mods](docs/mods.md): what each one does, patching and checking a real
   firmware update, adding a mod
+- [CDJ-850 reverse engineering & modding](docs/cdj850-modding.md): memory map,
+  flash container, SCIF1 panel protocol, DSP56371 SHI/ESAI pipeline and mod hooks
+- [CDJ-850 service manual reference](docs/cdj850-service-manual.md): hardware
+  IC/pin maps, error codes, service modes and signal levels
 - [HID mode](docs/hid-mode.md): the deck as a HID controller over its USB-B port
 - [The DSP module](docs/dsp-module.md): the native module setup builds, and
   when it needs building again
