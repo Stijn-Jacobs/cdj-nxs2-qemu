@@ -540,7 +540,7 @@ void cdj850_panel_display_format(char *out, size_t size,
     const uint8_t *h = state->header;
 
     if (field == PANEL_DISPLAY_TRACK) {
-        char track[16] = "--";
+        char track[3] = "--";
 
         if (state->track_known) {
             snprintf(track, sizeof(track), "%02u", (unsigned)state->track_number);
@@ -549,7 +549,7 @@ void cdj850_panel_display_format(char *out, size_t size,
                  track, ms);
     } else if (field == PANEL_DISPLAY_TIME) {
         const Cdj850Time *time = &state->time;
-        char digits[40] = "--:--:--";
+        char digits[9] = "--:--:--";
         char remain = time->remain_known ? (time->remain ? '1' : '0') : '?';
 
         if (time->known) {
@@ -560,7 +560,7 @@ void cdj850_panel_display_format(char *out, size_t size,
         snprintf(out, size, "cdj850-panel: display time=%s remain=%c (%" PRIu64 " ms)",
                  digits, remain, ms);
     } else if (field == PANEL_DISPLAY_BPM) {
-        char digits[16] = "---";
+        char digits[4] = "---";
 
         if (state->bpm_known) {
             snprintf(digits, sizeof(digits), "%u", (unsigned)state->bpm);
