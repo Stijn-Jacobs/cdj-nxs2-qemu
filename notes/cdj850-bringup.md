@@ -1981,8 +1981,3 @@ Verification after final edits:
   - `tests/test_cdj850_usb.py -k "ssi_dma"`: `2 passed` (0.39 s).
   - Earlier on the same `xc/cmt.c` build (stereo path unchanged): `tests/test_cdj850_dsp.py` + `tests/test_cdj850_snapshot.py` (`2 passed`) and `tests/test_cdj850_usb.py` `source_select_browse_load_and_play` + `master_tempo_matches_replay` (`2 passed`).
 - Threaded `CDJ850_DSP_IPS=512` check (sequential, under heavy external host load avg `64.18 79.57 52.01`): `threaded_ips512_normal` played continuously without stalls (`loaded=true`, `353,700` RX words / `37,165.1/s`, `371,312` TX0 words / `39,015.7/s`, `87.57%` nonzero, `rt_ratio=0.9998`, `max_peak=0x2edf00`). (`threaded_ips512_mt_pitch` mounted USB slowly at `8802 ms` under load avg `64.18` before the fixed `13000:enter` script key, while `test_master_tempo_matches_replay` passed.)
-
-
-
-
-
