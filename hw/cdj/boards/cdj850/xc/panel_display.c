@@ -533,6 +533,14 @@ void cdj850_panel_display_transaction(PanelDisplay *display, uint64_t start_ns,
     }
 }
 
+/* Copy src into dst, truncating to dst's size exactly as a direct snprintf
+ * into the small panel buffers would (keeps the original on-wire/log text
+ * for out-of-range values while letting -Wformat-truncation see the bound). */
+static void panel_fit(char *dst, size_t size, const char *src)
+{
+    snprintf(dst, size, "%.*s", (int)(size - 1), src);
+}
+
 void cdj850_panel_display_format(char *out, size_t size,
                                 const PanelDisplayState *state, PanelDisplayField field,
                                 uint64_t ms)
@@ -543,7 +551,10 @@ void cdj850_panel_display_format(char *out, size_t size,
         char track[3] = "--";
 
         if (state->track_known) {
-            snprintf(track, sizeof(track), "%02u", (unsigned)state->track_number);
+            char tmp[16];
+
+            snprintf(tmp, sizeof(tmp), "%02u", (unsigned)state->track_number);
+            panel_fit(track, sizeof(track), tmp);
         }
         snprintf(out, size, "cdj850-panel: display track=%s (%" PRIu64 " ms)",
                  track, ms);
@@ -553,9 +564,12 @@ void cdj850_panel_display_format(char *out, size_t size,
         char remain = time->remain_known ? (time->remain ? '1' : '0') : '?';
 
         if (time->known) {
-            snprintf(digits, sizeof(digits), "%02u:%02u:%02u",
+            char tmp[40];
+
+            snprintf(tmp, sizeof(tmp), "%02u:%02u:%02u",
                      (unsigned)time->minutes, (unsigned)time->seconds,
                      (unsigned)time->frames);
+            panel_fit(digits, sizeof(digits), tmp);
         }
         snprintf(out, size, "cdj850-panel: display time=%s remain=%c (%" PRIu64 " ms)",
                  digits, remain, ms);
@@ -563,7 +577,10 @@ void cdj850_panel_display_format(char *out, size_t size,
         char digits[4] = "---";
 
         if (state->bpm_known) {
-            snprintf(digits, sizeof(digits), "%u", (unsigned)state->bpm);
+            char tmp[16];
+
+            snprintf(tmp, sizeof(tmp), "%u", (unsigned)state->bpm);
+            panel_fit(digits, sizeof(digits), tmp);
         }
         snprintf(out, size, "cdj850-panel: display bpm=%s (%" PRIu64 " ms)",
                  digits, ms);
