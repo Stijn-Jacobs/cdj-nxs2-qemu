@@ -57,6 +57,7 @@ static struct Cdj850IrqQueue {
     int64_t present_ns;
     int64_t warn_ns;
     unsigned warned_stuck;
+    bool debug;
 } cdj850_irq;
 
 static void cdj850_irq_pump(void *opaque);
@@ -157,7 +158,7 @@ static void cdj850_irq_pump(void *opaque)
         /* A vCPU spinning in a self-chained TB does not notice a new
          * request until it is kicked. */
         qemu_cpu_kick(cs);
-        if (getenv("CDJ850_IRQ_DEBUG")) {
+        if (cdj850_irq.debug) {
             info_report("cdj850: present vector %u level %u at %" PRId64 " ms",
                         e->vec, e->level,
                         cdj850_irq.present_ns / 1000000);
@@ -522,6 +523,7 @@ void cdj850_cmt_init(MemoryRegion *sysmem, SuperHCPU *cpu)
 {
     Cdj850Cmt *s;
 
+    cdj850_irq.debug = getenv("CDJ850_IRQ_DEBUG") != NULL;
     qemu_register_reset(cdj850_irq_reset, NULL);
     vmstate_register_any(NULL, &vmstate_cdj850_irq, &cdj850_irq);
 

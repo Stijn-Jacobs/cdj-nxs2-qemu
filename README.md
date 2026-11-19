@@ -158,7 +158,7 @@ Firmware: CDJ-2000NXS2 1.87, XDJ-1000MK2 1.45, XDJ-700 1.15, XDJ-1000 1.13, CDJ-
 7. Loops engage in only some runs.
 8. The slipped playback is not checked yet.
 9. The CDJ-850 has no Ethernet port.
-10. The DSP output is correct (checked under `-icount` with `CDJ850_DSP_IPS=2048`). Real-time playback (`CDJ850_DSP_IPS=750`, ~66.2 MIPS) runs the DSP on a worker thread; the predecoded interpreter reaches ~95 MIPS on unthrottled CPUs (~53 MIPS at a 1.9 GHz thermal cap), while default `CDJ850_DSP_IPS=256` avoids host overload.
+10. The DSP output is correct (checked under `-icount` with `CDJ850_DSP_IPS=2048`). Real-time playback defaults to `CDJ850_DSP_IPS=750` (~66.2 MIPS) on a worker thread with a direct-threaded interpreter and non-`icount` SSI burst draining (sustains 1:1 `MASTER TEMPO` output at 88.2 kHz TX0 words/s on the dev host, though non-`icount` normal-playback burst pacing still shows zero gaps vs `-icount`'s steady 525 blocks/s).
 11. The playing overview, artist line, cue/memory strips, and cue/memory lamps are verified both in SCIF1 replay (`test_cdj850_scif1_replay.py`) and live rekordbox export playback (`test_cdj850_usb.py`); scrolling cadence, panel-side blinks, and unobserved glyphs still need hardware/panel-CPU evidence.
 12. Tempo pitch percentage and range (`±6`/`±10`/`±16`/`WIDE`) and whole-BPM decoding/rendering are verified live against SCIF1 replay (`test_cdj850_usb.py`).
 13. MASTER TEMPO key toggle and lamp are tested live (`test_cdj850_usb.py`); audio throughput with MASTER TEMPO active is not measured yet.
@@ -209,9 +209,7 @@ this project (`hw/cdj/boards/cdj850/dsp56300.c`).
   4-stage DSP56371 SHI segment patching and boot check (`DspShiProfile`), and initial mods
   ([`mods/tempo_wide`](mods/tempo_wide/mod.conf), [`mods/dsp_probe`](mods/dsp_probe/mod.conf)).
 
-**Not yet:** reliable real-time audio on thermally throttled laptops (`CDJ850_DSP_IPS`
-defaults to `256`; set `CDJ850_DSP_IPS=750` on fast/unthrottled hosts or use `-icount` + `2048`
-for exact offline audio), remaining unmapped panel/metadata fields,
+**Not yet:** click-free non-`-icount` normal playback without SSI burst-pacing gaps (`CDJ850_DSP_IPS` now defaults to `750` and runs 1:1 real-time `MASTER TEMPO`, while `-icount shift=2,sleep=off` + `CDJ850_DSP_IPS=2048` remains the bit-exact reference for offline audio), remaining unmapped panel/metadata fields,
 Panel CPU firmware extraction (panel side is emulated as a behavioral peer), the CD servo,
 and testing packed updates on physical hardware.
 

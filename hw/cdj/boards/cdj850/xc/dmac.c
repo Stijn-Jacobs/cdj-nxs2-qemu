@@ -67,6 +67,7 @@ typedef struct {
     uint8_t reg[CDJ850_DMAC_SIZE];
     bool dei[CDJ850_DMAC_CHANS];
     unsigned units[CDJ850_DMAC_CHANS];        /* moved, for the trace */
+    bool debug;
 } Cdj850Dmac;
 
 static Cdj850Dmac *cdj850_dmac;
@@ -196,7 +197,7 @@ static void dmac_run_channel(Cdj850Dmac *s, unsigned ch)
     if (!tcr) {
         wr32(s, base + 0xC, chcr | CHCR_TE);
     }
-    if (moved && (cdj850_trace() || getenv("CDJ850_DMAC_DEBUG"))) {
+    if (moved && (cdj850_trace() || s->debug)) {
         info_report("cdj850: dmac ch%u moved %u x %u bytes (DMARS 0x%02x), "
                     "DMATCR now %u%s at %" PRIu64 " ms", ch, moved, unit,
                     dmars, tcr, tcr ? "" : ", TE", cdj850_vms());
@@ -350,6 +351,7 @@ void cdj850_dmac_init(MemoryRegion *sysmem, SuperHCPU *cpu)
     Cdj850Dmac *s = g_new0(Cdj850Dmac, 1);
 
     s->cpu = cpu;
+    s->debug = getenv("CDJ850_DMAC_DEBUG") != NULL;
     s->run = timer_new_ns(QEMU_CLOCK_VIRTUAL, dmac_run, s);
     s->irq_poll = timer_new_ns(QEMU_CLOCK_VIRTUAL, dmac_irq_poll, s);
     cdj850_dmac = s;

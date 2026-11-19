@@ -160,6 +160,7 @@ typedef enum {
     DSP_OP_TCC,
     DSP_OP_PAR_UPDATE_RN,
     DSP_OP_PAR_XY_DUAL,
+    DSP_OP_PAR_XY_DUAL_MAC,
     DSP_OP_PAR_XY_DUAL_NOALU,
     DSP_OP_PAR_IFCC,
     DSP_OP_PAR_REG_REG,
@@ -177,13 +178,15 @@ typedef enum {
 } DspOpKind;
 
 typedef struct {
-    uint32_t op;
+    const void *fn;
     uint32_t imm;
     uint8_t  kind;
     uint8_t  words;
     uint8_t  alu;
     uint8_t  a;
-    uint32_t _pad;
+#ifdef DSP_TEST_COMMON
+    uint32_t op;
+#endif
 } DspInsn;
 
 typedef struct {
@@ -249,9 +252,8 @@ typedef struct {
     uint32_t shi_last_tx, shi_tx_logged;
     /* Instructions run per ESAI slot (88.2 kHz). The DSP56371 manages
      * about 4000; stock firmware needs ~750 (~66.2 MIPS) for full 525 blocks/s
-     * real-time audio. 256 (~22.6 MIPS) keeps ample host headroom when running
-     * on the non-icount worker thread without slowing -icount tests.
-     * $CDJ850_DSP_IPS overrides. */
+     * real-time audio on the non-icount worker thread without slowing
+     * -icount tests. $CDJ850_DSP_IPS overrides. */
     unsigned slot_budget;
     bool debug_enabled;
     bool play_pf_override;
@@ -576,6 +578,21 @@ mem_write_y(Dsp56300 *d, uint32_t addr, uint32_t val)
     }
 }
 
+static inline __attribute__((always_inline)) bool
+mem_write_y_yield(Dsp56300 *d, uint32_t addr, uint32_t val)
+{
+    addr &= DSP_MASK24;
+    if (__builtin_expect(addr < DSP_DRAM_SIZE, 1)) {
+        d->y[addr] = val & DSP_MASK24;
+        return false;
+    }
+    if (addr >= DSP_IO_BASE) {
+        io_write_y(d, addr, val);
+        return d->yield_requested;
+    }
+    return false;
+}
+
 static inline uint32_t mem_read_p(Dsp56300 *d, uint32_t addr)
 {
     addr &= DSP_MASK24;
@@ -587,8 +604,10 @@ static inline void mem_write_p(Dsp56300 *d, uint32_t addr, uint32_t val)
     addr &= DSP_MASK24;
     if (addr < DSP_PRAM_SIZE) {
         d->p[addr] = val & DSP_MASK24;
+        d->icache[addr].fn = NULL;
         d->icache[addr].kind = DSP_OP_INVALID;
         if (addr > 0) {
+            d->icache[addr - 1].fn = NULL;
             d->icache[addr - 1].kind = DSP_OP_INVALID;
         }
     }
@@ -761,6 +780,24 @@ set_ccr56(Dsp56300 *d, uint64_t res, bool carry, bool ovf)
         f |= SR_U;
     }
     if (ext != 0 && ext != 0x1FFu) {
+        f |= SR_E;
+    }
+    d->sr = f;
+}
+
+static inline __attribute__((always_inline)) void
+set_ccr56_nocv(Dsp56300 *d, uint64_t res)
+{
+    uint32_t f = d->sr & ~(SR_C | SR_V | SR_Z | SR_N | SR_U | SR_E);
+    uint64_t r56 = res & DSP_MASK56;
+    uint32_t top10 = (uint32_t)(r56 >> 46); /* bits 55:46 */
+
+    if (r56 == 0) {
+        f |= SR_Z;
+    }
+    f |= (uint32_t)((r56 >> 55) & 1u) * SR_N;
+    f |= ((((top10 ^ (top10 >> 1)) & 1u) ^ 1u) * SR_U);
+    if (((top10 >> 1) + 1u) & 0x1FEu) {
         f |= SR_E;
     }
     d->sr = f;
@@ -961,11 +998,12 @@ exec_alu_mac(Dsp56300 *d, uint8_t alu)
     }
     uint64_t res56 = (uint64_t)res & DSP_MASK56;
     d->acc[dst_b] = res56;
-    set_ccr56(d, res56, false, false);
+    set_ccr56_nocv(d, res56);
 }
 
-/* Execute non-MAC 8-bit Data ALU opcode (0x01..0x7F) */
-static __attribute__((noinline)) void exec_alu_other(Dsp56300 *d, uint8_t alu)
+/* Execute remaining non-MAC 8-bit Data ALU opcodes (0x01..0x7F) */
+static __attribute__((noinline)) void
+exec_alu_other_cold(Dsp56300 *d, uint8_t alu)
 {
     /* Non-MAC ALU: 0000 .. 0111 1111 */
     bool dst_b = (alu >> 3) & 1;
@@ -1274,6 +1312,101 @@ static __attribute__((noinline)) void exec_alu_other(Dsp56300 *d, uint8_t alu)
 }
 
 static inline __attribute__((always_inline)) void
+exec_alu_other_fast(Dsp56300 *d, uint8_t alu)
+{
+    uint64_t *dst = (alu & 8u) ? &d->b : &d->a;
+    uint64_t *other = (alu & 8u) ? &d->a : &d->b;
+
+    if ((alu & 0xC0u) == 0x40u) {
+        /* 0x40..0x7F: JJ = (alu >> 4) & 3 -> 0=X0, 1=Y0, 2=X1, 3=Y1 */
+        static const uint8_t jj_xy[4] = { 0, 2, 1, 3 };
+        unsigned op3 = alu & 7u;
+
+        if (op3 == 0 || op3 == 1 || op3 == 4 || op3 == 5) {
+            uint32_t src24 = d->xy[jj_xy[(alu >> 4) & 3u]];
+            uint64_t src56 = pack_acc24(src24);
+
+            if (op3 == 1) { /* TFR S, D */
+                *dst = src56;
+                return;
+            }
+            if (op3 == 0) { /* ADD S, D */
+                int64_t res = sext56(*dst) + sext56(src56);
+                bool c = ((*dst + src56) >> 56) != 0;
+                *dst = (uint64_t)res & DSP_MASK56;
+                set_ccr56(d, *dst, c, false);
+                return;
+            }
+            if (op3 == 4) { /* SUB S, D */
+                int64_t res = sext56(*dst) - sext56(src56);
+                bool c = *dst < src56;
+                *dst = (uint64_t)res & DSP_MASK56;
+                set_ccr56(d, *dst, c, false);
+                return;
+            }
+            /* op3 == 5: CMP S, D */
+            int64_t res = sext56(*dst) - sext56(src56);
+            set_ccr56(d, (uint64_t)res, *dst < src56, false);
+            return;
+        }
+        exec_alu_other_cold(d, alu);
+        return;
+    }
+
+    switch (alu) {
+    case 0x01: case 0x09: /* TFR other, dst */
+        *dst = *other;
+        return;
+    case 0x03: case 0x0B: /* TST dst */
+        set_ccr56_nocv(d, *dst);
+        return;
+    case 0x10: case 0x18: { /* ADD other, dst */
+        int64_t res = sext56(*dst) + sext56(*other);
+        bool c = ((*dst + *other) >> 56) != 0;
+        *dst = (uint64_t)res & DSP_MASK56;
+        set_ccr56(d, *dst, c, false);
+        return;
+    }
+    case 0x11: case 0x19: { /* RND dst */
+        uint64_t r = *dst;
+        if ((r & 0xFFFFFFULL) > 0x800000ULL ||
+            ((r & 0xFFFFFFULL) == 0x800000ULL && (r & 0x1000000ULL))) {
+            r += 0x1000000ULL;
+        }
+        *dst = r & ~0xFFFFFFULL & DSP_MASK56;
+        set_ccr56_nocv(d, *dst);
+        return;
+    }
+    case 0x13: case 0x1B: /* CLR dst */
+        *dst = 0;
+        set_ccr56_nocv(d, 0);
+        return;
+    case 0x14: case 0x1C: { /* SUB other, dst */
+        int64_t res = sext56(*dst) - sext56(*other);
+        bool c = *dst < *other;
+        *dst = (uint64_t)res & DSP_MASK56;
+        set_ccr56(d, *dst, c, false);
+        return;
+    }
+    case 0x22: case 0x2A: { /* ASR dst */
+        bool c = (*dst & 1) != 0;
+        *dst = (uint64_t)(sext56(*dst) >> 1) & DSP_MASK56;
+        set_ccr56(d, *dst, c, false);
+        return;
+    }
+    case 0x32: case 0x3A: { /* ASL dst */
+        bool c = ((*dst >> 55) & 1) != 0;
+        *dst = (*dst << 1) & DSP_MASK56;
+        set_ccr56(d, *dst, c, false);
+        return;
+    }
+    default:
+        exec_alu_other_cold(d, alu);
+        return;
+    }
+}
+
+static inline __attribute__((always_inline)) void
 exec_alu(Dsp56300 *d, uint8_t alu)
 {
     if (alu == 0x00) {
@@ -1282,7 +1415,7 @@ exec_alu(Dsp56300 *d, uint8_t alu)
     if (alu & 0x80u) {
         exec_alu_mac(d, alu);
     } else {
-        exec_alu_other(d, alu);
+        exec_alu_other_fast(d, alu);
     }
 }
 
@@ -1294,7 +1427,10 @@ static inline uint32_t dsp_ext(const Dsp56300 *d, uint32_t pc)
 
 static void dsp_decode_insn(DspInsn *ins, uint32_t pc, uint32_t op)
 {
+    ins->fn = NULL;
+#ifdef DSP_TEST_COMMON
     ins->op = op;
+#endif
     ins->imm = 0;
     ins->alu = 0;
     ins->a = 0;
@@ -1326,7 +1462,8 @@ static void dsp_decode_insn(DspInsn *ins, uint32_t pc, uint32_t op)
             unsigned rx = (mv >> 7) & 1;
             unsigned ry = (mv >> 14) & 1;
 
-            ins->kind = alu ? DSP_OP_PAR_XY_DUAL : DSP_OP_PAR_XY_DUAL_NOALU;
+            ins->kind = (alu & 0x80u) ? DSP_OP_PAR_XY_DUAL_MAC :
+                        (alu ? DSP_OP_PAR_XY_DUAL : DSP_OP_PAR_XY_DUAL_NOALU);
             ins->imm = xr | (yr << 4) | (xn << 8) | (yn << 11) |
                        (xm << 14) | (ym << 16) | (rx << 18) | (ry << 19);
             return;
@@ -2058,7 +2195,7 @@ step_one_cold(Dsp56300 *d, const DspInsn *ins, uint32_t pc, uint32_t *next_pc_ou
         } else {
             if (d->debug_enabled) {
                 info_report("cdj850-dsp: DO at P:%06x op=0x%06x cnt=%u la=0x%06x",
-                            pc, ins->op, cnt, la);
+                            pc, mem_read_p(d, pc), cnt, la);
             }
             stack_push(d, d->la, d->lc);
             stack_push(d, pc + 2, d->sr);
@@ -2401,7 +2538,7 @@ step_one_cold(Dsp56300 *d, const DspInsn *ins, uint32_t pc, uint32_t *next_pc_ou
         if (d->unimp_logged < 20) {
             d->unimp_logged++;
             info_report("cdj850-dsp: unimplemented op 0x%06x at P:%06x",
-                        ins->op, pc);
+                        mem_read_p(d, pc), pc);
         }
         break;
     }
@@ -2409,12 +2546,62 @@ step_one_cold(Dsp56300 *d, const DspInsn *ins, uint32_t pc, uint32_t *next_pc_ou
     return true;
 }
 
+static inline __attribute__((always_inline)) bool
+exec_par_xy_dual(Dsp56300 *d, uint32_t pk, uint8_t alu, bool do_mac, bool do_alu)
+{
+    unsigned xr = pk & 0xFu;
+    unsigned yr = (pk >> 4) & 0xFu;
+    unsigned xn = (pk >> 8) & 7u;
+    unsigned yn = (pk >> 11) & 7u;
+    unsigned xm = (pk >> 14) & 3u;
+    unsigned ym = (pk >> 16) & 3u;
+    bool rx = (pk >> 18) & 1u;
+    bool ry = (pk >> 19) & 1u;
+    uint32_t ax = d->r[xn];
+    uint32_t ay = d->r[yn];
+    uint32_t vx = rx ? mem_read_x(d, ax) : read_xy_reg(d, xr);
+    uint32_t vy = ry ? mem_read_y(d, ay) : read_xy_reg(d, yr);
+
+    if (xm) {
+        d->r[xn] = agu_add(d, xn, xm == 1 ? sext24(d->n[xn]) :
+                                  xm == 2 ? -1 : 1);
+    }
+    if (ym) {
+        d->r[yn] = agu_add(d, yn, ym == 1 ? sext24(d->n[yn]) :
+                                  ym == 2 ? -1 : 1);
+    }
+    if (do_mac) {
+        exec_alu_mac(d, alu);
+    } else if (do_alu) {
+        exec_alu_other_fast(d, alu);
+    }
+    if (rx) {
+        write_xy_reg(d, xr, vx);
+    } else {
+        mem_write_x(d, ax, vx);
+    }
+    if (ry) {
+        write_xy_reg(d, yr, vy);
+        return false;
+    }
+    return mem_write_y_yield(d, ay, vy);
+}
+
 static __attribute__((noinline)) DspInsn *
-dsp_icache_fill(Dsp56300 *d, uint32_t pc, uint32_t op)
+dsp_icache_fill(Dsp56300 *d, uint32_t pc, uint32_t op,
+                const void *const *dispatch)
 {
     DspInsn *slot = &d->icache[pc];
 
+    if (__builtin_expect(pc >= 0x1000u && pc != DSP_BOOT_ROM &&
+                         !d->unimp_logged, 0)) {
+        d->unimp_logged = 1;
+        info_report("cdj850-dsp: WILD PC P:%06x (op=0x%06x, sp=0x%x, "
+                    "sr=0x%06x, la=0x%06x, lc=0x%x)",
+                    pc, op, d->sp, d->sr, d->la, d->lc);
+    }
     dsp_decode_insn(slot, pc, op);
+    slot->fn = dispatch[slot->kind];
     return slot;
 }
 
@@ -2472,6 +2659,7 @@ static bool dsp_exec(Dsp56300 *d, unsigned budget, int32_t stop_sp)
         [DSP_OP_TCC]                 = &&lbl_COLD,
         [DSP_OP_PAR_UPDATE_RN]       = &&lbl_PAR_UPDATE_RN,
         [DSP_OP_PAR_XY_DUAL]         = &&lbl_PAR_XY_DUAL,
+        [DSP_OP_PAR_XY_DUAL_MAC]     = &&lbl_PAR_XY_DUAL_MAC,
         [DSP_OP_PAR_XY_DUAL_NOALU]   = &&lbl_PAR_XY_DUAL_NOALU,
         [DSP_OP_PAR_IFCC]            = &&lbl_PAR_IFCC,
         [DSP_OP_PAR_REG_REG]         = &&lbl_PAR_REG_REG,
@@ -2489,7 +2677,7 @@ static bool dsp_exec(Dsp56300 *d, unsigned budget, int32_t stop_sp)
     };
 
     static const DspInsn nop_insn = {
-        .op = 0, .imm = 0, .kind = DSP_OP_NOP, .words = 1
+        .kind = DSP_OP_NOP, .words = 1
     };
 
     enum { WB_NONE = 0, WB_REG5, WB_MEM_X, WB_MEM_Y } wb = WB_NONE;
@@ -2497,70 +2685,51 @@ static bool dsp_exec(Dsp56300 *d, unsigned budget, int32_t stop_sp)
     unsigned wb_reg = 0;
 
     uint32_t pc = d->pc;
-    const DspInsn *ins;
+    const DspInsn *ins = &nop_insn;
     uint32_t next_pc;
+    uint32_t loop_trig;
+
+#define DSP_SYNC_LOOP()                                                 \
+    do {                                                                \
+        loop_trig = d->rep_remaining ? (d->rep_pc + 1u) :               \
+                    ((d->sr & SR_LF) ? (d->la + 1u) : 0xFFFFFFFFu);     \
+    } while (0)
+
+#ifdef DSP_TEST_COMMON
+#define DSP_CACHE_HIT(slot, pc)                                         \
+    __builtin_expect((slot)->fn != NULL && (slot)->op == d->p[pc], 1)
+#else
+#define DSP_CACHE_HIT(slot, pc)                                         \
+    __builtin_expect((slot)->fn != NULL, 1)
+#endif
 
 #define DSP_FETCH()                                                     \
     do {                                                                \
-        next_pc = pc + 1;                                               \
         if (__builtin_expect(pc < DSP_PRAM_SIZE, 1)) {                  \
-            uint32_t _op = d->p[pc];                                    \
             DspInsn *_slot = &d->icache[pc];                            \
-            if (__builtin_expect(                                       \
-                    _slot->kind == DSP_OP_INVALID || _slot->op != _op, 0)) { \
-                _slot = dsp_icache_fill(d, pc, _op);                    \
+            next_pc = pc + 1;                                           \
+            if (!DSP_CACHE_HIT(_slot, pc)) {                            \
+                _slot = dsp_icache_fill(d, pc, d->p[pc], dispatch);     \
             }                                                           \
             ins = _slot;                                                \
-        } else {                                                        \
-            ins = &nop_insn;                                            \
+            goto *ins->fn;                                              \
         }                                                               \
-        goto *dispatch[ins->kind];                                      \
+        next_pc = (pc + 1) & DSP_MASK24;                                \
+        ins = &nop_insn;                                                \
+        goto lbl_NOP;                                                   \
     } while (0)
 
 #define DSP_STEP_END()                                                  \
     do {                                                                \
-        if ((d->rep_remaining | (d->sr & SR_LF)) != 0) {                \
-            if (d->rep_remaining && pc == d->rep_pc) {                  \
-                if (--d->rep_remaining) {                               \
-                    d->lc = d->rep_remaining;                           \
-                    next_pc = d->rep_pc;                                \
-                } else {                                                \
-                    d->lc = d->rep_saved_lc;                            \
-                }                                                       \
-            } else if ((d->sr & SR_LF) && next_pc == d->la + 1 &&       \
-                       (pc == d->la || pc + 1 == d->la)) {              \
-                if (d->lc != 1 || (d->sr & SR_FV)) {                    \
-                    d->lc = (d->lc - 1) & DSP_MASK24;                   \
-                    next_pc = d->ssh[d->sp & 0xF];                      \
-                } else {                                                \
-                    uint32_t _h, _l, _ssr;                              \
-                    stack_pop(d, NULL, &_ssr);                          \
-                    stack_pop(d, &_h, &_l);                             \
-                    d->la = _h;                                         \
-                    d->lc = _l;                                         \
-                    d->sr = (d->sr & ~(SR_LF | SR_FV)) |                \
-                            (_ssr & (SR_LF | SR_FV));                   \
-                }                                                       \
-            }                                                           \
+        --budget;                                                       \
+        if (__builtin_expect(next_pc == loop_trig || budget == 0, 0)) { \
+            goto lbl_step_slow;                                         \
         }                                                               \
-        pc = next_pc & DSP_MASK24;                                      \
-        if (__builtin_expect(pc >= 0x1000u && pc != DSP_BOOT_ROM &&     \
-                             !d->unimp_logged, 0)) {                    \
-            d->unimp_logged = 1;                                        \
-            info_report("cdj850-dsp: WILD PC P:%06x -> P:%06x "         \
-                        "(op=0x%06x, sp=0x%x, sr=0x%06x, la=0x%06x, "   \
-                        "lc=0x%x)",                                     \
-                        d->pc, pc, ins->op, d->sp, d->sr, d->la, d->lc); \
-        }                                                               \
-        if (--budget == 0 ||                                            \
-            (stop_sp < 0 ? d->yield_requested                           \
-                         : (int32_t)d->sp == stop_sp)) {                \
-            d->pc = pc;                                                 \
-            return true;                                                \
-        }                                                               \
+        pc = next_pc;                                                   \
         DSP_FETCH();                                                    \
     } while (0)
 
+    DSP_SYNC_LOOP();
     DSP_FETCH();
 
 lbl_PAR_EA_NOALU: {
@@ -2575,7 +2744,10 @@ lbl_PAR_EA_NOALU: {
     } else {
         uint32_t val = read_reg5(d, reg5);
         if (space_y) {
-            mem_write_y(d, addr, val);
+            if (__builtin_expect(mem_write_y_yield(d, addr, val), 0) &&
+                stop_sp < 0) {
+                budget = 1;
+            }
         } else {
             mem_write_x(d, addr, val);
         }
@@ -2597,7 +2769,10 @@ lbl_PAR_AA_NOALU: {
     } else {
         uint32_t val = read_reg5(d, reg5);
         if (space_y) {
-            mem_write_y(d, addr, val);
+            if (__builtin_expect(mem_write_y_yield(d, addr, val), 0) &&
+                stop_sp < 0) {
+                budget = 1;
+            }
         } else {
             mem_write_x(d, addr, val);
         }
@@ -2605,78 +2780,26 @@ lbl_PAR_AA_NOALU: {
     DSP_STEP_END();
 }
 
-lbl_PAR_XY_DUAL_NOALU: {
-    uint32_t pk = ins->imm;
-    unsigned xr = pk & 0xFu;
-    unsigned yr = (pk >> 4) & 0xFu;
-    unsigned xn = (pk >> 8) & 7u;
-    unsigned yn = (pk >> 11) & 7u;
-    unsigned xm = (pk >> 14) & 3u;
-    unsigned ym = (pk >> 16) & 3u;
-    bool rx = (pk >> 18) & 1u;
-    bool ry = (pk >> 19) & 1u;
-    uint32_t ax = d->r[xn];
-    uint32_t ay = d->r[yn];
-    uint32_t vx = rx ? mem_read_x(d, ax) : read_xy_reg(d, xr);
-    uint32_t vy = ry ? mem_read_y(d, ay) : read_xy_reg(d, yr);
-
-    if (xm) {
-        d->r[xn] = agu_add(d, xn, xm == 1 ? sext24(d->n[xn]) :
-                                  xm == 2 ? -1 : 1);
-    }
-    if (ym) {
-        d->r[yn] = agu_add(d, yn, ym == 1 ? sext24(d->n[yn]) :
-                                  ym == 2 ? -1 : 1);
-    }
-    if (rx) {
-        write_xy_reg(d, xr, vx);
-    } else {
-        mem_write_x(d, ax, vx);
-    }
-    if (ry) {
-        write_xy_reg(d, yr, vy);
-    } else {
-        mem_write_y(d, ay, vy);
+lbl_PAR_XY_DUAL_NOALU:
+    if (__builtin_expect(exec_par_xy_dual(d, ins->imm, 0, false, false), 0) &&
+        stop_sp < 0) {
+        budget = 1;
     }
     DSP_STEP_END();
-}
 
-lbl_PAR_XY_DUAL: {
-    uint32_t pk = ins->imm;
-    unsigned xr = pk & 0xFu;
-    unsigned yr = (pk >> 4) & 0xFu;
-    unsigned xn = (pk >> 8) & 7u;
-    unsigned yn = (pk >> 11) & 7u;
-    unsigned xm = (pk >> 14) & 3u;
-    unsigned ym = (pk >> 16) & 3u;
-    bool rx = (pk >> 18) & 1u;
-    bool ry = (pk >> 19) & 1u;
-    uint32_t ax = d->r[xn];
-    uint32_t ay = d->r[yn];
-    uint32_t vx = rx ? mem_read_x(d, ax) : read_xy_reg(d, xr);
-    uint32_t vy = ry ? mem_read_y(d, ay) : read_xy_reg(d, yr);
-
-    if (xm) {
-        d->r[xn] = agu_add(d, xn, xm == 1 ? sext24(d->n[xn]) :
-                                  xm == 2 ? -1 : 1);
-    }
-    if (ym) {
-        d->r[yn] = agu_add(d, yn, ym == 1 ? sext24(d->n[yn]) :
-                                  ym == 2 ? -1 : 1);
-    }
-    exec_alu(d, ins->alu);
-    if (rx) {
-        write_xy_reg(d, xr, vx);
-    } else {
-        mem_write_x(d, ax, vx);
-    }
-    if (ry) {
-        write_xy_reg(d, yr, vy);
-    } else {
-        mem_write_y(d, ay, vy);
+lbl_PAR_XY_DUAL:
+    if (__builtin_expect(exec_par_xy_dual(d, ins->imm, ins->alu, false, true), 0) &&
+        stop_sp < 0) {
+        budget = 1;
     }
     DSP_STEP_END();
-}
+
+lbl_PAR_XY_DUAL_MAC:
+    if (__builtin_expect(exec_par_xy_dual(d, ins->imm, ins->alu, true, true), 0) &&
+        stop_sp < 0) {
+        budget = 1;
+    }
+    DSP_STEP_END();
 
 lbl_PAR_REG_REG_NOALU:
     write_reg5(d, ins->imm, read_reg5(d, ins->a));
@@ -2762,7 +2885,10 @@ par_exec_alu:
         mem_write_x(d, wb_addr, wb_val);
         break;
     case WB_MEM_Y:
-        mem_write_y(d, wb_addr, wb_val);
+        if (__builtin_expect(mem_write_y_yield(d, wb_addr, wb_val), 0) &&
+            stop_sp < 0) {
+            budget = 1;
+        }
         break;
     }
     DSP_STEP_END();
@@ -2801,7 +2927,10 @@ lbl_PAR_CLASS1: {
     if (read) {
         write_reg6(d, memory_reg, value);
     } else if (y) {
-        mem_write_y(d, addr, value);
+        if (__builtin_expect(mem_write_y_yield(d, addr, value), 0) &&
+            stop_sp < 0) {
+            budget = 1;
+        }
     } else {
         mem_write_x(d, addr, value);
     }
@@ -2817,7 +2946,11 @@ lbl_NOP:
 lbl_RTS: {
     uint32_t h;
     stack_pop(d, &h, NULL);
-    next_pc = h;
+    next_pc = h & DSP_MASK24;
+    if (__builtin_expect(stop_sp >= 0 && (int32_t)d->sp == stop_sp, 0)) {
+        d->pc = next_pc;
+        return true;
+    }
     DSP_STEP_END();
 }
 
@@ -2877,7 +3010,7 @@ lbl_MPY_IMM: {
         res &= ~0xFFFFFFLL;
     }
     *dst = (uint64_t)res & DSP_MASK56;
-    set_ccr56(d, *dst, false, false);
+    set_ccr56_nocv(d, *dst);
     DSP_STEP_END();
 }
 
@@ -2923,8 +3056,12 @@ lbl_BIT_OP: {
                                         (val & ~ins->imm));
         if (mode == 1) {
             write_reg6(d, ins->alu, nval);
+            DSP_SYNC_LOOP();
         } else if (space_y) {
-            mem_write_y(d, addr, nval);
+            if (__builtin_expect(mem_write_y_yield(d, addr, nval), 0) &&
+                stop_sp < 0) {
+                budget = 1;
+            }
         } else {
             mem_write_x(d, addr, nval);
         }
@@ -2981,8 +3118,90 @@ lbl_COLD:
         d->pc = next_pc & DSP_MASK24;
         return true;
     }
+    if (__builtin_expect(d->yield_requested && stop_sp < 0, 0)) {
+        budget = 1;
+    }
+    if (__builtin_expect(stop_sp >= 0 && (int32_t)d->sp == stop_sp, 0)) {
+        d->pc = next_pc & DSP_MASK24;
+        return true;
+    }
+    DSP_SYNC_LOOP();
     DSP_STEP_END();
 
+lbl_step_slow:
+    if (next_pc == loop_trig) {
+        if (d->rep_remaining && pc == d->rep_pc) {
+            if (--d->rep_remaining) {
+                uint8_t k = ins->kind;
+
+                if (budget > 0 &&
+                    (k == DSP_OP_PAR_XY_DUAL_MAC ||
+                     k == DSP_OP_PAR_XY_DUAL_NOALU ||
+                     k == DSP_OP_NOP)) {
+                    uint32_t pk = ins->imm;
+                    uint8_t alu = ins->alu;
+                    bool yld = false;
+
+                    while (budget > 0 && d->rep_remaining > 0) {
+                        if (k == DSP_OP_PAR_XY_DUAL_MAC) {
+                            yld = exec_par_xy_dual(d, pk, alu, true, true);
+                        } else if (k == DSP_OP_PAR_XY_DUAL_NOALU) {
+                            yld = exec_par_xy_dual(d, pk, alu, false, false);
+                        }
+                        budget--;
+                        d->rep_remaining--;
+                        if (__builtin_expect(yld && stop_sp < 0, 0)) {
+                            d->lc = d->rep_remaining ? d->rep_remaining
+                                                     : d->rep_saved_lc;
+                            d->pc = (d->rep_remaining ? d->rep_pc
+                                                      : (pc + 1)) & DSP_MASK24;
+                            return true;
+                        }
+                    }
+                }
+                if (d->rep_remaining) {
+                    d->lc = d->rep_remaining;
+                    next_pc = d->rep_pc;
+                } else {
+                    d->lc = d->rep_saved_lc;
+                    next_pc = pc + 1;
+                    DSP_SYNC_LOOP();
+                }
+            } else {
+                d->lc = d->rep_saved_lc;
+                DSP_SYNC_LOOP();
+            }
+        } else if ((d->sr & SR_LF) && next_pc == d->la + 1 &&
+                   (pc == d->la || pc + 1 == d->la)) {
+            if (d->lc != 1 || (d->sr & SR_FV)) {
+                d->lc = (d->lc - 1) & DSP_MASK24;
+                next_pc = d->ssh[d->sp & 0xF];
+            } else {
+                uint32_t _h, _l, _ssr;
+                stack_pop(d, NULL, &_ssr);
+                stack_pop(d, &_h, &_l);
+                d->la = _h;
+                d->lc = _l;
+                d->sr = (d->sr & ~(SR_LF | SR_FV)) |
+                        (_ssr & (SR_LF | SR_FV));
+                DSP_SYNC_LOOP();
+                if (__builtin_expect(stop_sp >= 0 &&
+                                     (int32_t)d->sp == stop_sp, 0)) {
+                    d->pc = next_pc & DSP_MASK24;
+                    return true;
+                }
+            }
+        }
+    }
+    if (__builtin_expect(budget == 0, 0)) {
+        d->pc = next_pc & DSP_MASK24;
+        return true;
+    }
+    pc = next_pc & DSP_MASK24;
+    DSP_FETCH();
+
+#undef DSP_SYNC_LOOP
+#undef DSP_CACHE_HIT
 #undef DSP_FETCH
 #undef DSP_STEP_END
 }
@@ -3256,7 +3475,7 @@ static void *dsp_worker_thread(void *opaque)
 
         if (frames == 0) {
             qemu_mutex_unlock(&d->lock);
-            g_usleep(250);
+            g_usleep(100);
             continue;
         }
         if (frames > DSP_AUDIO_MAX) {
@@ -3571,6 +3790,25 @@ void dsp56300_esai_rx_push(unsigned ch, uint32_t word24)
 #endif
 }
 
+unsigned dsp56300_esai_rx_count(unsigned ch)
+{
+    Dsp56300 *d = dsp;
+    unsigned count;
+
+    if (!d || ch > 1) {
+        return 0;
+    }
+#ifndef DSP_TEST_COMMON
+    if (d->threaded) {
+        qemu_mutex_lock(&d->rx_lock);
+        count = d->ssi_rx[ch].count;
+        qemu_mutex_unlock(&d->rx_lock);
+        return count;
+    }
+#endif
+    return d->ssi_rx[ch].count;
+}
+
 void dsp56300_init(void)
 {
     static const CdjHostAudioCfg audio_cfg = {
@@ -3595,7 +3833,7 @@ void dsp56300_init(void)
     {
         const char *e = getenv("CDJ850_DSP_IPS");
 
-        d->slot_budget = e && atoi(e) > 0 ? (unsigned)atoi(e) : 256;
+        d->slot_budget = e && atoi(e) > 0 ? (unsigned)atoi(e) : 750;
     }
     d->debug_enabled = getenv("CDJ850_DSP_DEBUG") != NULL;
     {

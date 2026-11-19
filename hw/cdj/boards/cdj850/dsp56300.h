@@ -19,5 +19,6 @@ uint8_t dsp56300_shi_rx(void);
 void dsp56300_shi_cs(bool active);
 void dsp56300_set_pf(uint16_t pfdrh, uint16_t pfdrl);
 void dsp56300_esai_rx_push(unsigned ch, uint32_t word24);
+unsigned dsp56300_esai_rx_count(unsigned ch);
 
 #endif

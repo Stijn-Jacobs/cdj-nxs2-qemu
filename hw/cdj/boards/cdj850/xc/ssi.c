@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "cdj_common.h"
+#include "exec/icount.h"
 #include "../dsp56300.h"
 #include "dmac.h"
 #include "ssi.h"
@@ -120,26 +121,52 @@ static void cdj850_ssi_tx_tick(void *opaque)
 {
     Cdj850Ssi *s = opaque;
     int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
-    uint64_t acc, slots, i;
     bool running = true;
 
-    acc = (uint64_t)(now > s->last_ns ? now - s->last_ns : 0) * CDJ850_SSI_RATE +
-          s->clock_remainder;
-    slots = acc / 1000000000ULL;
-    s->clock_remainder = acc % 1000000000ULL;
-    s->last_ns = now;
-    if (slots > CDJ850_SSI_MAX_SLOTS) {
-        slots = CDJ850_SSI_MAX_SLOTS;
-    }
     s->in_tick = true;
-    for (i = 0; i < slots && running; i++) {
-        running = cdj850_ssi_slot(s);
-    }
-    s->in_tick = false;
-    if (!slots) {
+    if (icount_enabled()) {
+        uint64_t acc = (uint64_t)(now > s->last_ns ? now - s->last_ns : 0) *
+                           CDJ850_SSI_RATE + s->clock_remainder;
+        uint64_t slots = acc / 1000000000ULL;
+
+        s->clock_remainder = acc % 1000000000ULL;
+        s->last_ns = now;
+        if (slots > CDJ850_SSI_MAX_SLOTS) {
+            slots = CDJ850_SSI_MAX_SLOTS;
+        }
+        for (uint64_t i = 0; i < slots && running; i++) {
+            running = cdj850_ssi_slot(s);
+        }
+        if (!slots) {
+            running = (ldl_be_p(s->reg) | ldl_be_p(s->reg + CDJ850_SSI_CR1)) &
+                      CDJ850_SSICR_EN;
+        }
+    } else {
+        unsigned shifted = 0;
+
+        /*
+         * In threaded non-icount mode, the DSP worker paces consumption out of
+         * its 256-word ssi_rx FIFO at exact 88.2 kHz. Drain a whole block per
+         * virtual timer tick so DEI2 re-enables IRQ7 (DSPDREQ) without waiting
+         * across multiple timer hops while capping FIFO fill safely below 256.
+         */
+        s->last_ns = now;
+        s->clock_remainder = 0;
+        while (shifted < 128 &&
+               dsp56300_esai_rx_count(0) < 160 &&
+               dsp56300_esai_rx_count(1) < 160 &&
+               (s->tx_full[0] || s->tx_full[1] ||
+                cdj850_ssi_tx_dma_request(0) ||
+                cdj850_ssi_tx_dma_request(1))) {
+            if (!cdj850_ssi_slot(s)) {
+                break;
+            }
+            shifted++;
+        }
         running = (ldl_be_p(s->reg) | ldl_be_p(s->reg + CDJ850_SSI_CR1)) &
                   CDJ850_SSICR_EN;
     }
+    s->in_tick = false;
     if (running) {
         timer_mod(s->tx_timer, now + CDJ850_SSI_TICK_NS);
     }
