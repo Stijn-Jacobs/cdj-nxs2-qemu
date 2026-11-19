@@ -239,6 +239,9 @@ Run the model's tests with `python3 -m pytest tests/test_cdj850_*.py`. The live
 tests need the built emulator and the prepared firmware. The modding and reverse-engineering reference
 covers the panel protocol, hardware model, memory map and mod hooks. [CDJ-850 reverse engineering & modding](docs/cdj850-modding.md)
 
+To restore the CDJ-850 analysis notes in a local Ghidra project, follow the
+[Ghidra annotation import guide](scripts/ghidra/README.md).
+
 </details>
 
 <a id="not-included"></a>

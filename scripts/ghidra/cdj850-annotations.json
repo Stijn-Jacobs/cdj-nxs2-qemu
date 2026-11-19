@@ -1,0 +1,192 @@
+{
+  "version": 1,
+  "programs": {
+    "boot.bin": {
+      "sha256": "eb4f9f9885d6157d7521b13a18b20f685706152fabfe3ef2c3f6c9a5cd51d58c",
+      "language": "SuperH:BE:32:SH-2A",
+      "compiler": "default",
+      "load_address": "00000000",
+      "functions": [
+        {
+          "address": "00000100",
+          "name": "reset_entry"
+        }
+      ],
+      "comments": [
+        {
+          "address": "000004c4",
+          "type": "PLATE",
+          "text": "Stage-2 copy: 0x7F words from flash 0x10000 to 0x0DDEFA20. Stage 2: check sum16(0x60020..0x60024+len)==BE16 trailer, LZSS to 0x0C000000; else same for recovery image at 0x20000; else hang."
+        }
+      ]
+    },
+    "dsp_seg1_stage1.bin": {
+      "sha256": "4df3a6642d9552687aa75c741ca7a8d340277a707a4da6fd0b2965e803615610",
+      "language": "DSP56300:LE:24:default",
+      "compiler": "default",
+      "load_address": "P:000000",
+      "functions": [
+        {
+          "address": "P:000000",
+          "name": "reset_entry"
+        }
+      ],
+      "comments": []
+    },
+    "dsp_seg2_stage2.bin": {
+      "sha256": "fbda6bf53c50cb9ab4af98b45142e7474d923ec74796cc9a82d6b5954683ae2c",
+      "language": "DSP56300:LE:24:default",
+      "compiler": "default",
+      "load_address": "P:000000",
+      "functions": [
+        {
+          "address": "P:000000",
+          "name": "reset_entry"
+        }
+      ],
+      "comments": []
+    },
+    "dsp_seg3_stage3.bin": {
+      "sha256": "46f96419392aa154c964b97feba497af4f559f2f2695ac188f16983bbc8eb3d5",
+      "language": "DSP56300:LE:24:default",
+      "compiler": "default",
+      "load_address": "P:000000",
+      "functions": [
+        {
+          "address": "P:000000",
+          "name": "reset_entry"
+        }
+      ],
+      "comments": []
+    },
+    "dsp_seg4_app.bin": {
+      "sha256": "314deeef47ccad1414e6a8ec1fe787328a96a27b55b0b5868dc098127cc07026",
+      "language": "DSP56300:LE:24:default",
+      "compiler": "default",
+      "load_address": "P:000000",
+      "functions": [],
+      "comments": []
+    },
+    "main_unpacked.bin": {
+      "sha256": "26c8bfe933afc1e08a05dc65513303f1343a570d1e87f2734d60316e87c01591",
+      "language": "SuperH:BE:32:SH-2A",
+      "compiler": "default",
+      "load_address": "0c000000",
+      "functions": [
+        {
+          "address": "0c061454",
+          "name": "DisplayTask"
+        },
+        {
+          "address": "0c065ed0",
+          "name": "display_build_0"
+        },
+        {
+          "address": "0c066046",
+          "name": "display_build_1"
+        },
+        {
+          "address": "0c0660d4",
+          "name": "display_build_2"
+        },
+        {
+          "address": "0c066338",
+          "name": "display_build_3"
+        },
+        {
+          "address": "0c075e40",
+          "name": "ssi_init_0"
+        },
+        {
+          "address": "0c077570",
+          "name": "ssu0_dsp_exchange"
+        },
+        {
+          "address": "0c077c3c",
+          "name": "dsp_shi_boot_upload"
+        },
+        {
+          "address": "0c07800a",
+          "name": "ssu0_16bit_cmd"
+        },
+        {
+          "address": "0c08f450",
+          "name": "upd_load_from_cd"
+        },
+        {
+          "address": "0c0d610c",
+          "name": "panel_unpack_buttons"
+        },
+        {
+          "address": "0c0f9ee8",
+          "name": "panel_sum8ec"
+        },
+        {
+          "address": "0c0f9f14",
+          "name": "scif1_panel_setup"
+        },
+        {
+          "address": "0c0f9f7a",
+          "name": "scif1_panel_init"
+        },
+        {
+          "address": "0c0fa05e",
+          "name": "irq5_pnl_xbusy_isr"
+        },
+        {
+          "address": "0c0fa13c",
+          "name": "txi1_panel_isr"
+        },
+        {
+          "address": "0c0fc170",
+          "name": "loader_init"
+        },
+        {
+          "address": "0c0fc9dc",
+          "name": "servo_transfer"
+        },
+        {
+          "address": "0c0fd7cc",
+          "name": "servo_bringup"
+        },
+        {
+          "address": "0c0ff7d4",
+          "name": "cd_task_tick"
+        },
+        {
+          "address": "0c105da4",
+          "name": "loader_insertion_detect"
+        },
+        {
+          "address": "0c105e0e",
+          "name": "loader_state_machine"
+        },
+        {
+          "address": "0c106638",
+          "name": "loader_set_pwm"
+        },
+        {
+          "address": "0c10dcea",
+          "name": "usb_cdetflg_poll"
+        }
+      ],
+      "comments": [
+        {
+          "address": "0c08e842",
+          "type": "PLATE",
+          "text": "flash_erase_sector(addr): AMD CFI AA/55/80/AA/55/30 via 0x20000AAA/0x20000554 (uncached CS0). 0x0C08E8AE = flash_program_word(addr,data): AA/55/A0."
+        },
+        {
+          "address": "0c08ec44",
+          "type": "PLATE",
+          "text": "upd_flash_write(mode): mode 5 USB = flash 0x0..0x3EFFFF (63x64KB, boot region included); mode 6 CD = 0x60000.. (57 sectors, skips same version). Per sector erase 0x0C08E842, program 0x0C08E8AE, verify 0x0C08EBF0. No checksum/label/model check."
+        },
+        {
+          "address": "0c08f3c2",
+          "type": "PLATE",
+          "text": "upd_load_from_usb: sprintf(\"C:/C850MAIN.UPD\"), fill 4 MB buffer 0x0C1E8E5C with 0xFF, read file, flash-task mode 5. No content checks. (notes/cdj850-layout.md \"Update container rules\")"
+        }
+      ]
+    }
+  }
+}
