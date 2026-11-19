@@ -136,8 +136,10 @@ def test_replay_track_number_updates_and_reset(scif1_replay_exe, tmp_path):
     ]
 
 
-def status_remain(enabled):
+def status_remain(enabled, *, progress=0, address_flags=0):
     frame = bytearray([0x02] + [0] * 15)
+    frame[4] = progress
+    frame[9] = address_flags
     frame[13] = 0x2E | enabled
     frame[15] = sum8ec(frame[:15])
     return bytes(frame)
@@ -419,6 +421,98 @@ def test_replay_navigation_status_and_reset(scif1_replay_exe, tmp_path):
     ]
     assert [line.split("display ", 1)[1] for line in result.stdout.splitlines()
             if "display menu=" in line] == ["menu=1 (20 ms)", "menu=0 (22 ms)"]
+
+
+def test_replay_playing_address_modes_and_flash_phases(scif1_replay_exe, tmp_path):
+    other = bytes([0x69] + [0] * 14 + [0x69])
+    loaded = make_display_burst(1, 0x0A, [(4, 0, 0, "TRACK"), (0, 0, 0, ""), (0, 0, 0, "")])
+    transactions = [(status_track(1, (0, 30, 0)), *loaded)]
+    steady_remain = status_remain(True, progress=25, address_flags=0x04)
+    bad_phase = status_remain(True, progress=25, address_flags=0x02)
+    bad_phase = bad_phase[:-1] + bytes([bad_phase[-1] ^ 1])
+
+    # The phase comes from MAIN even when the capture spans only milliseconds.
+    stages = [
+        ("unknown", (), range(0)),
+        ("beginning", (status_remain(True, address_flags=0x04), other), range(100)),
+        ("remaining", (steady_remain, other), range(25, 100)),
+        ("bad-checksum", (bad_phase, other), range(25, 100)),
+        ("elapsed", (status_remain(False, progress=25), other), range(25)),
+        ("slow-lit", (status_remain(True, progress=26, address_flags=0x06), other), range(26, 100)),
+        ("slow-dark", (status_remain(True, progress=26, address_flags=0x02), other), range(0)),
+        ("fast-lit", (status_remain(True, progress=60, address_flags=0x05), other), range(60, 100)),
+        ("fast-dark", (status_remain(True, progress=60, address_flags=0x01), other), range(0)),
+        ("elapsed-fast-lit", (status_remain(False, progress=61, address_flags=0x05), other), range(61)),
+        ("elapsed-fast-dark", (status_remain(False, progress=61, address_flags=0x01), other), range(0)),
+        ("invalid-count", (status_remain(True, progress=255, address_flags=0x04), other), range(0)),
+        ("track-end", (status_remain(True, progress=100, address_flags=0x04), other), range(0)),
+        ("inactive", (status_remain(True), other), range(0)),
+    ]
+    for name, frames, columns in stages:
+        if frames:
+            transactions.append(frames)
+        record = tmp_path / "playing-address.scif1"
+        ppm = tmp_path / f"{name}.ppm"
+        write_capture(record, transactions)
+        subprocess.run([str(scif1_replay_exe), str(record), "--ppm", str(ppm)],
+                       capture_output=True, check=True, timeout=30)
+        pixels = ppm.read_bytes().split(b"\n", 3)[-1]
+        start = (407 * 1280 + 176) * 3
+        lit = [i for i in range(100)
+               if pixels[start + i * 27:start + i * 27 + 3] == b"\x68\xe4\xa5"]
+        assert lit == list(columns), name
+
+
+def test_replay_cue_strips_and_legends_follow_status_over_matrix_messages(scif1_replay_exe, tmp_path):
+    def cue_status(cue, memory_lamp):
+        frame = bytearray([0x02] + [0] * 15)
+        frame[10] = cue
+        frame[11] = 0x10 if memory_lamp else 0
+        frame[15] = sum8ec(frame[:15])
+        return bytes(frame)
+
+    def memory_frame(*columns):
+        frame = bytearray([0x60] + [0] * 15)
+        for column in columns:
+            frame[2 + column // 8] |= 0x80 >> (column % 8)
+        frame[15] = sum8ec(frame[:15])
+        return bytes(frame)
+
+    empty = (0, 0, 0, "")
+    playing = make_display_burst(1, 0x0A, [(4, 0, 0, "TRACK"), empty, empty])
+    saving = make_display_burst(2, 0x07, [empty, (0, 0, 0, "MEMORY"), empty])
+    deleted = make_display_burst(3, 0x07, [empty, (0, 0, 0, "DELETED"), empty])
+    old_marks = memory_frame(0, 12, 99)
+    saved_marks = memory_frame(0, 6, 12, 99)
+    remaining_marks = memory_frame(0, 6, 99)
+    transactions = [(status_track(1), *playing)]
+    other = bytes([0x69] + [0] * 14 + [0x69])
+    stages = [
+        ("loaded", (cue_status(7, True), old_marks), {0, 12, 99}, {6}, True),
+        ("memory-dark", (cue_status(7, False), saved_marks, *saving), {0, 6, 12, 99}, {6}, False),
+        ("memory-lit", (cue_status(7, True), saved_marks), {0, 6, 12, 99}, {6}, True),
+        ("deleted", (cue_status(13, False), remaining_marks, *deleted), {0, 6, 99}, {12}, False),
+        ("empty-memory", (cue_status(13, True), memory_frame()), set(), {12}, True),
+        ("track-change", (status_track(2), other), set(), set(), False),
+    ]
+    for name, frames, memory, cue, memory_lamp in stages:
+        transactions.append(frames)
+        record = tmp_path / "cue-strips.scif1"
+        ppm = tmp_path / f"{name}.ppm"
+        write_capture(record, transactions)
+        subprocess.run([str(scif1_replay_exe), str(record), "--ppm", str(ppm)],
+                       capture_output=True, check=True, timeout=30)
+        pixels = ppm.read_bytes().split(b"\n", 3)[-1]
+
+        def rgb(x, y):
+            offset = (y * 1280 + x) * 3
+            return pixels[offset:offset + 3]
+
+        red, blue = b"\xff\x58\x4c", b"\x9f\xe8\xff"
+        assert {i for i in range(100) if rgb(176 + 9 * i, 391) == red} == memory, name
+        assert {i for i in range(100) if rgb(176 + 9 * i, 439) == blue} == cue, name
+        assert (rgb(52, 390) == red) == memory_lamp, name
+        assert (rgb(52, 424) == blue) == bool(cue), name
 
 
 def test_replay_overview_ignores_partial_and_pre_reset_packets(scif1_replay_exe, tmp_path):

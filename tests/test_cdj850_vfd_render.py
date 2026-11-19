@@ -91,14 +91,20 @@ int main(void) {
     s.playing.memory[0] = 1;
     s.playing.position[99] = 1;
     s.playing.cue[0] = 1;
+    s.playing.memory_lamp = true;
+    s.playing.cue_lamp = true;
     draw(&s);
     assert(pixels[FL_RED_Y][FL_MATRIX_X] == FL_RED);
     assert(pixels[FL_RED_Y][FL_MATRIX_X+FL_PITCH_X] == FL_OFF);
     assert(pixels[FL_GREEN_Y][FL_MATRIX_X+99*FL_PITCH_X] == FL_GREEN);
     assert(pixels[FL_CUE_Y][FL_MATRIX_X] == FL_BLUE);
-    s.mode = 1; /* stale playback fields cannot leak into browser mode */
+    s.mode = 0x07; /* A matrix message can overlay a loaded track. */
     draw(&s);
-    assert(pixels[FL_RED_Y][FL_MATRIX_X] == FL_OFF);
+    assert(pixels[390][52] == FL_RED);
+    assert(pixels[424][52] == FL_BLUE);
+    assert(pixels[FL_RED_Y][FL_MATRIX_X] == FL_RED);
+    assert(pixels[FL_CUE_Y][FL_MATRIX_X] == FL_BLUE);
+    assert(pixels[FL_GREEN_Y][FL_MATRIX_X+99*FL_PITCH_X] == FL_OFF);
     s.mode = 0x0a;
     draw(&s);
     assert(pixels[314][89] == FL_OFF); /* Loaded text alone lights no INFO lamp. */
