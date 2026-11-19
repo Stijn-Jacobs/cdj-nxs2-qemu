@@ -138,5 +138,6 @@ static inline int cdj_usb_ctr_port(hwaddr off)
 
 void cdj_usb_init(MemoryRegion *sysmem, hwaddr base, qemu_irq irq,
                   bool dcp_per_packet);
+void cdj_usb_reset_host(void *opaque);
 
 #endif

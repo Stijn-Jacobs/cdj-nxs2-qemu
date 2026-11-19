@@ -334,6 +334,11 @@ void cdj850_panel_display_reset_readouts(PanelDisplay *display, uint64_t ns,
                                         PanelDisplayUpdate update, void *opaque)
 {
     display->readout_reset_ns = ns;
+    display->have_header = false;
+    display->header_only = false;
+    display->next_sub = 0;
+    display->payload_len = 0;
+    display->quiet_transactions = 0;
     publish_track(display, false, 0, update, opaque);
     publish_time(display, &(Cdj850Time){0}, update, opaque);
     publish_bpm(display, 0, update, opaque);
@@ -352,19 +357,26 @@ static void panel_playing_status(PanelDisplay *display, const uint8_t *tx,
                                  PanelDisplayUpdate update, void *opaque)
 {
     Cdj850Playing *playing = &display->state.playing;
-    /* MAIN 0x0c0637cc emits a count of progress columns. 0x0c0642cc
-     * emits the one-based cue column, or zero for no cue. */
-    unsigned progress = tx[4] <= CDJ850_OVERVIEW_COLUMNS ? tx[4] : 0;
+    /* MAIN 0x0c0637cc sends elapsed columns and playing-address flags.
+     * Byte 9 bits 1 and 0 select slow and fast flash; bit 2 is the lit
+     * phase. In steady playback bit 2 is set in REMAIN, clear in elapsed. */
+    unsigned progress = tx[4];
+    bool remain = (tx[13] & 1) != 0;
+    bool flashing = (tx[9] & 0x03) != 0;
+    bool phase_on = (tx[9] & 0x04) != 0;
+    bool address_on = progress <= CDJ850_OVERVIEW_COLUMNS &&
+                      (phase_on || (!remain && !flashing));
+    /* MAIN 0x0c0642cc emits one column for the current cue or loop-in. */
     unsigned cue = tx[10] <= CDJ850_OVERVIEW_COLUMNS ? tx[10] : 0;
     bool memory_lamp = (tx[11] & 0x10) != 0;
     bool changed = playing->memory_lamp != memory_lamp;
 
     for (unsigned i = 0; i < CDJ850_OVERVIEW_COLUMNS; i++) {
-        bool past = i < progress;
+        bool address_here = address_on && (remain ? i >= progress : i < progress);
         bool cue_here = i + 1 == cue;
 
-        changed |= playing->position[i] != past || playing->cue[i] != cue_here;
-        playing->position[i] = past;
+        changed |= playing->position[i] != address_here || playing->cue[i] != cue_here;
+        playing->position[i] = address_here;
         playing->cue[i] = cue_here;
     }
     playing->memory_lamp = memory_lamp;
@@ -391,7 +403,7 @@ static void panel_auxiliary(PanelDisplay *display, const uint8_t *tx,
     }
 
     if (tx[0] == 0x60) {
-        /* 0x0c06664e packs saved cue positions into 13 MSB-first bytes. */
+        /* 0x0c06664e packs saved cue and loop start columns MSB first. */
         bool changed = false;
 
         for (unsigned i = 0; i < CDJ850_OVERVIEW_COLUMNS; i++) {

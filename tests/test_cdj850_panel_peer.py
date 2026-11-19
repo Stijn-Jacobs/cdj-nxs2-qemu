@@ -26,6 +26,7 @@ STUBS = {
         "typedef struct VMStateField { int dummy; } VMStateField;\n"
         "typedef struct VMStateDescription {\n"
         "    const char *name; int version_id; int minimum_version_id;\n"
+        "    int (*pre_load)(void *);\n"
         "    const VMStateField *fields;\n"
         "} VMStateDescription;\n"
         "#define QEMU_CLOCK_VIRTUAL 0\n"
@@ -45,6 +46,7 @@ STUBS = {
         "#define VMSTATE_UINT32(f, s) { .dummy = 0 }\n"
         "#define VMSTATE_INT64(f, s) { .dummy = 0 }\n"
         "#define VMSTATE_BOOL(f, s) { .dummy = 0 }\n"
+        "#define VMSTATE_BOOL_V(f, s, v) { .dummy = 0 }\n"
         "#define VMSTATE_UINT8(f, s) { .dummy = 0 }\n"
         "#define VMSTATE_UINT16(f, s) { .dummy = 0 }\n"
         "#define VMSTATE_UINT64(f, s) { .dummy = 0 }\n"
@@ -72,6 +74,8 @@ STUBS = {
         "#include <stdint.h>\n"
         "static inline void cdj_pnl_stateout(const uint8_t *f, unsigned l)\n"
         "{ (void)f; (void)l; }\n"
+        "static inline void cdj_pnl_stateout_page2(const uint8_t *f, unsigned l)\n"
+        "{ (void)f; (void)l; }\n"
         "#endif\n"
     ),
     "intc.h": (
@@ -96,6 +100,10 @@ STUBS = {
         "static inline void cdj850_scif1_exchange(const uint8_t rx[16], uint8_t tx[16])\n"
         "{ (void)rx; memset(tx, 0, 16); }\n"
         "#endif\n"
+    ),
+    "system/runstate.h": (
+        "#define SHUTDOWN_CAUSE_SUBSYSTEM_RESET 1\n"
+        "void qemu_system_reset_request(int reason);\n"
     ),
     "trace.h": (
         "#ifndef STUB_TRACE_H\n#define STUB_TRACE_H\n"
@@ -148,6 +156,9 @@ uint64_t stub_vms_ns = 0;
 static uint8_t vfd_last_mode = 0xff;
 static char vfd_last[3][256];
 static unsigned vfd_calls = 0;
+static unsigned reset_requests = 0;
+
+void qemu_system_reset_request(int reason) { (void)reason; reset_requests++; }
 
 void vfd_note_time(const Cdj850Time *time) { (void)time; }
 void vfd_note_bpm(bool known, uint16_t bpm) { (void)known; (void)bpm; }
@@ -281,6 +292,36 @@ int main(int argc, char **argv)
                 cdj850_panel_peer_feed_key(arg, stub_vms_ns / 1000000ULL);
             }
         }
+        return 0;
+    }
+    if (strcmp(argv[1], "wake") == 0) {
+        uint8_t status[16];
+
+        parse_hex("020058000060221f01000004502f4aca", status);
+        status[15] ^= 1;
+        cdj850_panel_peer_feed_display_tx(status);
+        cdj850_panel_peer_feed_key("0x11:2:0:hold", 0);
+        cdj850_panel_peer_build_rx(1, f2);
+        printf("awake resets=%u play=%02x\n", reset_requests, f2[1]);
+
+        status[15] ^= 1;
+        cdj850_panel_peer_feed_display_tx(status);
+        cdj850_panel_peer_feed_key("0x11:4:0:rel", 0);
+        cdj850_panel_peer_feed_key("0x18:60:0:lvl", 0);
+        cdj850_panel_peer_feed_key("0x04:1:0:rot", 0);
+        printf("standby resets=%u\n", reset_requests);
+
+        cdj850_panel_peer_feed_key("0x13:1:0:hold", 50);
+        cdj850_panel_peer_feed_key("0x13:1:0:hold", 50);
+        stub_vms_ns = 50000000;
+        cdj850_panel_peer_build_rx(0, f1);
+        cdj850_panel_peer_build_rx(1, f2);
+        printf("wake resets=%u eject=%02x\n", reset_requests, f2[3]);
+
+        cdj850_panel_peer_reset_readouts();
+        cdj850_panel_peer_feed_key("0x17:4:120", 50);
+        cdj850_panel_peer_build_rx(1, f2);
+        printf("resumed resets=%u play=%02x info=%02x\n", reset_requests, f2[1], f2[7]);
         return 0;
     }
     if (strcmp(argv[1], "display") == 0) {
@@ -607,11 +648,22 @@ def test_script_pitch_and_jog_events(panel_peer_exe):
     assert rows[500]["vinyl"] == "7f"
 
 
+def test_standby_consumes_one_button_press_to_wake(panel_peer_exe):
+    out, _ = panel_peer_exe(None, "wake")
+    assert out.splitlines() == [
+        "awake resets=0 play=02",
+        "standby resets=0",
+        "wake resets=1 eject=00",
+        "resumed resets=1 play=00 info=04",
+    ]
+
+
 def test_live_udp_key_feed(panel_peer_exe):
     out, _ = panel_peer_exe(
         None, "live",
         "@100",
         "0x05:0xfc:0:lvl", "0x06:0xff:0:lvl",
+        "0x18:255:0:lvl", "0x17:0x01:50:or",
         "0x04:3:0:rot",
         "0x11:0x04:0:hold",
         "0x12:0x02:50:or",
@@ -628,4 +680,6 @@ def test_live_udp_key_feed(panel_peer_exe):
     assert frames["T100"]["F1"][5:9] == [0x80, 0x00, 0x80, 0x00]
     assert frames["T120"]["F1"][3:7] == [0x00, 0x03, 0xFC, 0xFF]
     assert frames["T120"]["F2"][1:3] == [0x04, 0x02]
+    assert frames["T120"]["F2"][7:9] == [0x01, 0xFF]
     assert frames["T180"]["F2"][1:3] == [0x00, 0x00]
+    assert frames["T180"]["F2"][7:9] == [0x00, 0xFF]

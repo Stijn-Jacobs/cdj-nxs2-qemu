@@ -42,14 +42,14 @@ The original source and build paths remain outside the integration worktree.
 
 | Area | Implemented | Integration gap |
 |---|---|---|
-| Console | Private QEMU boot and 1280x480 QMP captures verified | VNC and virtual-deck frontend checks pending |
+| Console | Private QEMU boot, 1280x480 VNC RFB, QMP screendumps, and desktop face/jog display verified | Physical-player video checks for panel-side scroll/blink/waveform timing pending |
 | Text | SCIF1 text records feed all three rows; tag bit 5 highlights selection | Most text attributes are retained by panel peer but not forwarded to renderer |
 | Browser | 100x27 matrix, proportional glyphs, nine-dot bands, five-dot rail | Font evidence covers photographed characters, not the entire charset |
 | Fixed legends | Photo-traced REMAIN, INFO, BROWSE, TAG/LIST, A.CUE, MT, WIDE, MEMORY, CUE, BPM, M/S/F | REMAIN, MT, A.CUE, navigation lamps, and pitch range follow live status. Other active states need mapping |
 | Playing | Title band/note, explicit artist/overview/strip fields | Title, artist, overview, progress, MEMORY and CUE reach the adapter |
 | Numeric/pitch | Live track number, M/S/F time, REMAIN, whole BPM, and signed pitch with range | Other lamp decoding pending |
 | Reference fixtures | Loaded photo values plus approximate sampled waveform | Never treat fixture data as decoded firmware traffic |
-| Persistence | Render state is currently static host state | Reset and migration behavior must be defined; VM save/restore is not established |
+| Persistence | Display/VFD/peripheral warm `system_reset` invalidation + clean reboot and VMState save/restore (`test_cdj850_snapshot.py`) verified | Physical-player comparison across live power/standby flows pending |
 
 `vfd_note_tx()` is legacy **SSU0 audio-DSP diagnostics**, not a display data
 source. The real panel is **SCIF1**. Older bring-up notes claiming otherwise
@@ -477,9 +477,9 @@ independent waveform and an empty memory list.
 | --- | --- |
 | Artist | Mode `0x0a`, text row 2 with attribute `0x07`. The row builder at `0x0C0660D4` serializes the attribute and text. |
 | Waveform | `0x0C0662AE` packs 100 samples from `0x0C9D1199` into frames `0x70`–`0x77`. Samples start at byte 3 on `0x70`, run through bytes 1–14 on `0x71`–`0x76`, and end with bytes 1–4 on `0x77`. |
-| MEMORY | `0x0C06664E` packs normalized saved-cue columns MSB first, serialized by `0x0C0664A8` into bytes 2–14 of frame `0x60`. Status page `0x02` byte 11 bit 4 drives the caption. |
-| Progress | `0x0C0637CC` emits a count from 0 to 100 in page `0x02` byte 4. |
-| CUE | `0x0C0642CC` emits the one-based cue column in page `0x02` byte 10. Zero leaves the cue marker and caption dark. |
+| MEMORY | `0x0C06664E` packs the normalized starts of saved cues and loops MSB first, serialized by `0x0C0664A8` into bytes 2–14 of frame `0x60`. Status page `0x02` byte 11 bit 4 drives the caption. |
+| Playing address | `0x0C0637CC` emits the elapsed column count (0–100) in page `0x02` byte 4. Byte 9 bits 1 and 0 indicate the slow and fast warnings, and bit 2 carries the lit phase. Byte 13 bit 0 selects REMAIN. |
+| CUE | `0x0C0642CC` emits one column for the current cue or loop-in in page `0x02` byte 10. The value is one-based. Zero leaves the cue marker and caption dark. |
 
 The renderer groups the firmware's 15 waveform levels into five dot heights
 with three levels per height. The decoder publishes an overview after all
@@ -487,6 +487,16 @@ eight checksummed parts arrive in order. Track number changes and warm reset
 clear cached data. A valid empty waveform or memory bitmap clears that field.
 The next track's title can arrive before its overview, so its waveform stays
 dark until the new burst is complete.
+
+The green playing-address bar fills from the left in elapsed mode and
+extinguishes columns from the left in REMAIN. The decoder follows the phase
+sent by MAIN for the warnings below 30 and 15 seconds. Replay preserves both
+phases using the recorded status pages.
+
+The red MEMORY and blue CUE strips and legends follow SCIF1 independently of
+the matrix mode. The firmware retains both strips through the `MEMORY` and
+`DELETED` messages. The red legend flashes using its status bit while the
+saved marks follow the bitmap, including when a saved point is removed.
 
 ```sh
 source ./env.sh
@@ -523,26 +533,28 @@ existing tests/scripts depend on it.
 Acceptance per field: known-good and malformed-message tests, replay fixture,
 live capture comparison, and an explicit test that absent data remains absent.
 
-### 5. Verify frontend, reset and timing (pending)
+### 5. Verify frontend, reset and timing (completed; hardware video items deferred)
 
-Check direct console and VNC/virtual-deck paths for dynamic framebuffer size,
-aspect ratio, inactive segments and label tint. The app can use VNC; do not
-assume this board writes the other models' RGB565 frame-file format. Check
-ordinary text and inverse text with long titles, punctuation and unknown glyphs.
+Verified across direct QEMU console, `1280x480` VNC RFB + QMP screendumps, and
+the desktop virtual-deck app face (`app/faces/cdj850.json`,
+`app/cdj850_panel.py`, `tests/test_app_faces.py`): dynamic `FlCanvas`
+padded-stride bounds (`640x240`, `1320x500`, `test_cdj850_vfd_render.py`),
+inactive segment and red/blue label tinting, and long (>60 char), inverse
+(`0x25`), punctuation, high-byte (`0x80..0xfe`), and control (`1..31`) glyphs.
 
-Define reset invalidation and state reconstruction. Either add complete
-migration state for the display and its producer, or explicitly keep saved-deck
-support unsupported for this board. Optimize redraws on actual state changes
-only after correctness is established.
+Reset invalidation, warm `system_reset` reboot recovery (`ae65363` resetting
+DSP56371/SHI/INTC/on-chip peripherals + readout/VFD clearing in `vfd.c`),
+VMState save/restore (`test_cdj850_snapshot.py`), change-only VFD redraw guards
+(`vfd.c`, `test_cdj850_vfd.py::test_change_only_redraws`), and automated live
+rekordbox export coverage (`test_live_scif1_bpm_matches_replay` and
+`test_live_scif1_playing_fields_match_replay` in `tests/test_cdj850_usb.py`) are
+implemented and verified.
 
-The user will provide a physical-player video later. Until then, scrolling,
-blink cadence and waveform animation remain unverified. Do not invent timings
-and call them 1:1 behavior.
-
-Acceptance: documented static visual coverage, replay/live evidence, reset
-checks and frontend smoke tests. Keep visual tolerances for geometry distinct
-from photo bloom, glare and exposure. Broader DSP/audio validation is required
-before merging an updated DSP baseline; this display work does not establish it.
+Remaining hardware-reference gaps (waiting on physical-player video from the
+user): IC1007-side scrolling cadence, other panel-side blink behavior, and
+waveform animation timing. Do not invent timings and call them 1:1 behavior.
+Broader DSP/audio real-time performance validation also remains separate from
+this display work and is tracked separately.
 
 ## Return path
 

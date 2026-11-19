@@ -841,6 +841,26 @@ static void cdj_usb_realize(DeviceState *dev, Error **errp)
                       USB_SPEED_MASK_FULL);
 }
 
+void cdj_usb_reset_host(void *opaque)
+{
+    CdjUsbState *s = CDJ_USB(opaque);
+
+    /* The stick stays plugged in. Arm a fresh attach event when MAIN boots. */
+    timer_del(s->attach_timer);
+    s->attached = false;
+    s->in_port_reset = false;
+    s->armed_before = false;
+    s->dcp_left = 0;
+    memset(s->buf, 0, sizeof(s->buf));
+    memset(s->port_pipe, 0, sizeof(s->port_pipe));
+    memset(s->pipecfg, 0, sizeof(s->pipecfg));
+    memset(s->pipebuf, 0, sizeof(s->pipebuf));
+    memset(s->pipemaxp, 0, sizeof(s->pipemaxp));
+    memset(s->pipeperi, 0, sizeof(s->pipeperi));
+    memset(s->reg, 0, sizeof(s->reg));
+    cdj_usb_update_irq(s);
+}
+
 static const VMStateDescription vmstate_cdj_usb = {
     .name = "cdj-usb",
     .version_id = 2,

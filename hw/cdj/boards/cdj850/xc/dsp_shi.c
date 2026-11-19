@@ -118,7 +118,14 @@ static const VMStateDescription vmstate_cdj850_dsp_shi = {
     }
 };
 
+static void dsp_shi_reset(void *opaque)
+{
+    (void)opaque;
+    memset(&shi, 0, sizeof(shi));
+}
+
 void cdj850_dsp_shi_init(void)
 {
+    qemu_register_reset(dsp_shi_reset, NULL);
     vmstate_register_any(NULL, &vmstate_cdj850_dsp_shi, &shi);
 }
