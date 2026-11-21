@@ -30,7 +30,7 @@ only the mods made for it.
 
 | mod | what it does |
 |---|---|
-| [`tempo_wide`](../mods/tempo_wide/cdj850/patch.py) | Tempo shortcut on USB: pressing TEMPO at ±10 % switches straight to WIDE (±100 %), and enables overflow-safe WIDE pitch scaling on USB. |
+| [`tempo_wide`](../mods/tempo_wide/cdj850/patch.py) | WIDE tempo on USB: TEMPO cycles ±6 % → ±10 % → ±16 % → WIDE (±100 %) → ±6 %, and enables overflow-safe WIDE pitch scaling on USB. |
 | [`dsp_probe`](../mods/dsp_probe/cdj850/patch.py) | DSP56371 segment probe: routes a main-loop NOP slot in the audio DSP program through an unused vector subroutine (`P:$0080`). |
 
 See [CDJ-850 Reverse Engineering & Modding Reference](cdj850-modding.md) for the CDJ-850's memory map, code cave, DSP56371 SHI segments, and modding guide.

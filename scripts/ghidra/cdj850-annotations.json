@@ -185,6 +185,11 @@
           "address": "0c08f3c2",
           "type": "PLATE",
           "text": "upd_load_from_usb: sprintf(\"C:/C850MAIN.UPD\"), fill 4 MB buffer 0x0C1E8E5C with 0xFF, read file, flash-task mode 5. No content checks. (notes/cdj850-layout.md \"Update container rules\")"
+        },
+        {
+          "address": "0c0d8dd0",
+          "type": "PRE",
+          "text": "TEMPO range step. r0 = *0x0CE6D25A (source, 1 = USB), r6 = *0x0CE6D0E1 (1=+-6 2=+-10 3=+-16 4=WIDE). USB: 1->2 2->3 3->1 4->3 (no WIDE); else (CD): 1->2 2->3 3->4 4->1. Next range r4 -> FUN at pool 0x0C0D8FA8. tempo_wide hooks 0x0C0D8DC2 and clears r0 so USB takes the CD table."
         }
       ]
     }

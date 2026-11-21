@@ -270,13 +270,22 @@ def test_cdj850_modded_flash_boots_and_runs_both_mods(tmp_path):
             timeout=15.0, pump=pump,
         ), f"initial ±10% pitch did not reach ~+10% ({_qmp_read(qmp, SPEED, 'w'):#x})"
 
-        # Tap TEMPO once: tempowide hook skips ±16% (~0x0947AE) straight to WIDE +100% (~0x100000).
+        # Tap TEMPO once: ±10% -> ±16% (+16% = ~0x0947AE); tempowide keeps USB from wrapping to ±6.
+        _tap(key_port, 0x13, 0x08)
+        assert _wait_cond(
+            lambda: 0x092000 <= _qmp_read(qmp, SPEED, "w") <= 0x097000,
+            timeout=60.0, pump=pump,
+        ), f"tempowide did not step ±10% -> ±16% (SPEED={_qmp_read(qmp, SPEED, 'w'):#x})"
+
+        # Tap again: ±16% -> WIDE +100% (~0x100000). Wait out the first 160 ms press so the
+        # handler sees a fresh rising edge on TEMPO (it ignores a held key).
+        time.sleep(1.0)
         _tap(key_port, 0x13, 0x08)
         wide = _wait_cond(
             lambda: _qmp_read(qmp, SPEED, "w") >= 0x0F8000,
             timeout=60.0, pump=pump,
         )
-        assert wide, f"tempowide did not step straight to WIDE (SPEED={_qmp_read(qmp, SPEED, 'w'):#x})"
+        assert wide, f"tempowide did not step ±16% -> WIDE (SPEED={_qmp_read(qmp, SPEED, 'w'):#x})"
     finally:
         sel.close()
         qmp.close()
