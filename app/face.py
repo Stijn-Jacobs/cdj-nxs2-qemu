@@ -4,11 +4,11 @@
 The CDJ-2000NXS2's face is laid out in layout.py and drawn by art.py. Every
 other player gets a file instead: its size and the position of every part in
 millimetres from the top left of the chassis (measured on the manual's
-top-down drawing), and its controls. A control with `off` and `mask` is a
-report bit the firmware's panel decoder turns into a key the firmware names;
-one without is drawn dark and does nothing, because no signal is known for it.
-A control with `lamp` [byte, mask] lights while MAIN's frame to the panel MCU
-sets that bit, measured on the player; one without never lights.
+top-down drawing), and its controls. A control with `off` and `mask` sends
+a report bit the firmware's panel decoder recognizes. A control with
+`lamp` [byte, mask] lights while MAIN's frame to the panel MCU sets that bit.
+Add a third value of 2 for a lamp in the CDJ-850's second status page.
+A standalone lamp has geometry and a `lamp` entry.
 A lever (`latch`) stays where it was put: a click holds its bit, the next one
 lets go.
 """
@@ -38,7 +38,7 @@ class FaceKey:
     symbol: str = ""
     font: int = 9
     latch: bool = False
-    lamp: tuple | None = None       # the panel frame's (byte, mask) that lights it
+    lamp: tuple | None = None       # (byte, mask) or (byte, mask, status page)
 
     @property
     def wired(self):
@@ -86,6 +86,9 @@ class Face:
     frame: tuple | None = None      # the LCD's pixels as the board draws them
     jog_counter: dict | None = None # the platter's report scale, where the jog counter has been measured
     slider_off: int | None = None   # the report byte of the tempo slider's position word, where it has been measured
+    slider_invert: bool = False     # True when high word means '-' (slower) and low word means '+' (faster)
+    vinyl_speed_off: int | None = None  # the report byte of the touch/release potentiometer
+    jog_display: bool = False
 
     @property
     def lcd(self):
@@ -136,7 +139,7 @@ def load(model):
                     off=int(k["off"], 16) if k.get("off") else None, mask=k.get("mask"),
                     keycap=k.get("keycap", ""), kind=k.get("kind", "rect"), color=k.get("color", ""),
                     symbol=k.get("symbol", ""), font=k.get("font", 9), latch=k.get("latch", False),
-                    lamp=(int(k["lamp"][0], 16), k["lamp"][1]) if "lamp" in k else None)
+                    lamp=(int(k["lamp"][0], 16), *k["lamp"][1:]) if "lamp" in k else None)
             for k in d["keys"]]
     r, jog, sl, touch = d["rotary"], d["jog"], d["slider"], d.get("touch")
     return Face(
@@ -146,9 +149,12 @@ def load(model):
         rotary_off=int(r["turn_off"], 16) if "turn_off" in r else None,
         jog=_units(jog["center"] + [jog["radius"]]), platter_radius=jog["platter"] * UNITS_PER_MM,
         jog_counter=jog.get("counter"),
+        jog_display=jog.get("display", False),
         slider=_units([sl["x"], sl["top"], sl["bottom"]] + sl["cap"]),
         slider_pad=_units(sl["pad"]) if "pad" in sl else None, zero_mark=sl.get("zero_mark", True),
         slider_off=int(sl["report"], 16) if "report" in sl else None,
+        slider_invert=bool(sl.get("invert", False)),
+        vinyl_speed_off=int(d["vinyl_speed"], 16) if d.get("vinyl_speed") else None,
         keys=keys,
         slots=[_units(box) for box in d["slots"]],
         printed=[_units(t[:2]) + (t[2], t[3]) for t in d["print"]],

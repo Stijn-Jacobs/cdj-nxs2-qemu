@@ -12,8 +12,8 @@ MCU digitises it (report bytes 0x16-0x19), or over VNC where the display
 board takes a pointer. The jog turns under the mouse like the NXS2's and, on
 a player whose counter has been measured (the face's `counter`), sends the
 platter's report fields; so does the tempo slider where the face names its
-report byte. On any other player the jog only turns on screen and the slider
-stays where the body draws it.
+report byte. The CDJ-850 jog display receives MAIN's status page and its
+vinyl speed knob sends a level to the emulated potentiometer input.
 """
 
 import math
@@ -21,12 +21,14 @@ import time
 
 import pygame
 
-import art as ART
 import controls as C
+from cdj850_panel import JogDisplay
 import gfx
-from face_art import FaceArt
+from face_art import make_face_art
 
 DETENT_DEG = 15
+VINYL_DRAG_UNITS = 180
+VINYL_WHEEL_STEP = 8
 
 
 def _angle(x, y, centre):
@@ -57,8 +59,15 @@ class FaceDeckView:
         if face.jog_counter:
             self.jog.start()
         self.grab_jog = None            # the angle the platter was last at
-        self.slider = C.WordSlider(self.send, face.slider_off) if face.slider_off is not None else None
+        self.slider = (C.WordSlider(self.send, face.slider_off, invert=face.slider_invert)
+                       if face.slider_off is not None else None)
         self.grab_slider = False
+        self.vinyl_key = (face.key_named("VINYL SPEED ADJUST")
+                          if face.vinyl_speed_off is not None else None)
+        self.vinyl_speed = 0
+        self.grab_vinyl = None
+        self.jog_display = None
+        self.jog_display_layer = None
         self.finger = False             # the mouse is down on the touch screen
         self.scale = self.ratio = None
         self.surf = None
@@ -89,7 +98,7 @@ class FaceDeckView:
 
     def rescale(self, scale, ratio):
         self.scale, self.ratio = scale, ratio
-        self.art = FaceArt(self.px, self.face, f"DECK {self.number}")
+        self.art = make_face_art(self.px, self.face, f"DECK {self.number}")
         self.body = gfx.surface(self.art.body())
         self.surf = self.body.copy()
         x0, y0, x1, y1 = [round(v * self.px) for v in self.face.lcd]
@@ -102,14 +111,18 @@ class FaceDeckView:
         self._draw_cap()
         img, pos = self.art.centre_sprite(False)
         self.centre = (gfx.surface(img), pos)
-        self.warm = list(range(1, ART.Art.JOG_PHASES))
+        self.vinyl_layer = None
+        if self.vinyl_key:
+            self._draw_vinyl_speed()
+        self._draw_jog_display()
+        self.warm = list(range(1, self.art.JOG_PHASES))
         self._draw_select(False)
         for name in self.latched | self.lit:
             self._draw_key(self.face.key_named(name), name in self.latched)
         self.dirty = [self.surf.get_rect()]
 
     def _draw_jog(self):
-        img, pos = self.art.jog_sprite(self.jog.angle % ART.Art.JOG_PHASES)
+        img, pos = self.art.jog_sprite(self.jog.angle % self.art.JOG_PHASES)
         self.jog_layer = (gfx.surface(img), pos)
         self.dirty.append(pygame.Rect(pos, self.jog_layer[0].get_size()))
 
@@ -127,6 +140,29 @@ class FaceDeckView:
         self.slider.set((y - top) / (bottom - top))
         self.dirty.append(pygame.Rect(old, self.cap_layer[0].get_size()))
         self._draw_cap()
+
+    def _draw_vinyl_speed(self):
+        img, pos = self.art.vinyl_speed_sprite(self.vinyl_key, self.vinyl_speed)
+        self.vinyl_layer = (gfx.surface(img), pos)
+        self.dirty.append(pygame.Rect(pos, img.size))
+
+    def _set_vinyl_speed(self, value):
+        value = min(255, max(0, round(value)))
+        if value != self.vinyl_speed:
+            self.vinyl_speed = value
+            self.send(f"0x{self.face.vinyl_speed_off:02x}:{value}:0:lvl")
+            self._draw_vinyl_speed()
+
+    def _draw_jog_display(self):
+        if self.jog_display is None:
+            if self.jog_display_layer:
+                sprite, pos = self.jog_display_layer
+                self.dirty.append(pygame.Rect(pos, sprite.get_size()))
+            self.jog_display_layer = None
+        else:
+            img, pos = self.art.jog_display_sprite(self.jog_display)
+            self.jog_display_layer = (gfx.surface(img), pos)
+            self.dirty.append(pygame.Rect(pos, img.size))
 
     def _draw_select(self, down):
         img, pos = self.art.select_sprite(self.detents, down)
@@ -157,7 +193,8 @@ class FaceDeckView:
         s = self.surf
         s.set_clip(rect)
         s.blit(self.body, rect.topleft, area=rect)
-        for sprite, pos in filter(None, (self.jog_layer, self.cap_layer, self.centre)):
+        for sprite, pos in filter(None, (self.jog_layer, self.cap_layer, self.centre,
+                                         self.jog_display_layer, self.vinyl_layer)):
             s.blit(sprite, pos)
         if self.lcd:
             s.blit(self.lcd, self.lcd_pos)
@@ -183,6 +220,11 @@ class FaceDeckView:
 
     def tick(self, now):
         self._light()
+        if self.face.jog_display:
+            display = JogDisplay.from_frame(self.link.latest_frame(now))
+            if display != self.jog_display:
+                self.jog_display = display
+                self._draw_jog_display()
         frame = self.screen.take_frame()
         if frame is None:
             if self.warm:
@@ -253,7 +295,9 @@ class FaceDeckView:
             self._touch(x, y, True)
             return
         key = self._key_at(x, y)
-        if key and key.wired and key.latch:
+        if key is not None and key is self.vinyl_key:
+            self.grab_vinyl = (y, self.vinyl_speed)
+        elif key and key.wired and key.latch:
             held = key.name not in self.latched
             self.latched.symmetric_difference_update({key.name})
             self.send(key.datagram("hold" if held else "rel"))
@@ -281,6 +325,10 @@ class FaceDeckView:
         if self.grab_slider:
             self._move_cap(y)
             return
+        if self.grab_vinyl is not None:
+            start_y, initial = self.grab_vinyl
+            self._set_vinyl_speed(initial + (start_y - y) * 255 / VINYL_DRAG_UNITS)
+            return
         if self.grab_jog is not None:
             angle = _angle(x, y, self.face.jog)
             self.jog.turn(_turned(angle, self.grab_jog), time.monotonic())
@@ -306,6 +354,7 @@ class FaceDeckView:
             self.jog.release(time.monotonic())
         self.turning = self.grab_jog = None
         self.grab_slider = False
+        self.grab_vinyl = None
         key, self.down_key = self.down_key, None
         if key:
             self.send(key.datagram("rel"))
@@ -315,7 +364,9 @@ class FaceDeckView:
         """One notch: +1 up, -1 down; wheel up moves up the list, over the
         jog it nudges the platter."""
         x, y = self.units(pos)
-        if self._in_jog(x, y):
+        if self.vinyl_key and self.vinyl_key.hit(x, y):
+            self._set_vinyl_speed(self.vinyl_speed + sign * VINYL_WHEEL_STEP)
+        elif self._in_jog(x, y):
             self.jog.nudge(4.0 * sign, time.monotonic())
             self._draw_jog()
         else:
@@ -324,13 +375,15 @@ class FaceDeckView:
     def hover(self, pos):
         x, y = self.units(pos)
         key = self._key_at(x, y)
-        if key:
+        if key is not None and key is self.vinyl_key:
+            text = "Vinyl speed adjust  ·  drag up/down or scroll to set the brake and release ramps"
+        elif key:
             parts = [key.name.capitalize()]
             if key.keycap:
                 parts.append(f"key {key.keycap}")
             if key.latch:
                 parts.append("click to flip it")
-            if not key.wired:
+            if not (key.wired or key.lamp):
                 parts.append("no known panel signal, not wired")
             text = "  ·  ".join(parts)
         elif self._in_touch_screen(x, y):

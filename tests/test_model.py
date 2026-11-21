@@ -18,7 +18,7 @@ from launcher import model  # noqa: E402
 def test_lists_the_committed_profiles():
     on_disk = sorted(f[:-len(".conf")] for f in os.listdir(model.models_dir()) if f.endswith(".conf"))
     assert sorted(model.list_models()) == on_disk
-    assert {"cdj2000nxs2", "xdj1000mk2", "xdj700", "xdj1000", "cdj900nxs", "cdj2000nxs", "cdj900", "cdj2000"} <= set(on_disk)
+    assert {"cdj2000nxs2", "xdj1000mk2", "xdj700", "xdj1000", "cdj900nxs", "cdj2000nxs", "cdj850", "cdj900", "cdj2000"} <= set(on_disk)
 
 
 def test_default_first_then_newest_first():
@@ -52,7 +52,10 @@ def test_every_profile_names_its_images_and_decodes_the_sparse_section():
     # lzss_decode reads the section<N>.sparse.bin that srec_coverage writes.
     for mid in model.list_models():
         m = model.load(mid)
-        assert "extract/main_unpacked.bin" in [rel for rel, _ in m.expected], mid
+        if "c850_raw" in m.fw_steps:
+            assert "extract/main_flat.bin" in [rel for rel, _ in m.expected], mid
+        else:
+            assert "extract/main_unpacked.bin" in [rel for rel, _ in m.expected], mid
         if "lzss_decode" in m.fw_steps:
             assert "srec_coverage" in m.fw_steps[:m.fw_steps.index("lzss_decode")], mid
 

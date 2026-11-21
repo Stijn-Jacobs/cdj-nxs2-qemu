@@ -97,7 +97,8 @@ static void cdj_board_flash(void)
     }
     qdev_prop_set_uint8(fl, "width", 2);
     qdev_prop_set_uint8(fl, "mappings", 1);
-    qdev_prop_set_uint8(fl, "big-endian", 0);
+    /* Data bytes on a 16-bit bus: the SH-2A boards are big-endian. */
+    qdev_prop_set_uint8(fl, "big-endian", d->flash_be);
     qdev_prop_set_uint16(fl, "id0", d->flash_id[0]);
     qdev_prop_set_uint16(fl, "id1", d->flash_id[1]);
     qdev_prop_set_uint16(fl, "id2", d->flash_id[2]);

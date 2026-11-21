@@ -1,0 +1,25 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+/* CDJ-850 ports/PFC at 0xFFFE3800 (Renesas SH7263 general I/O). */
+#ifndef CDJ850_PORT_H
+#define CDJ850_PORT_H
+#include "cdj_common.h"
+
+void cdj850_port_init(MemoryRegion *sysmem, SuperHCPU *cpu);
+
+/* MAIN_XBUSY (PC14, PCDRL bit 14): MAIN's "link ready" output to the panel. */
+bool cdj850_port_main_xbusy(void);
+
+/* PDDRL (0xFFFE3982) as last written; bit 9 = PD9 = DRVMUTE2, the CD loader
+ * motor driver enable. */
+uint16_t cdj850_port_pddrl(void);
+
+/* PBDRL (0xFFFE3882) as last written; bit 10 = PB10 = USB_ABSEL (high =
+ * USB-A host port), bit 11 = PB11 = USB_VBUSON (high = VBUS on). */
+uint16_t cdj850_port_pbdrl(void);
+
+/* PFDRH (0xFFFE3A80) as last written; bit 0 = PF16 = PLAY (to DSP PF10). */
+uint16_t cdj850_port_pfdrh(void);
+
+/* PFDRL (0xFFFE3A82) as last written; bit 3 = PF3 = DSPCS (active low). */
+uint16_t cdj850_port_pfdrl(void);
+#endif

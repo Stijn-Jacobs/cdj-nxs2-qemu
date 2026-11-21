@@ -183,6 +183,13 @@ config CDJ2000
     depends on SH4
     select CDJ_COMMON
 
+# The CDJ-850 (SH7263/SH-2A, big-endian), machine cdj850.
+config CDJ850
+    bool
+    default y
+    depends on SH4
+    select CDJ_COMMON
+
 config SH7269GUI
     bool
     default y

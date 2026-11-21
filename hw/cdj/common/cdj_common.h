@@ -83,6 +83,8 @@ typedef struct CdjBoardDesc {
     uint64_t flash_size;
     CdjFlashBank flash[2];      /* the real sector layout */
     uint16_t flash_id[4];
+    /* Big-endian flash bus (the SH-2A boards); false keeps the SH-4 layout. */
+    bool flash_be;
 
     /* The decompressed MAIN image lands at dram_phys and is entered here. */
     uint32_t fw_entry;

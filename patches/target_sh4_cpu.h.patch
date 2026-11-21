@@ -1,8 +1,16 @@
 diff --git a/target/sh4/cpu.h b/target/sh4/cpu.h
-index 6984bb4..3783d3f 100644
+index 6984bb4..a1988cf 100644
 --- a/target/sh4/cpu.h
 +++ b/target/sh4/cpu.h
-@@ -127,6 +127,13 @@ typedef struct tlb_t {
+@@ -32,6 +32,7 @@
+ #define SH_CPU_SH7751  (1 << 3)
+ #define SH_CPU_SH7751R (1 << 4)
+ #define SH_CPU_SH7785  (1 << 5)
++#define SH_CPU_SH2A    (1 << 6)
+ #define SH_CPU_SH7750_ALL (SH_CPU_SH7750 | SH_CPU_SH7750S | SH_CPU_SH7750R)
+ #define SH_CPU_SH7751_ALL (SH_CPU_SH7751 | SH_CPU_SH7751R)
+ 
+@@ -127,6 +128,13 @@ typedef struct tlb_t {
  enum sh_features {
      SH_FEATURE_SH4A = 1,
      SH_FEATURE_BCR3_AND_BCR4 = 2,
@@ -16,7 +24,7 @@ index 6984bb4..3783d3f 100644
  };
  
  typedef struct memory_content {
-@@ -198,12 +205,72 @@ typedef struct CPUArchState {
+@@ -198,12 +206,80 @@ typedef struct CPUArchState {
      /* The features that we should emulate. See sh_features above.  */
      uint32_t features;
  
@@ -28,6 +36,14 @@ index 6984bb4..3783d3f 100644
 +     */
 +    uint32_t sh2a_irq_vector;
 +    uint32_t sh2a_irq_level;   /* priority; delivered only when > SR.IMASK */
++    /*
++     * Optional board hook, called right after an SH-2A interrupt has been
++     * accepted (request cleared, SR.IMASK raised). A board that presents one
++     * vector at a time uses it to present the next pending one at once, so
++     * the CPU takes it on the handler's RTE instead of after the board's
++     * next timer slice. Not migrated: the board sets it again at init.
++     */
++    void (*sh2a_irq_taken)(struct CPUArchState *env);
 +
 +    /*
 +     * SH-2A fast-interrupt register banks. LDBANK/STBANK address one as
@@ -89,7 +105,7 @@ index 6984bb4..3783d3f 100644
  /**
   * SuperHCPU:
   * @env: #CPUSH4State
-@@ -369,15 +436,62 @@ static inline uint32_t cpu_read_sr(CPUSH4State *env)
+@@ -369,15 +445,66 @@ static inline uint32_t cpu_read_sr(CPUSH4State *env)
                       (env->sr_t << SR_T);
  }
  
@@ -105,6 +121,10 @@ index 6984bb4..3783d3f 100644
 +    /* SH-2A is always privileged -- see SH_FEATURE_SH2A. */
 +    if (env->features & SH_FEATURE_SH2A) {
 +        env->sr |= (1u << SR_MD);
++        /* No RB bit on SH-2A (manual section 2.2.2): keep env->sr RB-free so
++         * no path (GDB writes via this helper included) can re-arm R0-R7
++         * banking behind the translator's back. SH-4 guests unaffected. */
++        env->sr &= ~(1u << SR_RB);
 +    }
  }
  

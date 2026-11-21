@@ -30,7 +30,9 @@ esac
 MAIN_QEMU="${MAIN_QEMU:-${QEMU_BUILD:-$HOME/qemu-build}/qemu-system-sh4$EXESUF}"
 LOGDIR="${LOGDIR:-/tmp}"
 MAINLOG="$LOGDIR/$TAG.main.log"
-IMAGE="$PROJ/$MODEL_EXTRACT/main_unpacked.bin"
+# The kernel-boot image; a model whose firmware is not an unpacked MAIN names
+# its own (cdj850: main_flat.bin, flash-boot only, used as a prepared check).
+IMAGE="$PROJ/$MODEL_EXTRACT/${MODEL_KERNEL:-main_unpacked.bin}"
 [ -f "$IMAGE" ] || { echo "no $IMAGE -- run scripts/firmware/prepare_firmware.sh --model $MODEL_ID --install <update>" >&2; exit 1; }
 # QEMU is a native program on Windows and cannot open MSYS2 paths (/c/...).
 if command -v cygpath >/dev/null 2>&1; then

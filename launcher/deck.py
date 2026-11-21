@@ -16,6 +16,7 @@ Points are cached per build, firmware, medium and MAIN_ARGS (snapshot.py).
 
 import os
 import shlex
+import shutil
 import subprocess
 import time
 
@@ -31,11 +32,17 @@ PANEL_KEY_PORT = 40124
 PANEL_STATE_PORT = 40024
 
 
-def main_qemu(lay, env):
-    """The MAIN emulator: MAIN_QEMU, else the one in QEMU_BUILD. The older
-    boards are machines of the same qemu-system-sh4 as the NXS2's MAIN."""
+def main_qemu(lay, env, m=None):
+    """The MAIN emulator: QEMU_BUILD/qemu-system-sh4, or QEMU_EB_BUILD/qemu-system-sh4eb
+    when the model's MAIN arch is sh4eb."""
     if lay.packaged:
-        return lay.qemu_binaries()[0]
+        return lay.qemu_binaries()[1 if m and m.main_is_eb else 0]
+    if m and m.main_is_eb:
+        if env.get("GUI_QEMU"):
+            return host.native(env["GUI_QEMU"])
+        build = env.get("QEMU_EB_BUILD") or ("/c/qemu-build-eb-mingw" if host.is_windows()
+                                             else os.path.join(host.home(), "qemu-build-eb"))
+        return os.path.join(host.native(build), "qemu-system-sh4eb" + host.exe_suffix())
     if env.get("MAIN_QEMU"):
         return host.native(env["MAIN_QEMU"])
     build = env.get("QEMU_BUILD") or ("/c/qemu-build-mingw" if host.is_windows()
@@ -92,18 +99,46 @@ def deck_display(display, n):
     return "%s:%d" % (head, int(number) + n - 1)
 
 
+def _selected_mods(lay, m, env):
+    return [knob[len("CDJ_MAIN_"):].lower() for row in mods.load(lay, m.id)
+            for knob in mods.env_names(row.env)
+            if knob.startswith("CDJ_MAIN_") and env.get(knob) == "1"]
+
+
 def patched_kernel(lay, m, env, kernel, tag):
     """MAIN with the mods cdj.conf switched on patched in, as a copy under tmp;
     the image itself when none is on."""
-    names = [knob[len("CDJ_MAIN_"):].lower() for row in mods.load(lay, m.id)
-             for knob in mods.env_names(row.env)
-             if knob.startswith("CDJ_MAIN_") and env.get(knob) == "1"]
+    names = _selected_mods(lay, m, env)
     if not names:
         return kernel
     patched = os.path.join(lay.tmp, "cdj-%s-main.bin" % tag)
     subprocess.run(host.python_argv() + [os.path.join(lay.emu, "mods", "patch_main.py"),
                                          "--model", m.id, kernel, patched] + names, check=True)
     return patched
+
+
+def patched_flash(lay, m, env, flash, tag):
+    """(flash_path, snapshot_mode) for flash-booting decks (CDJ-850).
+    PERSIST=1 keeps a writable flash copy under data/ so the 0x3F8000 settings
+    sector persists across runs even when mods rewrite the 0x60000..0x3F0000 window."""
+    names = _selected_mods(lay, m, env)
+    persist = env.get("PERSIST") == "1"
+    if persist:
+        os.makedirs(lay.data, exist_ok=True)
+        dest = os.path.join(lay.data, "flash-%s.bin" % tag)
+        if not os.path.isfile(dest):
+            shutil.copyfile(flash, dest)
+            say("[%s] made %s -- settings at 0x3F8000 now persist" % (tag, dest))
+        if names:
+            subprocess.run(host.python_argv() + [os.path.join(lay.emu, "mods", "patch_main.py"),
+                                                 "--model", m.id, "--flash", dest, dest] + names, check=True)
+        return dest, "off"
+    if not names:
+        return flash, "on"
+    dest = os.path.join(lay.tmp, "cdj-%s-flash.bin" % tag)
+    subprocess.run(host.python_argv() + [os.path.join(lay.emu, "mods", "patch_main.py"),
+                                         "--model", m.id, "--flash", flash, dest] + names, check=True)
+    return dest, "on"
 
 
 def command(lay, m, env, n=1, main=None):
@@ -114,7 +149,7 @@ def command(lay, m, env, n=1, main=None):
     folder = model.extract_dir(lay, m)
     env = dict(env)
     env["CDJ_ATA"] = "1"
-    found = sites.find(lay, m, main)
+    found = sites.find(lay, m, None if m.boots_flash else main)
     sr_seed_slot = found.sr_seed_slot()
     if sr_seed_slot is not None:
         env["CDJ_SR_SEED_SLOT"] = sr_seed_slot
@@ -126,8 +161,12 @@ def command(lay, m, env, n=1, main=None):
         env["CDJ_M16C_GUI"] = host.native(os.path.join(folder, m.display_flash))
     first_key_port = int(nonempty(env, "CDJ_PANEL_KEYSOCK", str(host.pick_udp_port(PANEL_KEY_PORT))))
     env["CDJ_PANEL_KEYSOCK"] = str(first_key_port + n - 1)
-    argv = [main_qemu(lay, env), "-M", m.main_machine, "-name", m.title if n == 1 else "%s %d" % (m.title, n),
-            "-kernel", host.native(patched_kernel(lay, m, env, main or os.path.join(folder, "main_unpacked.bin"), tag)),
+    if m.boots_flash:
+        flash_path, snap_mode = patched_flash(lay, m, env, main or os.path.join(folder, m.main_flash), tag)
+        boot_args = ["-drive", "if=pflash,format=raw,file=%s,snapshot=%s" % (host.native(flash_path), snap_mode)]
+    else:
+        boot_args = ["-kernel", host.native(patched_kernel(lay, m, env, main or os.path.join(folder, "main_unpacked.bin"), tag))]
+    argv = [main_qemu(lay, env, m), "-M", m.main_machine, "-name", m.title if n == 1 else "%s %d" % (m.title, n)] + boot_args + [
             "-serial", "file:" + os.path.join(lay.logs, tag + ".log"),
             "-drive", "if=none,id=usbstk,file=%s,format=raw,snapshot=on" % host.native(lay.usb_image),
             "-device", "usb-storage,drive=usbstk,port=1"]
@@ -158,12 +197,18 @@ def command(lay, m, env, n=1, main=None):
     return argv, env
 
 
+def _boot_image(argv):
+    if "-kernel" in argv:
+        return argv[argv.index("-kernel") + 1]
+    pflash = next(a for a in argv if a.startswith("if=pflash,"))
+    return next(p[len("file="):] for p in pflash.split(",") if p.startswith("file="))
+
+
 def point_dir(tmp, argv, env, media, point, left_out=()):
     """Where a deck started with (argv, env) from command() keeps a saved
     point: keyed by its QEMU, MAIN and display images, stick, DSP module,
     MAIN_ARGS and sound device, and the knobs of command() a caller left out."""
-    kernel = argv[argv.index("-kernel") + 1]
-    files = [argv[0], kernel] + [env[k] for k in ("CDJ_BF531_UPD", "CDJ_M16C_GUI") if k in env] + [media]
+    files = [argv[0], _boot_image(argv)] + [env[k] for k in ("CDJ_BF531_UPD", "CDJ_M16C_GUI") if k in env] + [media]
     # The sound device and the DSP module shape the machine as well.
     files += dsp_module.chain_files(env)
     audio = argv[argv.index("-audio") + 1] if "-audio" in argv else ""

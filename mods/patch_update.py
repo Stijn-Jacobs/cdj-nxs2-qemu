@@ -77,12 +77,35 @@ sys.path.insert(0, FIRMWARE)
 import modelfw
 import patch_gui
 import patch_main
+import c850_repack
 import gui_decode
 import gui_encode
 import main_decode
 import main_encode
 import validate
 from launcher import layout, mods as mod_rows
+
+
+def _section_version(header):
+    if isinstance(header, (bytes, bytearray)):
+        header = header.decode('latin1', errors='replace')
+    m = re.search(r'(?:Ver)?(\d+\.\d+)', header)
+    if not m:
+        raise SystemExit('patch_update: no version string in section header %r' % header)
+    return m.group(1)
+
+
+def _decode_target(target, section, fw):
+    if target == 'main' and fw.container == 'c850':
+        hdr = section[c850_repack.LABEL_OFF:c850_repack.PACKED_OFF]
+        return hdr, None, None, c850_repack.unpack_main(section)
+    return TARGETS[target][0](section, fw)
+
+
+def _encode_target(target, section, image, fw):
+    if target == 'main' and fw.container == 'c850':
+        return c850_repack.build_upd(section, image, check_boot=True)
+    return TARGETS[target][1](section, image, fw)
 
 # target -> (decode(section, fw) -> (header, declared, avail, image),
 #            encode(section, image, fw) -> section, module owning mods_for()/patch())
@@ -195,8 +218,8 @@ def main():
             die('%s targets section %d, but this update only has %d'
                 % (target, idx + 1, len(sections)))
         section = sections[idx]
-        header, declared, avail, image = decode(section, fw)
-        version = section_version(header)
+        header, declared, avail, image = _decode_target(target, section, fw)
+        version = _section_version(header)
         mods = mod.mods_for(model)
         usable = []
         for name in target_names:
@@ -211,8 +234,11 @@ def main():
         patched = mod.patch(image, usable, model, report, spans.setdefault(target, {})) if usable else image
         if patched == image:
             continue
-        profiles[target] = mod.PATCH_SETS[model].profile
-        sections[idx] = encode(section, patched, fw)
+        if hasattr(mod, 'PATCH_SETS') and model in mod.PATCH_SETS:
+            profiles[target] = mod.PATCH_SETS[model].profile
+        elif target == 'main':
+            profiles[target] = validate.default_main_profile(model)
+        sections[idx] = _encode_target(target, section, patched, fw)
         print('patch_update: section %d (%s, Ver%s) %d -> %d bytes'
               % (idx + 1, target, version, len(section), len(sections[idx])))
 

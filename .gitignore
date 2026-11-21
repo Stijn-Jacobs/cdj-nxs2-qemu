@@ -11,6 +11,15 @@ tools/
 __pycache__/
 *.pyc
 
+# Local agent instructions and development notes/plans.
+AGENTS.md
+CLAUDE.md
+.superpowers/
+docs/plans/
+docs/cdj850-display-handoff.md
+docs/cdj850-display-integration-plan.md
+.DS_Store
+
 # Local build trees and run output.
 qemu-build/
 qemu-build-eb/

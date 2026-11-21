@@ -69,6 +69,9 @@ class Model:
         self.id = model_id
         self.title = values["MODEL_TITLE"]
         self.main_machine = values["MODEL_MAIN_MACHINE"]
+        self.main_arch = values.get("MODEL_MAIN_ARCH") or "sh4"
+        self.main_boot = values.get("MODEL_MAIN_BOOT") or "kernel"
+        self.main_flash = values.get("MODEL_MAIN_FLASH") or "flash.bin"
         self.gui_machine = values.get("MODEL_GUI_MACHINE", "")
         self.extract = values["MODEL_EXTRACT"]
         self.fw_version = values["MODEL_FW_VERSION"]
@@ -103,6 +106,16 @@ class Model:
         """The two-board real-DSP rig (rig.py); any other model starts as one
         MAIN emulator (deck.py)."""
         return self.launch == "rig"
+
+    @property
+    def main_is_eb(self):
+        """Whether MAIN runs on the big-endian SH emulator (qemu-system-sh4eb)."""
+        return self.main_arch == "sh4eb"
+
+    @property
+    def boots_flash(self):
+        """Whether MAIN boots from NOR flash (-drive if=pflash) rather than -kernel."""
+        return self.main_boot == "flash"
 
     @property
     def has_dsp_module(self):

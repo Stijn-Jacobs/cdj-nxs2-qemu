@@ -24,7 +24,10 @@ CDJ-900NXS only `U` (USB), `Enter` (the select knob's push) and `Space`
 (PLAY) are: `U` and seven `Enter`s load the first track. The CDJ-900 also has
 `↑` / `↓`, `,` (TRACK back), `[` / `]` (SEARCH), `B`, `T`, `I`, `M`, `L` and
 `D`; `U` and four `Enter`s load the first track. `C` (CUE) and `Esc` (BACK)
-are mapped, but the emulated CDJ-900 does not react to them yet.
+are mapped, but the emulated CDJ-900 does not react to them yet. The CDJ-850
+supports the full keyboard table above (plus `1`–`4` for auto beat loops 1/2/4/8),
+the virtual deck app (`./start.sh --model cdj850 --app`), and scripted panel
+events (`CDJ850_PANEL_SCRIPT`, see [CDJ-850](../README.md#cdj-850)).
 
 <a id="virtual-deck"></a>
 

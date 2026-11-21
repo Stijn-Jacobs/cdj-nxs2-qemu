@@ -75,8 +75,8 @@ skipped when it is already done:
 
 ## Other players
 
-The XDJ-1000MK2, XDJ-700, XDJ-1000, CDJ-900NXS, CDJ-2000NXS, CDJ-900 and
-CDJ-2000 start from the same two commands with `--model`; plain `./setup.sh`
+The XDJ-1000MK2, XDJ-700, XDJ-1000, CDJ-900NXS, CDJ-2000NXS, CDJ-900,
+CDJ-2000 and CDJ-850 start from the same two commands with `--model`; plain `./setup.sh`
 also asks which player you want (Enter keeps the CDJ-2000NXS2). Pass the
 update file as `--firmware`:
 
@@ -89,6 +89,7 @@ update file as `--firmware`:
 | `cdj2000nxs` | `C2KNXS.UPD` | 1.44 |
 | `cdj900` | `C900GUI.UPD`, `C900DRIV.UPD`, `C900MAIN.UPD`, `C900PANL.UPD` | 4.32 |
 | `cdj2000` | `C2KGUI.UPD`, `C2KDRIV.UPD`, `C2KMAIN.UPD`, `C2KPANL.UPD` | 4.33 |
+| `cdj850` | `C850MAIN.UPD` | 1.13 |
 
 ```sh
 ./setup.sh --model cdj2000 --firmware path/to/C2KGUI.UPD   # the other three files beside it
@@ -97,10 +98,11 @@ update file as `--firmware`:
 
 Setup stores the player in `cdj.conf`, so `./start.sh` alone starts it from
 then on. An older player gets the build, firmware and USB steps and opens one
-window with your stick; a second deck, Pro DJ Link, MIDI controllers, mods and
-the virtual deck app are CDJ-2000NXS2 features and are skipped. The CDJ-2000,
+window with your stick; the CDJ-850 also supports the virtual deck app
+(`./start.sh --model cdj850 --app`) and firmware mods (`tempo_wide`,
+`dsp_probe`), and the XDJ-700 has the `track_filter` mod. The CDJ-2000,
 CDJ-2000NXS, XDJ-1000, XDJ-1000MK2, XDJ-700 and CDJ-900NXS also get the DSP
-module step. Which players exist is
+module step (the CDJ-850 runs its own built-in DSP56371 emulator). Which players exist is
 whatever has a profile in `models/`.
 
 The keys each older player has so far are listed under
