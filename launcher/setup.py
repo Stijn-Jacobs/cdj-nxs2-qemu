@@ -64,7 +64,7 @@ import sys
 import tempfile
 import time
 
-from . import baken, chain, conf, dsp_module, firmware, host, model, mods, pythons
+from . import baken, chain, conf, dsp_module, firmware, host, model, mods, pythons, qemudata
 from .console import Console, dropped_path, stdin_is_tty
 from .layout import Layout
 
@@ -421,6 +421,26 @@ class Setup:
                 os.path.join(host.native(self.c["QEMU_EB_BUILD"]), "qemu-system-sh4eb" + sfx),
                 os.path.join(self.jit_libdir, "libc66x.so"))
 
+    def repair_display_data(self, gui):
+        """The display-board QEMU needs its keymaps before its VNC server starts,
+        and the deck's screen is that VNC server. A development build leaves the
+        keymaps in qemu-bundle/ as links into a source tree that was never
+        installed, so the links dangle and QEMU refuses to start: the deck then
+        waits for a screen that never comes. Copy real files in their place."""
+        con = self.con
+        if not gui or not os.path.exists(gui):
+            return
+        if getattr(self.o, "dry", False):
+            con.dim("display keymaps: would be copied beside %s" % os.path.basename(gui))
+            return
+        try:
+            written = qemudata.ensure_keymaps(gui, self.c["QEMU_EB_BUILD"],
+                                              source_tree=os.path.join(self.lay.root, "qemu-src"))
+        except (RuntimeError, OSError, subprocess.CalledProcessError) as exc:
+            con.fail("display keymaps: %s" % exc)
+            return
+        con.dim("display keymaps: %d copied beside %s" % (len(written), os.path.basename(gui)))
+
     def step_build(self):
         con, o, lay = self.con, self.o, self.lay
         con.step(2, "Build the emulators")
@@ -432,6 +452,7 @@ class Setup:
                                          ", " + self.c["QEMU_EB_BUILD"] if self.model.is_rig else ""))
         if o.skip_build:
             con.dim("skipped (--skip-build)")
+            self.repair_display_data(gui)
             return
         bash = host.find_bash() or "bash"
         phases = (
@@ -462,6 +483,7 @@ class Setup:
             if not con.run_phase(label, log, hint, [bash, host.posix(os.path.join(lay.emu, "build.sh")), name],
                                  rel=lay.emu, env=env):
                 con.die("the build stopped at phase 2.%d" % n)
+        self.repair_display_data(gui)
 
     def step_firmware(self):
         con, o, lay, m = self.con, self.o, self.lay, self.model

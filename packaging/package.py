@@ -50,7 +50,7 @@ import zipfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 EMU = os.path.dirname(HERE)
 sys.path.insert(0, EMU)
-from launcher import conf, host  # noqa: E402
+from launcher import conf, host, qemudata  # noqa: E402
 from launcher.layout import Layout  # noqa: E402
 
 PBS_TAG, PYTHON_VERSION = "20260924", "3.12.14"
@@ -293,42 +293,15 @@ def add_qemu(runtime, lay):
     return _source_stamp(lay)
 
 
-def qemu_data_dir(exe):
-    """Where this QEMU looks for its data files, as it says itself: the last
-    of `-L help`'s lines, its datadir relative to its own folder. That is
-    ../share/qemu for a macOS or Linux build, share/ beside the .exe for a
-    Windows one."""
-    out = subprocess.run([exe, "-L", "help"], capture_output=True, text=True, check=True).stdout
-    lines = [line.strip() for line in out.splitlines() if line.strip()]
-    if not lines:
-        sys.exit("%s -L help names no data directory" % exe)
-    return os.path.normpath(host.native(lines[-1]))
-
-
 def add_keymaps(exe, eb_dir):
     """QEMU's VNC server will not start without its keymap files, and the
-    virtual deck app's screen is that VNC server. A QEMU run from its build
-    tree finds them in qemu-bundle/ (links into the source tree); a packaged
-    one looks in its datadir, relative to its own folder."""
-    import glob
-
-    # A build with xkbcommon (Linux) generates its keymaps, and its bundle's
-    # links point at them even when only the QEMU binary was built; the
-    # source tree's ready-made ones stand in for any not there.
-    dirs = glob.glob(os.path.join(eb_dir, "qemu-bundle", "**", "share", "qemu", "keymaps"), recursive=True)
-    dirs.append(os.path.join(EMU, "qemu-src", "pc-bios", "keymaps"))
-    maps = {}
-    for d in reversed(dirs):
-        for n in os.listdir(d) if os.path.isdir(d) else []:
-            path = os.path.join(d, n)
-            if "." not in n and os.path.isfile(path):       # follows the links
-                maps[n] = path
-    if "en-us" not in maps:
-        sys.exit("no QEMU keymap en-us in %s" % " or ".join(dirs))
-    dst = os.path.join(qemu_data_dir(exe), "keymaps")
-    os.makedirs(dst)
-    for n, path in maps.items():
-        shutil.copyfile(path, os.path.join(dst, n))
+    virtual deck app's screen is that VNC server. Both a QEMU run from its build
+    tree and a packaged one must end up with real files in their data directory:
+    see launcher/qemudata.py, which setup.sh uses for the same reason."""
+    try:
+        qemudata.ensure_keymaps(exe, eb_dir, source_tree=os.path.join(EMU, "qemu-src"))
+    except RuntimeError as exc:
+        sys.exit(str(exc))
 
 
 def check_display_qemu(runtime):
