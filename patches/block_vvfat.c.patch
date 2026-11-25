@@ -1,0 +1,58 @@
+diff --git a/block/vvfat.c b/block/vvfat.c
+index e334b9f..bd9550a 100644
+--- a/block/vvfat.c
++++ b/block/vvfat.c
+@@ -1355,6 +1355,45 @@ static inline mapping_t* find_mapping_for_cluster(BDRVVVFATState* s,int cluster_
+     return mapping;
+ }
+ 
++/*
++ * CDJ_USB_TRACE for a directory-backed medium.
++ *
++ * With MEDIA_MODE=rw the "stick" is a host directory served by this driver: there
++ * is no image, so an LBA on its own says nothing. open_file() is where the driver
++ * decides which host file to read from, and mapping->path is the real path, so
++ * the log names the file instead of guessing from cluster numbers. Same variable
++ * as the SCSI-level trace in hw/scsi/scsi-disk.c.
++ */
++static void cdj_usb_trace_open(const char *path)
++{
++    static FILE *out;
++    static bool ready, on;
++    static unsigned long lines, limit = 200000;
++    const char *e, *l;
++
++    if (!ready) {
++        e = getenv("CDJ_USB_TRACE");
++        l = getenv("CDJ_USB_TRACE_LIMIT");
++        on = e && *e && strcmp(e, "0") != 0;
++        if (on && l && *l) {
++            limit = strtoul(l, NULL, 10);
++        }
++        if (on) {
++            out = (strchr(e, '/') || strchr(e, '\\')) ? fopen(e, "a") : stderr;
++            if (!out) {
++                out = stderr;
++            }
++        }
++        ready = true;
++    }
++    if (!on || lines >= limit || !path) {
++        return;
++    }
++    lines++;
++    fprintf(out, "cdj-usb open file=%s\n", path);
++    fflush(out);
++}
++
+ static int open_file(BDRVVVFATState* s,mapping_t* mapping)
+ {
+     if(!mapping)
+@@ -1362,6 +1401,7 @@ static int open_file(BDRVVVFATState* s,mapping_t* mapping)
+     if(!s->current_mapping ||
+             strcmp(s->current_mapping->path,mapping->path)) {
+         /* open file */
++        cdj_usb_trace_open(mapping->path);
+         int fd = qemu_open_old(mapping->path,
+                                O_RDONLY | O_BINARY | O_LARGEFILE);
+         if(fd<0)

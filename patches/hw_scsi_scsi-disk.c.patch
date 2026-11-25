@@ -1,0 +1,66 @@
+diff --git a/hw/scsi/scsi-disk.c b/hw/scsi/scsi-disk.c
+index a42f7d8..d1a86c9 100644
+--- a/hw/scsi/scsi-disk.c
++++ b/hw/scsi/scsi-disk.c
+@@ -1504,9 +1504,52 @@ static int scsi_disk_emulate_start_stop(SCSIDiskReq *r)
+     return 0;
+ }
+ 
++/*
++ * CDJ_USB_TRACE: what the player reads from and writes to its medium.
++ *
++ * The deck reaches the stick through an emulated USB mass-storage device, so
++ * every access arrives here as a SCSI READ or WRITE. Nothing is logged unless
++ * the variable is set: CDJ_USB_TRACE=1 writes to stderr, CDJ_USB_TRACE=<path>
++ * writes to that file, and CDJ_USB_TRACE_LIMIT caps the number of lines
++ * (default 200000) so a runaway guest cannot fill a disk. One line per
++ * transfer; scripts/usb/usb_trace.py turns the ranges into file names.
++ */
++static void cdj_usb_trace(SCSIRequest *req, const char *what)
++{
++    static FILE *out;
++    static bool ready, on;
++    static unsigned long lines, limit = 200000;
++
++    if (!ready) {
++        const char *e = getenv("CDJ_USB_TRACE");
++        const char *l = getenv("CDJ_USB_TRACE_LIMIT");
++
++        on = e && *e && strcmp(e, "0") != 0;
++        if (on && l && *l) {
++            limit = strtoul(l, NULL, 10);
++        }
++        if (on) {
++            out = (strchr(e, '/') || strchr(e, '\\')) ? fopen(e, "w") : stderr;
++            if (!out) {
++                out = stderr;
++            }
++        }
++        ready = true;
++    }
++    if (!on || lines >= limit || !req) {
++        return;
++    }
++    lines++;
++    fprintf(out, "cdj-usb %s lba=%" PRIu64 " bytes=%u\n", what,
++            (uint64_t)req->cmd.lba, (unsigned)req->cmd.xfer);
++    fflush(out);
++}
++
+ static void scsi_disk_emulate_read_data(SCSIRequest *req)
+ {
+     SCSIDiskReq *r = DO_UPCAST(SCSIDiskReq, req, req);
++
++    cdj_usb_trace(req, "read");
+     int buflen = r->iov.iov_len;
+ 
+     if (buflen) {
+@@ -1976,6 +2019,8 @@ static void scsi_disk_emulate_write_same(SCSIDiskReq *r, uint8_t *inbuf)
+ 
+ static void scsi_disk_emulate_write_data(SCSIRequest *req)
+ {
++    cdj_usb_trace(req, "write");
++
+     SCSIDiskReq *r = DO_UPCAST(SCSIDiskReq, req, req);
+ 
+     if (r->iov.iov_len) {
