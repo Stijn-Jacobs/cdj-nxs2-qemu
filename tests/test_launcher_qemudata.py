@@ -100,6 +100,7 @@ def test_refuses_to_go_on_without_the_keymap_vnc_needs(tmp_path):
     assert "en-us" in str(err.value)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="the stand-in QEMU is a shell script")
 def test_data_dir_asks_the_binary_where_it_looks(tmp_path):
     exe = tmp_path / "qemu-system-sh4eb"
     datadir = tmp_path / "share" / "qemu"
