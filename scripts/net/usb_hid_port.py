@@ -33,11 +33,14 @@ import time
 DEFAULT_PORT = 27020
 DEFAULT_NAME = "CDJ-2000NXS2"
 
-# linux/uhid.h, in declaration order
-(UHID_CREATE, UHID_INPUT, UHID_OUTPUT, UHID_FEATURE, UHID_CLOSE, UHID_OPEN,
- UHID_DESTROY, UHID_START, UHID_STOP, UHID_GET_REPORT, UHID_SET_REPORT,
- UHID_GET_REPORT_REPLY, UHID_SET_REPORT_REPLY, UHID_CREATE2,
- UHID_INPUT2) = range(15)
+# enum uhid_event_type in linux/uhid.h; 0, 7 and 8 are the legacy CREATE,
+# OUTPUT_EV and INPUT
+UHID_DESTROY = 1
+UHID_START, UHID_STOP, UHID_OPEN, UHID_CLOSE = 2, 3, 4, 5
+UHID_OUTPUT = 6
+UHID_GET_REPORT, UHID_GET_REPORT_REPLY = 9, 10
+UHID_CREATE2, UHID_INPUT2 = 11, 12
+UHID_SET_REPORT, UHID_SET_REPORT_REPLY = 13, 14
 UHID_DATA_SIZE = 4096
 EVENT_SIZE = 4376                     # sizeof(struct uhid_event)
 BUS_USB = 0x03
@@ -133,11 +136,15 @@ class Uhid:
         data = self.os.read(self.fd, EVENT_SIZE)
         event = struct.unpack_from("<I", data)[0]
         if event == UHID_OUTPUT:
-            deck.send(sock, data[4:4 + UHID_DATA_SIZE].rstrip(b"\0"))
+            size = struct.unpack_from("<H", data, 4 + UHID_DATA_SIZE)[0]
+            deck.send(sock, data[4:4 + size])
         elif event == UHID_GET_REPORT:
-            self.send(UHID_GET_REPORT_REPLY, struct.pack("<IHH", 0, 0, 0))
+            # the kernel pairs a reply with its request by the request's id
+            request = struct.unpack_from("<I", data, 4)[0]
+            self.send(UHID_GET_REPORT_REPLY, struct.pack("<IHH", request, 0, 0))
         elif event == UHID_SET_REPORT:
-            self.send(UHID_SET_REPORT_REPLY, struct.pack("<IH", 0, 0))
+            request = struct.unpack_from("<I", data, 4)[0]
+            self.send(UHID_SET_REPORT_REPLY, struct.pack("<IH", request, 0))
         # UHID_START/STOP/OPEN/CLOSE say the host is there or gone; nothing to do
 
 

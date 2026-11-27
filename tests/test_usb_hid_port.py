@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """scripts/net/usb_hid_port.py: the datagram side and the UHID event bodies."""
 import socket
+import struct
 
 import usb_hid_port as up
 
@@ -65,6 +66,49 @@ def test_input2_prefixes_the_length():
     assert body[:2] == b"\x02\x00"
     assert body[2:4] == bytes.fromhex("11 04")
     assert len(body) == 2 + up.UHID_DATA_SIZE
+
+
+def test_event_numbers_follow_the_kernel_header():
+    assert (up.UHID_DESTROY, up.UHID_START, up.UHID_STOP, up.UHID_OPEN,
+            up.UHID_CLOSE, up.UHID_OUTPUT) == (1, 2, 3, 4, 5, 6)
+    assert (up.UHID_GET_REPORT, up.UHID_GET_REPORT_REPLY, up.UHID_CREATE2,
+            up.UHID_INPUT2, up.UHID_SET_REPORT, up.UHID_SET_REPORT_REPLY) == (9, 10, 11, 12, 13, 14)
+
+
+class FakeKernel:
+    """Stands in for /dev/uhid: hands pump() one event, keeps what it writes."""
+
+    def __init__(self, event, body):
+        self.event = struct.pack("<I", event) + body.ljust(up.EVENT_SIZE - 4, b"\0")
+        self.written = []
+
+    def read(self, fd, size):
+        return self.event
+
+
+def pump(event, body):
+    kernel = FakeKernel(event, body)
+    hid = up.Uhid.__new__(up.Uhid)
+    hid.os, hid.fd = kernel, None
+    hid.send = lambda ev, reply: kernel.written.append((ev, reply))
+    sent = []
+    deck = up.Deck(lambda report, vt: None)
+    deck.send = lambda sock, report: sent.append(report)
+    hid.pump(deck, None)
+    return kernel.written, sent
+
+
+def test_output_report_keeps_its_trailing_zeros():
+    report = bytes.fromhex("01 02 00 00")
+    body = report.ljust(up.UHID_DATA_SIZE, b"\0") + struct.pack("<HB", len(report), 1)
+    assert pump(up.UHID_OUTPUT, body) == ([], [report])
+
+
+def test_report_requests_are_answered_with_their_own_id():
+    written, _ = pump(up.UHID_GET_REPORT, struct.pack("<IBB", 0x1234, 0, 0))
+    assert written == [(up.UHID_GET_REPORT_REPLY, struct.pack("<IHH", 0x1234, 0, 0))]
+    written, _ = pump(up.UHID_SET_REPORT, struct.pack("<IBBH", 0x99, 0, 0, 0))
+    assert written == [(up.UHID_SET_REPORT_REPLY, struct.pack("<IH", 0x99, 0))]
 
 
 # -- monitor -------------------------------------------------------------------
